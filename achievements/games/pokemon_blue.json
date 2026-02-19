@@ -1,0 +1,522 @@
+{
+  "game": {
+    "name": "Pokemon Blue",
+    "platform": "gb",
+    "generation": 1,
+    "rom_hash": "B8C4D6E5F4A3B2C1D9E8F7A6B5C4D3E2F1A0B9C8"
+  },
+  "achievements": [
+    {
+      "id": "blue_starter_chosen",
+      "name": "The Journey Begins",
+      "description": "Choose your starter Pokemon",
+      "category": "story",
+      "icon": "starter.png",
+      "target_value": 1,
+      "rarity": "common",
+      "memory_address": "0xD16B",
+      "memory_condition": "!= 0",
+      "points": 10
+    },
+    {
+      "id": "blue_pokedex_10",
+      "name": "Junior Researcher",
+      "description": "Register 10 Pokemon in the Pokedex",
+      "category": "pokedex",
+      "icon": "pokedex_10.png",
+      "target_value": 10,
+      "rarity": "common",
+      "points": 20
+    },
+    {
+      "id": "blue_pokedex_50",
+      "name": "Pokemon Collector",
+      "description": "Register 50 Pokemon in the Pokedex",
+      "category": "pokedex",
+      "icon": "pokedex_50.png",
+      "target_value": 50,
+      "rarity": "uncommon",
+      "points": 50
+    },
+    {
+      "id": "blue_pokedex_100",
+      "name": "Pokedex Master",
+      "description": "Register 100 Pokemon in the Pokedex",
+      "category": "pokedex",
+      "icon": "pokedex_100.png",
+      "target_value": 100,
+      "rarity": "rare",
+      "points": 100
+    },
+    {
+      "id": "blue_pokedex_complete",
+      "name": "Kanto Completionist",
+      "description": "Complete the Kanto Pokedex (150 Pokemon)",
+      "category": "pokedex",
+      "icon": "pokedex_complete.png",
+      "target_value": 150,
+      "rarity": "epic",
+      "memory_address": "0xD2F7",
+      "memory_condition": ">= 150",
+      "points": 500
+    },
+    {
+      "id": "blue_gym_1_brock",
+      "name": "Boulder Badge",
+      "description": "Defeat Brock and earn the Boulder Badge",
+      "category": "gym",
+      "icon": "gym_1.png",
+      "target_value": 1,
+      "rarity": "common",
+      "memory_address": "0xD356",
+      "memory_condition": "& 0x01",
+      "points": 25
+    },
+    {
+      "id": "blue_gym_2_misty",
+      "name": "Cascade Badge",
+      "description": "Defeat Misty and earn the Cascade Badge",
+      "category": "gym",
+      "icon": "gym_2.png",
+      "target_value": 1,
+      "rarity": "common",
+      "memory_address": "0xD356",
+      "memory_condition": "& 0x02",
+      "points": 25
+    },
+    {
+      "id": "blue_gym_3_lt_surge",
+      "name": "Thunder Badge",
+      "description": "Defeat Lt. Surge and earn the Thunder Badge",
+      "category": "gym",
+      "icon": "gym_3.png",
+      "target_value": 1,
+      "rarity": "common",
+      "memory_address": "0xD356",
+      "memory_condition": "& 0x04",
+      "points": 25
+    },
+    {
+      "id": "blue_gym_4_erika",
+      "name": "Rainbow Badge",
+      "description": "Defeat Erika and earn the Rainbow Badge",
+      "category": "gym",
+      "icon": "gym_4.png",
+      "target_value": 1,
+      "rarity": "common",
+      "memory_address": "0xD356",
+      "memory_condition": "& 0x08",
+      "points": 25
+    },
+    {
+      "id": "blue_gym_5_koga",
+      "name": "Soul Badge",
+      "description": "Defeat Koga and earn the Soul Badge",
+      "category": "gym",
+      "icon": "gym_5.png",
+      "target_value": 1,
+      "rarity": "common",
+      "memory_address": "0xD356",
+      "memory_condition": "& 0x10",
+      "points": 25
+    },
+    {
+      "id": "blue_gym_6_sabrina",
+      "name": "Marsh Badge",
+      "description": "Defeat Sabrina and earn the Marsh Badge",
+      "category": "gym",
+      "icon": "gym_6.png",
+      "target_value": 1,
+      "rarity": "common",
+      "memory_address": "0xD356",
+      "memory_condition": "& 0x20",
+      "points": 25
+    },
+    {
+      "id": "blue_gym_7_blaine",
+      "name": "Volcano Badge",
+      "description": "Defeat Blaine and earn the Volcano Badge",
+      "category": "gym",
+      "icon": "gym_7.png",
+      "target_value": 1,
+      "rarity": "common",
+      "memory_address": "0xD356",
+      "memory_condition": "& 0x40",
+      "points": 25
+    },
+    {
+      "id": "blue_gym_8_giovanni",
+      "name": "Earth Badge",
+      "description": "Defeat Giovanni and earn the Earth Badge",
+      "category": "gym",
+      "icon": "gym_8.png",
+      "target_value": 1,
+      "rarity": "uncommon",
+      "memory_address": "0xD356",
+      "memory_condition": "& 0x80",
+      "points": 30
+    },
+    {
+      "id": "blue_gym_all",
+      "name": "Kanto Gym Champion",
+      "description": "Defeat all 8 Gym Leaders",
+      "category": "gym",
+      "icon": "gym_all.png",
+      "target_value": 8,
+      "rarity": "rare",
+      "points": 150
+    },
+    {
+      "id": "blue_elite_four_lorelei",
+      "name": "Ice Queen Slayer",
+      "description": "Defeat Lorelei of the Elite Four",
+      "category": "elite_four",
+      "icon": "lorelei.png",
+      "target_value": 1,
+      "rarity": "uncommon",
+      "points": 50
+    },
+    {
+      "id": "blue_elite_four_bruno",
+      "name": "Fighting Master Slayer",
+      "description": "Defeat Bruno of the Elite Four",
+      "category": "elite_four",
+      "icon": "bruno.png",
+      "target_value": 1,
+      "rarity": "uncommon",
+      "points": 50
+    },
+    {
+      "id": "blue_elite_four_agatha",
+      "name": "Ghost Slayer",
+      "description": "Defeat Agatha of the Elite Four",
+      "category": "elite_four",
+      "icon": "agatha.png",
+      "target_value": 1,
+      "rarity": "uncommon",
+      "points": 50
+    },
+    {
+      "id": "blue_elite_four_lance",
+      "name": "Dragon Slayer",
+      "description": "Defeat Lance of the Elite Four",
+      "category": "elite_four",
+      "icon": "lance.png",
+      "target_value": 1,
+      "rarity": "rare",
+      "points": 75
+    },
+    {
+      "id": "blue_elite_four_all",
+      "name": "Elite Four Conqueror",
+      "description": "Defeat all members of the Elite Four",
+      "category": "elite_four",
+      "icon": "elite_four.png",
+      "target_value": 4,
+      "rarity": "epic",
+      "points": 200
+    },
+    {
+      "id": "blue_champion_blue",
+      "name": "Kanto Champion",
+      "description": "Defeat your rival and become the Pokemon Champion",
+      "category": "champion",
+      "icon": "champion.png",
+      "target_value": 1,
+      "rarity": "epic",
+      "memory_address": "0xD357",
+      "memory_condition": "& 0x01",
+      "points": 500
+    },
+    {
+      "id": "blue_legendary_mewtwo",
+      "name": "Genetic Master",
+      "description": "Capture Mewtwo in Cerulean Cave",
+      "category": "legendary",
+      "icon": "mewtwo.png",
+      "target_value": 1,
+      "rarity": "legendary",
+      "points": 1000
+    },
+    {
+      "id": "blue_legendary_moltres",
+      "name": "Flame Master",
+      "description": "Capture Moltres in Victory Road",
+      "category": "legendary",
+      "icon": "moltres.png",
+      "target_value": 1,
+      "rarity": "epic",
+      "points": 400
+    },
+    {
+      "id": "blue_legendary_zapdos",
+      "name": "Thunder Master",
+      "description": "Capture Zapdos in the Power Plant",
+      "category": "legendary",
+      "icon": "zapdos.png",
+      "target_value": 1,
+      "rarity": "epic",
+      "points": 400
+    },
+    {
+      "id": "blue_legendary_articuno",
+      "name": "Frost Master",
+      "description": "Capture Articuno in Seafoam Islands",
+      "category": "legendary",
+      "icon": "articuno.png",
+      "target_value": 1,
+      "rarity": "epic",
+      "points": 400
+    },
+    {
+      "id": "blue_legendary_birds",
+      "name": "Legendary Bird Master",
+      "description": "Capture Articuno, Zapdos, and Moltres",
+      "category": "legendary",
+      "icon": "birds.png",
+      "target_value": 3,
+      "rarity": "legendary",
+      "points": 1500
+    },
+    {
+      "id": "blue_legendary_all",
+      "name": "Kanto Legendary Master",
+      "description": "Capture all legendary Pokemon in Kanto",
+      "category": "legendary",
+      "icon": "legendary_all.png",
+      "target_value": 4,
+      "rarity": "legendary",
+      "points": 3000
+    },
+    {
+      "id": "blue_ss_anne",
+      "name": "Bon Voyage",
+      "description": "Board the S.S. Anne",
+      "category": "story",
+      "icon": "ss_anne.png",
+      "target_value": 1,
+      "rarity": "common",
+      "points": 15
+    },
+    {
+      "id": "blue_rock_tunnel",
+      "name": "Tunnel Survivor",
+      "description": "Navigate through Rock Tunnel without Flash",
+      "category": "special",
+      "icon": "tunnel.png",
+      "target_value": 1,
+      "rarity": "uncommon",
+      "points": 50
+    },
+    {
+      "id": "blue_silph_co",
+      "name": "Corporate Raider",
+      "description": "Clear Silph Co. of Team Rocket",
+      "category": "story",
+      "icon": "silph.png",
+      "target_value": 1,
+      "rarity": "uncommon",
+      "points": 75
+    },
+    {
+      "id": "blue_pokemon_tower",
+      "name": "Rest in Peace",
+      "description": "Reach the top of Pokemon Tower",
+      "category": "story",
+      "icon": "tower.png",
+      "target_value": 1,
+      "rarity": "common",
+      "points": 25
+    },
+    {
+      "id": "blue_safari_zone",
+      "name": "Safari Hunter",
+      "description": "Catch a Pokemon in the Safari Zone",
+      "category": "collection",
+      "icon": "safari.png",
+      "target_value": 1,
+      "rarity": "common",
+      "points": 25
+    },
+    {
+      "id": "blue_bicycle",
+      "name": "Speed Demon",
+      "description": "Obtain the Bicycle",
+      "category": "collection",
+      "icon": "bike.png",
+      "target_value": 1,
+      "rarity": "common",
+      "points": 15
+    },
+    {
+      "id": "blue_hm_all",
+      "name": "Hidden Move Master",
+      "description": "Collect all 5 HMs",
+      "category": "collection",
+      "icon": "hm_all.png",
+      "target_value": 5,
+      "rarity": "uncommon",
+      "points": 75
+    },
+    {
+      "id": "blue_money_100k",
+      "name": "Hundredaire",
+      "description": "Amass 100,000 PokeDollars",
+      "category": "special",
+      "icon": "money_100k.png",
+      "target_value": 100000,
+      "rarity": "uncommon",
+      "points": 100
+    },
+    {
+      "id": "blue_money_millionaire",
+      "name": "Pokemon Millionaire",
+      "description": "Amass 1,000,000 PokeDollars",
+      "category": "special",
+      "icon": "money_1m.png",
+      "target_value": 1000000,
+      "rarity": "rare",
+      "points": 200
+    },
+    {
+      "id": "blue_celadon_game_corner",
+      "name": "Jackpot!",
+      "description": "Win 100 coins at the Celadon Game Corner",
+      "category": "special",
+      "icon": "game_corner.png",
+      "target_value": 100,
+      "rarity": "uncommon",
+      "points": 50
+    },
+    {
+      "id": "blue_all_starters",
+      "name": "Starter Collector",
+      "description": "Obtain all three Kanto starters (Bulbasaur, Charmander, Squirtle)",
+      "category": "collection",
+      "icon": "starters.png",
+      "target_value": 3,
+      "rarity": "rare",
+      "points": 150
+    },
+    {
+      "id": "blue_shiny_pokemon",
+      "name": "Shiny Hunter",
+      "description": "Capture your first Shiny Pokemon",
+      "category": "collection",
+      "icon": "shiny.png",
+      "target_value": 1,
+      "rarity": "legendary",
+      "points": 2000
+    },
+    {
+      "id": "blue_ditto",
+      "name": "Transformer",
+      "description": "Capture Ditto",
+      "category": "collection",
+      "icon": "ditto.png",
+      "target_value": 1,
+      "rarity": "uncommon",
+      "points": 50
+    },
+    {
+      "id": "blue_snorlax",
+      "name": "Waker of Giants",
+      "description": "Wake up and capture both Snorlax",
+      "category": "collection",
+      "icon": "snorlax.png",
+      "target_value": 2,
+      "rarity": "uncommon",
+      "points": 75
+    },
+    {
+      "id": "blue_lapras",
+      "name": "Silph Savior",
+      "description": "Receive the Lapras from Silph Co.",
+      "category": "special",
+      "icon": "lapras.png",
+      "target_value": 1,
+      "rarity": "uncommon",
+      "points": 50
+    },
+    {
+      "id": "blue_hitmon",
+      "name": "Fighting Master",
+      "description": "Obtain Hitmonlee or Hitmonchan from the Fighting Dojo",
+      "category": "collection",
+      "icon": "hitmon.png",
+      "target_value": 1,
+      "rarity": "uncommon",
+      "points": 50
+    },
+    {
+      "id": "blue_fossil",
+      "name": "Paleontologist",
+      "description": "Revive a fossil at the Cinnabar Lab",
+      "category": "collection",
+      "icon": "fossil.png",
+      "target_value": 1,
+      "rarity": "uncommon",
+      "points": 50
+    },
+    {
+      "id": "blue_missingno",
+      "name": "Glitch Hunter",
+      "description": "Encounter MissingNo. (we won't tell Nintendo)",
+      "category": "special",
+      "icon": "missingno.png",
+      "target_value": 1,
+      "rarity": "epic",
+      "points": 300
+    },
+    {
+      "id": "blue_sandshrew_exclusive",
+      "name": "Version Exclusive: Sandshrew Line",
+      "description": "Obtain Sandshrew and Sandslash (Blue exclusive)",
+      "category": "collection",
+      "icon": "sandshrew.png",
+      "target_value": 2,
+      "rarity": "uncommon",
+      "points": 75
+    },
+    {
+      "id": "blue_vulpix_exclusive",
+      "name": "Version Exclusive: Vulpix Line",
+      "description": "Obtain Vulpix and Ninetales (Blue exclusive)",
+      "category": "collection",
+      "icon": "vulpix.png",
+      "target_value": 2,
+      "rarity": "uncommon",
+      "points": 75
+    },
+    {
+      "id": "blue_bellsprout_exclusive",
+      "name": "Version Exclusive: Bellsprout Line",
+      "description": "Obtain Bellsprout, Weepinbell, and Victreebel (Blue exclusive)",
+      "category": "collection",
+      "icon": "bellsprout.png",
+      "target_value": 3,
+      "rarity": "uncommon",
+      "points": 100
+    },
+    {
+      "id": "blue_magmar_exclusive",
+      "name": "Version Exclusive: Magmar",
+      "description": "Obtain Magmar (Blue exclusive)",
+      "category": "collection",
+      "icon": "magmar.png",
+      "target_value": 1,
+      "rarity": "rare",
+      "points": 100
+    },
+    {
+      "id": "blue_pinsir_exclusive",
+      "name": "Version Exclusive: Pinsir",
+      "description": "Obtain Pinsir (Blue exclusive)",
+      "category": "collection",
+      "icon": "pinsir.png",
+      "target_value": 1,
+      "rarity": "uncommon",
+      "points": 75
+    }
+  ]
+}
