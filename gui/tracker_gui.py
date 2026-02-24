@@ -971,11 +971,45 @@ class PokeAchieveGUI:
         if achievement_file and achievement_file.exists():
             if self.tracker.load_game(display_name, achievement_file):
                 self.tracker.load_progress(self.progress_file)
+                
+                # Merge with website data (fetch latest from server)
+                if self.api:
+                    self._merge_with_website_data(display_name)
+                
                 self.game_label.configure(text=f"Game: {display_name}")
                 self._log(f"Loaded {len(self.tracker.achievements)} achievements for {display_name}", "success")
                 
                 if not self.is_running:
                     self._start_tracking()
+    
+    def _merge_with_website_data(self, game_name: str):
+        """Merge local achievements with website data - never removes server achievements"""
+        try:
+            game_id = self.tracker.GAME_IDS.get(game_name)
+            if not game_id:
+                return
+            
+            success, data = self.api.get_progress(game_id)
+            if success and data:
+                server_unlocked = set(data.get('unlocked_achievements', []))
+                local_unlocked = set(a.id for a in self.tracker.achievements if a.unlocked)
+                
+                # Merge: take union (never remove)
+                all_unlocked = server_unlocked | local_unlocked
+                
+                # Update local achievements to include server ones
+                newly_added = 0
+                for ach in self.tracker.achievements:
+                    if ach.id in server_unlocked and not ach.unlocked:
+                        ach.unlocked = True
+                        ach.unlocked_at = datetime.now()
+                        newly_added += 1
+                
+                if newly_added > 0:
+                    self._log(f"Synced {newly_added} achievements from website", "info")
+                    self.tracker.save_progress(self.progress_file)
+        except Exception as e:
+            self._log(f"Could not sync with website: {e}", "warning")
         else:
             self.game_label.configure(text=f"Game: {game_name} (No achievements)")
     
