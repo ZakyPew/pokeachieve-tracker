@@ -714,7 +714,7 @@ class PokeAchieveGUI:
     
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("🎮 PokeAchieve Tracker")
+        self.root.title("🎮 PokeAchieve Tracker v1.0")
         self.root.geometry("900x650")
         self.root.minsize(700, 450)
         
@@ -929,6 +929,8 @@ class PokeAchieveGUI:
     
     def _load_game_achievements(self, game_name: str):
         """Load achievements for detected game"""
+        # Strip ROM hack suffixes like "(Enhanced)" for matching
+        clean_name = re.sub(r'\([^)]*\)', '', game_name).strip()
         game_map = {
             "Pokemon Red": "pokemon_red.json",
             "Pokemon Blue": "pokemon_blue.json",
@@ -945,7 +947,7 @@ class PokeAchieveGUI:
         achievement_file = None
         display_name = None
         for key, filename in game_map.items():
-            if key.lower() in game_name.lower():
+            if key.lower() in clean_name.lower():
                 achievement_file = self.achievements_dir / filename
                 display_name = key
                 break
