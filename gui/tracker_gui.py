@@ -128,9 +128,9 @@ class RetroArchClient:
         """Connect to RetroArch"""
         try:
             with self.lock:
-                self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 self.socket.settimeout(5)
-                self.socket.connect((self.host, self.port))
+                # UDP does not need connect
                 self.connected = True
             return True
         except Exception as e:
@@ -155,9 +155,10 @@ class RetroArchClient:
                 return None
             
             try:
-                self.socket.send(f"{command}\n".encode())
-                response = self.socket.recv(4096).decode().strip()
-                return response
+                # UDP uses sendto and recvfrom
+                self.socket.sendto(f"{command}\n".encode(), (self.host, self.port))
+                response, addr = self.socket.recvfrom(4096)
+                return response.decode().strip()
             except Exception as e:
                 self.connected = False
                 return None
