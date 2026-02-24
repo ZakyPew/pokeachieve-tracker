@@ -1,0 +1,52 @@
+POKEACHIEVE TRACKER - USER GUIDE
+==================================
+
+QUICK START (5 minutes)
+-----------------------
+
+1. GET API KEY
+   - Go to: https://pokeachieve.com/dashboard.html
+   - Log in
+   - Scroll to "API Keys"
+   - Generate a key (copy it!)
+
+2. SETUP RETROARCH
+   - Start RetroArch
+   - Load Pokemon game
+   - Settings → Network → Network Command = ON
+   - Restart RetroArch
+
+3. RUN TRACKER
+   - Open run_tracker.exe
+   - Settings → paste API key
+   - Save → Test Connection
+   - Connect to RetroArch
+   - Start Tracking!
+
+TROUBLESHOOTING
+---------------
+
+"API Failed"
+→ Check API key is copied correctly
+→ Check internet connection
+
+"RetroArch Disconnected"
+→ Make sure game is loaded
+→ Check Network Command is ON
+→ Restart RetroArch
+
+"No Game"
+→ Only Pokemon Red/Blue/Emerald/FireRed/LeafGreen supported
+
+SUPPORTED GAMES
+---------------
+- Pokemon Red (Game Boy)
+- Pokemon Blue (Game Boy)
+- Pokemon Emerald (GBA)
+- Pokemon FireRed (GBA)
+- Pokemon LeafGreen (GBA)
+
+HELP
+----
+Visit: https://pokeachieve.com
+Or check README.md for full documentation
