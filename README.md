@@ -1,114 +1,140 @@
 # PokeAchieve Tracker 🎮
 
-**Open Source Achievement Tracking for Pokemon Games**
+**Desktop Achievement Tracker for Pokemon Games**
 
-A community-driven achievement tracking system for Pokemon games on emulators.
+Sync your Pokemon gameplay with PokeAchieve and unlock achievements automatically!
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+## 📥 Download
 
-## 🎯 What is This?
+Download the latest release from [GitHub Releases](../../releases)
 
-This repository contains:
-- **Achievement definitions** for Pokemon games (JSON format)
-- **RetroArch integration** for real-time memory reading
-- **Documentation** for developers and users
+**File:** `PokeAchieveTracker-v1.0.zip`
 
-**This is NOT a game.** We don't distribute ROMs or copyrighted material. This is a tracking tool for your own legally-obtained games.
+Extract and run `run_tracker.exe`
 
-## 🕹️ Supported Games
+---
 
-| Game | Generation | Achievements | Status |
-|------|-----------|--------------|--------|
-| Pokemon Red | Gen 1 | 50 | ✅ Complete |
-| Pokemon Blue | Gen 1 | 55 | ✅ Complete |
-| Pokemon Emerald | Gen 3 | 42 | ✅ Complete |
+## 🚀 Quick Start Guide
 
-## 📦 Repository Structure
+### 1. Get Your API Key
 
-```
-pokeachieve-tracker/
-├── achievements/
-│   └── games/
-│       ├── pokemon_red.json
-│       ├── pokemon_blue.json
-│       └── pokemon_emerald.json
-├── integrations/
-│   └── retroarch/
-│       └── client.py          # RetroArch integration
-├── docs/
-│   ├── API.md                 # API documentation
-│   └── CONTRIBUTING.md        # How to contribute
-├── LICENSE
-└── README.md
-```
+1. Go to [pokeachieve.com/dashboard.html](https://pokeachieve.com/dashboard.html)
+2. Log in to your account
+3. Scroll to **"API Keys"** section
+4. Enter a name (e.g., "Desktop Tracker")
+5. Click **"Generate Key"**
+6. **COPY THE KEY IMMEDIATELY** (you won't see it again!)
 
-## 🚀 Quick Start
+### 2. Setup RetroArch
 
-### For Users
+1. **Start RetroArch**
+2. Load a Pokemon game (Red, Blue, Emerald, FireRed, or LeafGreen)
+3. Go to **Settings → Network**
+4. Enable:
+   - ✅ **Network Command** = ON
+   - ✅ **Network Command Port** = 55355
+   - ✅ **STDIN Command** = ON
+5. **Restart RetroArch** with the game loaded
 
-1. **Use with PokeAchieve Platform** (coming soon)
-   - Sign up at [pokeachieve.io](https://pokeachieve.io)
-   - Connect your RetroArch
-   - Track achievements automatically
+### 3. Configure the Tracker
 
-2. **Self-Hosted**
-   - Use our achievement definitions with your own tracker
-   - Integrate with RetroArch using our client
+1. **Open** `run_tracker.exe`
+2. Click **"Settings"** (gear icon)
+3. **Platform URL:** `https://pokeachieve.com` (already set)
+4. **API Key:** Paste your key from step 1
+5. Click **"Save"**
+6. Click **"Test Connection"**
+   - Should show: **"API: Connected ✓"**
 
-### For Developers
+### 4. Connect to RetroArch
 
-```python
-# Load achievements
-import json
+1. Make sure RetroArch is running with a Pokemon game
+2. In the tracker, click **"Connect to RetroArch"**
+   - Should show: **"RetroArch: Connected ✓"**
+   - Should detect: **"Game: Pokemon [Version]"**
 
-with open('achievements/games/pokemon_emerald.json') as f:
-    game_data = json.load(f)
-    
-achievements = game_data['achievements']
-for ach in achievements:
-    print(f"{ach['name']}: {ach['description']}")
-```
+### 5. Start Tracking!
 
-## 🔌 RetroArch Integration
+1. Click **"Start Tracking"**
+2. Play the game normally!
+3. Achievements unlock automatically and sync to the website
 
-```python
-from integrations.retroarch import RetroArchClient
+---
 
-client = RetroArchClient()
-if client.connect():
-    # Read memory to check achievements
-    badge_value = client.read_memory("0x02024A6C")
-    print(f"Badges: {badge_value}")
-```
+## 🎮 Supported Games
+
+| Game | Platform | Achievements |
+|------|----------|--------------|
+| Pokemon Red | Game Boy | 50+ |
+| Pokemon Blue | Game Boy | 50+ |
+| Pokemon Emerald | GBA | 40+ |
+| Pokemon FireRed | GBA | 50+ |
+| Pokemon LeafGreen | GBA | 50+ |
+
+---
+
+## 🔧 Troubleshooting
+
+### "API Connection Failed"
+- Make sure you copied the **entire** API key
+- Check your internet connection
+- Verify the Platform URL is `https://pokeachieve.com`
+
+### "RetroArch Disconnected"
+- Make sure a **game is loaded** (not just the menu)
+- Check that Network Command is **enabled**
+- Try restarting RetroArch after enabling Network Command
+- Check Windows Firewall isn't blocking port 55355
+
+### "No Game Detected"
+- Load a Pokemon ROM in RetroArch first
+- Only Pokemon Red/Blue/Emerald/FireRed/LeafGreen are supported
+
+### Achievements Not Unlocking
+- Make sure tracking is started (green status)
+- Some achievements require specific actions (check description)
+- Try unpausing the game in RetroArch
+
+---
+
+## 📝 How Achievements Work
+
+The tracker reads your game's memory in real-time:
+
+- **Story Achievements** — Detected when you reach certain points
+- **Collection Achievements** — Track Pokemon caught
+- **Gym Badges** — Detected when you earn badges
+- **Completion Achievements** — Pokedex completion, etc.
+
+All progress syncs instantly to your PokeAchieve profile!
+
+---
+
+## 🔒 Privacy & Security
+
+- Your API key is stored locally on your PC
+- Only achievement data is sent to PokeAchieve
+- No personal game data is uploaded
+- We never see your ROM files or saves
+
+---
 
 ## 🤝 Contributing
 
 Want to add achievements for more Pokemon games?
 
-1. Fork this repository
-2. Create a new JSON file in `achievements/games/`
-3. Follow the schema in `docs/SCHEMA.md`
-4. Submit a Pull Request
+1. Edit the JSON files in `achievements/games/`
+2. Follow the existing format
+3. Submit a Pull Request
 
-See [CONTRIBUTING.md](docs/CONTRIBUTING.md) for details.
+---
 
 ## 📜 License
 
 MIT License - See [LICENSE](LICENSE)
 
-## ⚖️ Legal
-
-- Pokemon is a trademark of Nintendo
-- This project is not affiliated with Nintendo
-- Users must own legitimate copies of games
-- We don't distribute ROMs or copyrighted material
-
-## 🔗 Related
-
-- **PokeAchieve Platform** - Web service using these definitions (private repo)
-- **RetroArch** - The emulator we integrate with
-- **RetroAchievements** - Similar achievement tracking platform
+Pokemon is a trademark of Nintendo. This project is not affiliated with Nintendo.
 
 ---
 
-Made with ❤️ by the Pokemon achievement hunting community
+Made with ❤️ for the Pokemon achievement hunting community
