@@ -22,7 +22,7 @@ class RetroArchClient:
     def connect(self) -> bool:
         """Connect to RetroArch"""
         try:
-            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             self.socket.settimeout(5)
             self.socket.connect((self.host, self.port))
             self.connected = True
