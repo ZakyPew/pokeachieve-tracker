@@ -59,6 +59,7 @@ class PokeAchieveAPI:
     def _request(self, method: str, endpoint: str, data: dict = None) -> tuple[bool, dict]:
         """Make API request and return (success, response_data)"""
         url = f"{self.base_url}{endpoint}"
+        print(f"[API REQUEST] {method} {url}")
         try:
             req = urllib.request.Request(
                 url,
@@ -67,26 +68,33 @@ class PokeAchieveAPI:
                 method=method
             )
             with urllib.request.urlopen(req, timeout=10) as response:
-                return True, json.loads(response.read().decode())
+                status = response.getcode()
+                body = response.read().decode()
+                print(f"[API SUCCESS] {method} {endpoint} -> HTTP {status}")
+                return True, json.loads(body)
         except urllib.error.HTTPError as e:
+            status = e.getcode()
+            error_body = e.read().decode()
+            print(f"[API ERROR] {method} {endpoint} -> HTTP {status}: {error_body[:200]}")
             try:
-                error_body = json.loads(e.read().decode())
-                return False, {"error": error_body.get("detail", str(e))}
+                error_data = json.loads(error_body)
+                return False, {"error": error_data.get("detail", str(e)), "status": status}
             except:
-                return False, {"error": str(e)}
+                return False, {"error": f"HTTP {status}: {error_body[:200]}", "status": status}
         except Exception as e:
+            print(f"[API ERROR] {method} {endpoint} -> {type(e).__name__}: {str(e)}")
             return False, {"error": str(e)}
     
     def test_auth(self) -> tuple[bool, str]:
         """Test API key authentication"""
-        success, data = self._request("POST", "/api/tracker/test")
+        success, data = self._request("POST", "/tracker/test")
         if success:
             return True, data.get("message", "Authentication successful")
         return False, data.get("error", "Authentication failed")
     
     def get_progress(self, game_id: int) -> tuple[bool, list]:
         """Get user's progress for a game"""
-        success, data = self._request("GET", f"/api/tracker/progress/{game_id}")
+        success, data = self._request("GET", f"/tracker/progress/{game_id}")
         if success:
             return True, data.get("unlocked_achievement_ids", [])
         return False, []
@@ -98,12 +106,12 @@ class PokeAchieveAPI:
             "achievement_id": achievement_id,
             "unlocked_at": datetime.now().isoformat()
         }
-        return self._request("POST", "/api/tracker/unlock", payload)
+        return self._request("POST", "/tracker/unlock", payload)
     
     # Pokemon Collection API Methods
     def post_collection_batch(self, pokemon_list: List[Dict]) -> tuple[bool, dict]:
         """Post batch of Pokemon collection updates"""
-        return self._request("POST", "/api/collection/batch-update", pokemon_list)
+        return self._request("POST", "/collection/batch-update", pokemon_list)
     
     def post_party_update(self, pokemon_id: int, in_party: bool, party_slot: int = None) -> tuple[bool, dict]:
         """Update party status for a Pokemon"""
@@ -112,7 +120,7 @@ class PokeAchieveAPI:
             "in_party": in_party,
             "party_slot": party_slot
         }
-        return self._request("POST", "/api/collection/party", payload)
+        return self._request("POST", "/collection/party", payload)
 
 
 class RetroArchClient:
@@ -1077,6 +1085,8 @@ class PokeAchieveGUI:
                             success, data = self.api.post_unlock(self.tracker.game_id, a.id)
                             if success:
                                 self._log(f"Posted unlock to platform: {a.name}", "api")
+                            else:
+                                self._log(f"Failed to post unlock: {data.get('error', 'Unknown error')}", "error")
                         threading.Thread(target=post_ach, daemon=True).start()
                     
                     elif item["type"] == "collection":
@@ -1124,28 +1134,39 @@ class PokeAchieveGUI:
     
     def _sync_collection_to_api(self, catches: List[int], party: List[Dict], game: str):
         """Sync collection data to PokeAchieve API"""
+        print(f"[COLLECTION SYNC] Starting sync for {len(catches)} catches, {len(party)} party members")
+        
         if not catches and not party:
+            print("[COLLECTION SYNC] Nothing to sync")
             return
         
         # Build batch update for new catches
         batch = []
         for pokemon_id in catches:
-            batch.append({
+            entry = {
                 "pokemon_id": pokemon_id,
                 "pokemon_name": self._get_pokemon_name(pokemon_id),
                 "caught": True,
-                "caught_at": datetime.now().isoformat(),
-                "shiny": False,  # Would need to detect shiny from memory
+                "shiny": False,
                 "game": game
-            })
+            }
+            batch.append(entry)
+            print(f"[COLLECTION SYNC] Adding to batch: {entry}")
         
         if batch:
+            print(f"[COLLECTION SYNC] Sending batch of {len(batch)} to API...")
             success, data = self.api.post_collection_batch(batch)
             if success:
                 self._log(f"Synced {len(batch)} Pokemon to collection", "api")
+                print(f"[COLLECTION SYNC] Success: {data}")
+            else:
+                error_msg = data.get('error', 'Unknown error')
+                self._log(f"Failed to sync collection: {error_msg}", "error")
+                print(f"[COLLECTION SYNC] Failed: {error_msg}")
         
         # Update party
         for member in party:
+            print(f"[COLLECTION SYNC] Updating party slot {member.get('slot')}: Pokemon {member['id']}")
             success, data = self.api.post_party_update(
                 member["id"],
                 True,
@@ -1153,6 +1174,9 @@ class PokeAchieveGUI:
             )
             if success:
                 self._log(f"Updated party: {member['id']} in slot {member.get('slot')}", "api")
+            else:
+                error_msg = data.get('error', 'Unknown error')
+                self._log(f"Failed to update party: {error_msg}", "error")
     
     def _get_pokemon_name(self, pokemon_id: int) -> str:
         """Get Pokemon name from ID"""
