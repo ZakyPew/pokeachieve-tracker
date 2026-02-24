@@ -10,6 +10,7 @@ import json
 import time
 import threading
 import queue
+import re
 import os
 import sys
 import urllib.request
@@ -719,8 +720,23 @@ class PokeAchieveGUI:
         self.root.minsize(700, 450)
         
         # Setup paths
-        self.script_dir = Path(__file__).parent
+        # Handle both regular Python and PyInstaller frozen .exe
+        if getattr(sys, 'frozen', False):
+            # Running as compiled .exe - look in same directory as .exe
+            self.script_dir = Path(sys.executable).parent
+        else:
+            # Running as Python script
+            self.script_dir = Path(__file__).parent
         self.achievements_dir = self.script_dir.parent / "achievements" / "games"
+        
+        # Debug: Log what paths we're checking
+        print(f"DEBUG: script_dir = {self.script_dir}")
+        print(f"DEBUG: achievements_dir = {self.achievements_dir}")
+        print(f"DEBUG: achievements_dir exists = {self.achievements_dir.exists()}")
+        
+        # If achievements not found, try same directory (for packaged .exe)
+        if not self.achievements_dir.exists():
+            self.achievements_dir = self.script_dir / "achievements" / "games"
         self.data_dir = Path.home() / ".pokeachieve"
         self.progress_file = self.data_dir / "progress.json"
         self.config_file = self.data_dir / "config.json"
