@@ -47,7 +47,7 @@ class Pokemon:
 class PokeAchieveAPI:
     """Client for PokeAchieve platform API"""
     
-    def __init__(self, base_url: str = "http://localhost:8000", api_key: str = ""):
+    def __init__(self, base_url: str = "https://pokeachieve.com", api_key: str = ""):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.headers = {
@@ -725,7 +725,7 @@ class PokeAchieveGUI:
         self.api = None
         if self.config.get("api_key"):
             self.api = PokeAchieveAPI(
-                base_url=self.config.get("api_url", "http://localhost:8000"),
+                base_url=self.config.get("api_url", "https://pokeachieve.com"),
                 api_key=self.config["api_key"]
             )
         self.tracker = AchievementTracker(self.retroarch, self.api)
@@ -733,7 +733,7 @@ class PokeAchieveGUI:
         # State
         self.is_running = False
         self.status_check_interval = 1000
-        self.poll_interval = self.config.get("poll_interval", 500)
+        self.poll_interval = self.config.get("poll_interval", 2000)
         self.api_sync_enabled = self.config.get("api_sync", True)
         
         self._build_ui()
@@ -998,7 +998,7 @@ class PokeAchieveGUI:
         # Update progress
         self._update_progress()
         
-        self.root.after(100, self._check_unlocks)
+        self.root.after(500, self._check_unlocks)
     
     def _process_api_queue(self):
         """Process API post queue"""
@@ -1171,7 +1171,7 @@ class PokeAchieveGUI:
         
         ttk.Label(api_frame, text="Platform URL:").grid(row=0, column=0, sticky="w", pady=5)
         url_entry = ttk.Entry(api_frame)
-        url_entry.insert(0, self.config.get("api_url", "http://localhost:8000"))
+        url_entry.insert(0, self.config.get("api_url", "https://pokeachieve.com"))
         url_entry.grid(row=0, column=1, sticky="ew", padx=(10, 0), pady=5)
         
         ttk.Label(api_frame, text="API Key:").grid(row=1, column=0, sticky="w", pady=5)
