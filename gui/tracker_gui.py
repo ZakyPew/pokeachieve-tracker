@@ -739,7 +739,7 @@ class PokeAchieveGUI:
         
         # State
         self.is_running = False
-        self.status_check_interval = 1000
+        self.status_check_interval = 3000
         self.poll_interval = self.config.get("poll_interval", 2000)
         self.api_sync_enabled = self.config.get("api_sync", True)
         
@@ -1005,7 +1005,7 @@ class PokeAchieveGUI:
         # Update progress
         self._update_progress()
         
-        self.root.after(500, self._check_unlocks)
+        self.root.after(2000, self._check_unlocks)
     
     def _process_api_queue(self):
         """Process API post queue"""
@@ -1036,7 +1036,7 @@ class PokeAchieveGUI:
                 except queue.Empty:
                     break
         
-        self.root.after(1000, self._process_api_queue)
+        self.root.after(3000, self._process_api_queue)
     
     def _process_collection_updates(self):
         """Process collection updates from memory reading"""
@@ -1066,7 +1066,7 @@ class PokeAchieveGUI:
             except queue.Empty:
                 break
         
-        self.root.after(500, self._process_collection_updates)
+        self.root.after(2000, self._process_collection_updates)
     
     def _sync_collection_to_api(self, catches: List[int], party: List[Dict], game: str):
         """Sync collection data to PokeAchieve API"""
