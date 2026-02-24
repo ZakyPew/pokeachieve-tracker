@@ -369,7 +369,9 @@ class PokemonMemoryReader:
     
     def get_game_config(self, game_name: str) -> Optional[Dict]:
         """Get memory addresses for current game"""
-        game_key = game_name.lower().replace(" ", "_")
+        # Strip ROM hack suffixes like "(Enhanced)", "(U)", etc.
+        clean_name = re.sub(r'\([^)]*\)', '', game_name)
+        game_key = clean_name.lower().replace(" ", "_").strip()
         return self.GAME_ADDRESSES.get(game_key)
     
     def read_pokedex(self, game_name: str) -> List[int]:
