@@ -164,10 +164,16 @@ class RetroArchClient:
                 return None
     
     def get_current_game(self) -> Optional[str]:
-        """Get name of currently loaded game"""
-        response = self.send_command("GET_CURRENT_GAME")
-        if response and not response.startswith("ERR"):
-            return response.strip()
+        """Get name of currently loaded game from GET_STATUS"""
+        response = self.send_command("GET_STATUS")
+        if response and response.startswith("GET_STATUS"):
+            # Parse: GET_STATUS PAUSED game_boy,Pokemon Red(Enhanced),crc32=...
+            try:
+                parts = response.replace("GET_STATUS ", "").split(",")
+                if len(parts) >= 2:
+                    return parts[1].strip()  # Pokemon name is 2nd part
+            except:
+                pass
         return None
     
     def read_memory(self, address: str, num_bytes: int = 1) -> Optional[int]:
