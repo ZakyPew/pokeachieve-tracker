@@ -15,7 +15,7 @@
       "target_value": 1,
       "rarity": "common",
       "memory_address": "0xD16B",
-      "memory_condition": "!= 0",
+      "memory_condition": "> 0",
       "points": 10
     },
     {
