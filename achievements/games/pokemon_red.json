@@ -507,6 +507,66 @@
       "target_value": 1,
       "rarity": "epic",
       "points": 300
+    },
+    {
+      "id": "red_first_steps",
+      "name": "First Steps",
+      "description": "Begin your journey in Pallet Town",
+      "category": "story",
+      "icon": "first_steps.png",
+      "target_value": 1,
+      "rarity": "common",
+      "points": 5
+    },
+    {
+      "id": "red_pokemon_master",
+      "name": "Pokemon Master",
+      "description": "Achieve ultimate mastery of the Kanto region",
+      "category": "special",
+      "icon": "master.png",
+      "target_value": 1,
+      "rarity": "legendary",
+      "points": 5000
+    },
+    {
+      "id": "red_pokedex_beginner",
+      "name": "Pokedex Beginner",
+      "description": "Register your first Pokemon in the Pokedex",
+      "category": "pokedex",
+      "icon": "pokedex_1.png",
+      "target_value": 1,
+      "rarity": "common",
+      "points": 10
+    },
+    {
+      "id": "red_pokedex_collector",
+      "name": "Pokedex Collector",
+      "description": "Register 25 Pokemon in the Pokedex",
+      "category": "pokedex",
+      "icon": "pokedex_25.png",
+      "target_value": 25,
+      "rarity": "common",
+      "points": 30
+    },
+    {
+      "id": "red_pokedex_completionist",
+      "name": "Pokedex Completionist",
+      "description": "Register all 151 Pokemon in the Pokedex",
+      "category": "pokedex",
+      "icon": "pokedex_151.png",
+      "target_value": 151,
+      "rarity": "epic",
+      "points": 1000
+    },
+    {
+      "id": "red_legendary_hunter",
+      "name": "Legendary Hunter",
+      "description": "Capture your first legendary Pokemon",
+      "category": "legendary",
+      "icon": "legendary_first.png",
+      "target_value": 1,
+      "rarity": "epic",
+      "points": 500
     }
   ]
 }

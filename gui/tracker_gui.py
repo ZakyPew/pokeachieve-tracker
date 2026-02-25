@@ -571,19 +571,224 @@ class AchievementTracker:
             if achievement.unlocked:
                 continue
             
-            if not achievement.memory_address or not achievement.memory_condition:
-                continue
+            unlocked = False
             
-            value = self.retroarch.read_memory(achievement.memory_address)
-            if value is not None:
-                if self.evaluate_condition(value, achievement.memory_condition):
-                    achievement.unlocked = True
-                    achievement.unlocked_at = datetime.now().isoformat()
-                    newly_unlocked.append(achievement)
-                    self._unlock_queue.put(achievement)
-                    self.post_unlock_to_platform(achievement)
+            # Direct memory check (achievements with memory_address)
+            if achievement.memory_address and achievement.memory_condition:
+                value = self.retroarch.read_memory(achievement.memory_address)
+                if value is not None:
+                    if self.evaluate_condition(value, achievement.memory_condition):
+                        unlocked = True
+            
+            # Derived achievement checks (achievements without direct memory addresses)
+            else:
+                unlocked = self._check_derived_achievement(achievement)
+            
+            if unlocked:
+                achievement.unlocked = True
+                achievement.unlocked_at = datetime.now().isoformat()
+                newly_unlocked.append(achievement)
+                self._unlock_queue.put(achievement)
+                self.post_unlock_to_platform(achievement)
         
         return newly_unlocked
+    
+    def _check_derived_achievement(self, achievement: Achievement) -> bool:
+        """Check achievements that require calculation from multiple memory locations"""
+        if not self.game_name:
+            return False
+        
+        game_key = self.game_name.lower().replace(" ", "_")
+        ach_id = achievement.id
+        
+        # Pokedex achievements
+        if "pokedex" in ach_id:
+            return self._check_pokedex_achievement(achievement)
+        
+        # All gyms achievement
+        if ach_id.endswith("_gym_all"):
+            return self._check_all_gyms()
+        
+        # Elite Four achievements
+        if "elite_four" in ach_id and not ach_id.endswith("_all"):
+            return self._check_elite_four_member(achievement)
+        
+        # All Elite Four
+        if ach_id.endswith("_elite_four_all"):
+            return self._check_all_elite_four()
+        
+        # Legendary achievements (individual birds)
+        if "legendary" in ach_id and any(x in ach_id for x in ["moltres", "zapdos", "articuno", "mewtwo"]):
+            return self._check_legendary_caught(achievement)
+        
+        # All legendary birds
+        if ach_id.endswith("_legendary_birds"):
+            return self._check_all_legendary_birds()
+        
+        # All legendaries
+        if ach_id.endswith("_legendary_all"):
+            return self._check_all_legendaries()
+        
+        # First Steps - check if game has been started (has starter)
+        if "first_steps" in ach_id:
+            return self._check_first_steps()
+        
+        # Pokemon Master - all badges + champion + complete pokedex
+        if "pokemon_master" in ach_id:
+            return self._check_pokemon_master()
+        
+        return False
+    
+    def _check_pokedex_achievement(self, achievement: Achievement) -> bool:
+        """Check pokedex count achievements"""
+        if not self.pokemon_reader:
+            return False
+        
+        current_pokedex = self.pokemon_reader.read_pokedex(self.game_name)
+        caught_count = len(current_pokedex)
+        
+        # Get target from achievement ID or description
+        ach_id = achievement.id
+        if "_pokedex_10" in ach_id or "_pokedex_beginner" in ach_id:
+            return caught_count >= 10
+        elif "_pokedex_25" in ach_id or "_pokedex_collector" in ach_id:
+            return caught_count >= 25
+        elif "_pokedex_50" in ach_id:
+            return caught_count >= 50
+        elif "_pokedex_100" in ach_id:
+            return caught_count >= 100
+        elif "_pokedex_150" in ach_id or "_pokedex_complete" in ach_id:
+            return caught_count >= 150
+        elif "_pokedex_151" in ach_id or "_pokedex_completionist" in ach_id:
+            return caught_count >= 151
+        
+        return False
+    
+    def _check_all_gyms(self) -> bool:
+        """Check if all 8 gym badges are obtained"""
+        # Badge flags are at 0xD356 (Gen 1) or 0xD35C (Gen 2)
+        badge_addr = "0xD356"  # Gen 1 default
+        if "gold" in self.game_name.lower() or "silver" in self.game_name.lower() or "crystal" in self.game_name.lower():
+            badge_addr = "0xD35C"
+        
+        badge_byte = self.retroarch.read_memory(badge_addr)
+        if badge_byte is not None:
+            # All 8 badges = all 8 bits set = 0xFF = 255
+            return badge_byte == 0xFF
+        return False
+    
+    def _check_elite_four_member(self, achievement: Achievement) -> bool:
+        """Check if specific Elite Four member is defeated"""
+        # Elite Four flags are in RAM, need to find correct addresses
+        # Gen 1: Victory Road flags around 0xD6xx
+        ach_id = achievement.id.lower()
+        
+        # Map achievement IDs to their defeat flags (these are approximate)
+        e4_addresses = {
+            "lorelei": "0xD6E0",
+            "bruno": "0xD6E1", 
+            "agatha": "0xD6E2",
+            "lance": "0xD6E3"
+        }
+        
+        for name, addr in e4_addresses.items():
+            if name in ach_id:
+                value = self.retroarch.read_memory(addr)
+                if value is not None and value > 0:
+                    return True
+        
+        return False
+    
+    def _check_all_elite_four(self) -> bool:
+        """Check if all Elite Four members are defeated"""
+        # Check all 4 E4 members
+        e4_addresses = ["0xD6E0", "0xD6E1", "0xD6E2", "0xD6E3"]
+        defeated_count = 0
+        
+        for addr in e4_addresses:
+            value = self.retroarch.read_memory(addr)
+            if value is not None and value > 0:
+                defeated_count += 1
+        
+        return defeated_count >= 4
+    
+    def _check_legendary_caught(self, achievement: Achievement) -> bool:
+        """Check if specific legendary is caught (via Pokedex)"""
+        if not self.pokemon_reader:
+            return False
+        
+        current_pokedex = self.pokemon_reader.read_pokedex(self.game_name)
+        ach_id = achievement.id.lower()
+        
+        legendary_ids = {
+            "mewtwo": 150,
+            "moltres": 146,
+            "zapdos": 145,
+            "articuno": 144
+        }
+        
+        for name, pokemon_id in legendary_ids.items():
+            if name in ach_id:
+                return pokemon_id in current_pokedex
+        
+        return False
+    
+    def _check_all_legendary_birds(self) -> bool:
+        """Check if all 3 legendary birds are caught"""
+        if not self.pokemon_reader:
+            return False
+        
+        current_pokedex = self.pokemon_reader.read_pokedex(self.game_name)
+        birds = [144, 145, 146]  # Articuno, Zapdos, Moltres
+        
+        return all(bird in current_pokedex for bird in birds)
+    
+    def _check_all_legendaries(self) -> bool:
+        """Check if all legendaries are caught (birds + Mewtwo)"""
+        if not self.pokemon_reader:
+            return False
+        
+        current_pokedex = self.pokemon_reader.read_pokedex(self.game_name)
+        legendaries = [144, 145, 146, 150]  # Articuno, Zapdos, Moltres, Mewtwo
+        
+        return all(leg in current_pokedex for leg in legendaries)
+    
+    def _check_first_steps(self) -> bool:
+        """Check if player has started the game (has a starter Pokemon in party)"""
+        if not self.pokemon_reader:
+            return False
+        
+        party = self.pokemon_reader.read_party(self.game_name)
+        # Starters are Bulbasaur (1), Charmander (4), Squirtle (7)
+        starter_ids = {1, 4, 7}
+        
+        for member in party:
+            if member.get("id") in starter_ids:
+                return True
+        
+        return False
+    
+    def _check_pokemon_master(self) -> bool:
+        """Check Pokemon Master: All badges, Champion, and Complete Pokedex"""
+        if not self.pokemon_reader:
+            return False
+        
+        # Check all gyms
+        if not self._check_all_gyms():
+            return False
+        
+        # Check champion
+        champion_addr = "0xD357"  # Champion flag
+        value = self.retroarch.read_memory(champion_addr)
+        if not (value and value & 0x01):
+            return False
+        
+        # Check complete pokedex (151)
+        current_pokedex = self.pokemon_reader.read_pokedex(self.game_name)
+        if len(current_pokedex) < 151:
+            return False
+        
+        return True
     
     def check_collection(self):
         """Check Pokemon collection and queue updates"""
