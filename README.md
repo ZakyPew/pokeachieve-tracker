@@ -8,7 +8,7 @@ Sync your Pokemon gameplay with PokeAchieve and unlock achievements automaticall
 
 Download the latest release from [GitHub Releases](../../releases)
 
-**File:** `PokeAchieveTracker-v1.0.zip`
+**File:** `PokeAchieveTracker-v1.1.zip`
 
 Extract and run `run_tracker.exe`
 

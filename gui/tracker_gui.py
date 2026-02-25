@@ -928,7 +928,7 @@ class PokeAchieveGUI:
     
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("🎮 PokeAchieve Tracker v1.0")
+        self.root.title("🎮 PokeAchieve Tracker v1.1")
         self.root.geometry("900x650")
         self.root.minsize(700, 450)
         
