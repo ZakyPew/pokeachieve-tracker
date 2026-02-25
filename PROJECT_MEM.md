@@ -3,7 +3,7 @@
 **Project:** PokeAchieve Tracker  
 **Location:** `~/projects/active/pokeachieve/tracker/`  
 **Created:** 2026-02-20  
-**Last Updated:** 2026-02-23  
+**Last Updated:** 2026-02-24  
 
 ## 🎯 Current Goal
 Cross-platform GUI tracker that connects to RetroArch, tracks Pokemon achievements, and syncs with PokeAchieve platform.
@@ -26,6 +26,9 @@ Cross-platform GUI tracker that connects to RetroArch, tracks Pokemon achievemen
 - [x] **Automatic sync on startup**
 - [x] **Real-time unlock posting to platform**
 - [x] **Dual status indicators (RetroArch + API)**
+- [x] **FIXED: API endpoint paths (2026-02-24)**
+- [x] **FIXED: Backend route configuration (2026-02-24)**
+- [x] **ADDED: Enhanced API logging for debugging (2026-02-24)**
 
 ## 🔄 In Progress
 - [ ] Testing with actual RetroArch + Pokemon ROMs
@@ -68,6 +71,31 @@ READ_CORE_MEMORY 0xD16B 1
 ## 🐛 Known Issues
 - GUI might flicker on some Linux setups (Tkinter limitation)
 - Achievement icons not yet implemented (using rarity colors instead)
+
+## 🔧 Critical Fix - 2026-02-24
+
+### Problem: API Communication Failure
+The tracker was not syncing achievements to the backend API due to mismatched endpoint paths.
+
+### Root Cause
+Nginx proxy strips `/api/` prefix when forwarding to backend:
+- Request: `POST /api/tracker/unlock`
+- Nginx forwards: `POST /tracker/unlock` to backend
+- Backend expected: `POST /api/tracker/unlock`
+- Result: 404 Not Found
+
+### Solution
+Updated both backend routes and tracker client to use paths without `/api` prefix:
+- Backend: `@app.post("/tracker/unlock")`
+- Tracker: `self._request("POST", "/tracker/unlock")`
+- Nginx: Proxies `/api/tracker/unlock` → `/tracker/unlock` ✓
+
+### Files Changed
+1. `/home/pokeachieve/pokeachieve-platform/backend/main.py` - Fixed route paths
+2. `/home/zak/projects/active/pokeachieve/tracker/gui/tracker_gui.py` - Fixed API client paths
+
+### Status
+✅ **FIXED** - API communication now working correctly.
 
 ## 💡 Ideas / Backlog
 - [ ] Systray/minimize to tray
