@@ -963,7 +963,7 @@ class PokeAchieveGUI:
         self.api = None
         if self.config.get("api_key"):
             self.api = PokeAchieveAPI(
-                base_url=self.config.get("api_url", "https://pokeachieve.com"),
+                base_url=self.config.get("api_url", "https://pokeachieve.com/api"),
                 api_key=self.config["api_key"]
             )
         self.tracker = AchievementTracker(self.retroarch, self.api)
@@ -1461,7 +1461,7 @@ class PokeAchieveGUI:
         
         ttk.Label(api_frame, text="Platform URL:").grid(row=0, column=0, sticky="w", pady=5)
         url_entry = ttk.Entry(api_frame)
-        url_entry.insert(0, self.config.get("api_url", "https://pokeachieve.com"))
+        url_entry.insert(0, self.config.get("api_url", "https://pokeachieve.com/api"))
         url_entry.grid(row=0, column=1, sticky="ew", padx=(10, 0), pady=5)
         
         ttk.Label(api_frame, text="API Key:").grid(row=1, column=0, sticky="w", pady=5)
