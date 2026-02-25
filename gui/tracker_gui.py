@@ -48,7 +48,7 @@ class Pokemon:
 class PokeAchieveAPI:
     """Client for PokeAchieve platform API"""
     
-    def __init__(self, base_url: str = "https://pokeachieve.com", api_key: str = ""):
+    def __init__(self, base_url: str = "https://pokeachieve.com/api", api_key: str = ""):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.headers = {
@@ -928,7 +928,7 @@ class PokeAchieveGUI:
     
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("🎮 PokeAchieve Tracker v1.1")
+        self.root.title("🎮 PokeAchieve Tracker v1.2")
         self.root.geometry("900x650")
         self.root.minsize(700, 450)
         
