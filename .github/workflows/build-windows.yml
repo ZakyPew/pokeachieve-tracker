@@ -27,11 +27,8 @@ jobs:
     - name: Build EXE
       run: |
         cd tracker/gui
-        pyinstaller --onefile --windowed `
-          --name "PokeAchieveTracker_v1.4" `
-          --add-data "../achievements;achievements" `
-          --distpath ../../dist `
-          tracker_gui.py
+        pyinstaller --onefile --windowed --name "PokeAchieveTracker_v1.4" --add-data "../achievements;achievements" --distpath ../../dist tracker_gui.py
+      shell: cmd
     
     - name: Upload artifact
       uses: actions/upload-artifact@v4
