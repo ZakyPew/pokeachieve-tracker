@@ -963,10 +963,11 @@ class AchievementTracker:
             if not old_member:
                 party_changes.append(member)
         
-        # Queue updates if there are changes
-        if new_catches or party_changes:
+        # Queue updates - send ALL caught Pokemon from Pokedex (not just party changes)
+        # This includes Pokemon in PC storage, not just current party
+        if current_pokedex:
             self._collection_queue.put({
-                "catches": new_catches,
+                "catches": current_pokedex,  # ALL caught Pokemon from Pokedex
                 "party": current_party,
                 "game": self.game_name
             })
@@ -980,15 +981,15 @@ class AchievementTracker:
         if self.api and self.game_id:
             self._api_queue.put({"type": "achievement", "achievement": achievement})
     
-    def post_collection_to_platform(self, catches: List[int], party: List[Dict], game: str):
-        """Queue collection update for API posting - ONLY party Pokemon (actually caught)"""
+    def post_collection_to_platform(self, pokedex_caught: List[int], party: List[Dict], game: str):
+        """Queue collection update for API posting - ALL caught Pokemon from Pokedex"""
         if self.api:
-            # Only send PARTY Pokemon as "caught" - not just seen in Pokedex
-            party_ids = [p.get("id") for p in party if p.get("id")]
+            # Send ALL caught Pokemon from Pokedex (party + PC storage)
+            # pokedex_caught comes from game_configs.get_caught_pokemon()
             
             self._api_queue.put({
                 "type": "collection",
-                "catches": party_ids,  # Only Pokemon currently in party (caught)
+                "catches": pokedex_caught,  # All caught Pokemon
                 "party": party,
                 "game": game
             })
