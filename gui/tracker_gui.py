@@ -717,6 +717,19 @@ class AchievementTracker:
         if "first_steps" in ach_id:
             return self._derived_checker.check_first_steps()
         
+        # Story achievements - HM detection
+        if "_story_hm_" in ach_id:
+            hm_map = {
+                "cut": "cut",
+                "fly": "fly", 
+                "surf": "surf",
+                "strength": "strength",
+                "flash": "flash",
+            }
+            for hm_key, hm_name in hm_map.items():
+                if f"_story_hm_{hm_key}" in ach_id:
+                    return self._derived_checker.check_has_hm(hm_name)
+        
         # Pokemon Master
         if ach_id.endswith("_pokemon_master"):
             return self._derived_checker.check_pokemon_master()

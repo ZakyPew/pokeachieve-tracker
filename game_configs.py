@@ -321,6 +321,141 @@ class DerivedAchievementChecker:
         caught_count = self.get_caught_count()
         return caught_count >= self.config.max_pokemon
 
+    # === HM DETECTION ===
+    # HM items are stored in the player's bag
+    # Gen 1/2: Items at 0xD31D+ (2 bytes each: ID, quantity)
+    # Gen 3: Items in WRAM at 0x02025xxx
+
+    # HM Item IDs by generation
+    HM_ITEMS = {
+        1: {  # Gen 1 (Red/Blue/Yellow)
+            "cut": 0xC4,      # 196
+            "fly": 0xC5,      # 197
+            "surf": 0xC6,     # 198
+            "strength": 0xC7, # 199
+            "flash": 0xC8,    # 200
+        },
+        2: {  # Gen 2 (Gold/Silver/Crystal)
+            "cut": 0xF1,      # 241
+            "fly": 0xF2,      # 242
+            "surf": 0xF3,     # 243
+            "strength": 0xF4, # 244
+            "flash": 0xF5,    # 245
+            "whirlpool": 0xF6,# 246
+            "waterfall": 0xF7,# 247
+        },
+        3: {  # Gen 3 (Ruby/Sapphire/Emerald/FireRed/LeafGreen)
+            "cut": 0x015E,      # 350
+            "fly": 0x015F,      # 351
+            "surf": 0x0160,     # 352
+            "strength": 0x0161, # 353
+            "flash": 0x0162,    # 354
+            "rock_smash": 0x0163, # 355
+            "waterfall": 0x0164,  # 356
+            "dive": 0x0165,       # 357
+        }
+    }
+
+    def check_has_hm(self, hm_name: str) -> bool:
+        """Check if player has a specific HM in their bag"""
+        if not self.config:
+            return False
+
+        gen = self.config.generation
+        hm_items = self.HM_ITEMS.get(gen, {})
+        hm_id = hm_items.get(hm_name.lower())
+
+        if not hm_id:
+            return False
+
+        # Search bag for HM item
+        if gen == 1:
+            return self._check_bag_gen1(hm_id)
+        elif gen == 2:
+            return self._check_bag_gen2(hm_id)
+        elif gen == 3:
+            return self._check_bag_gen3(hm_id)
+
+        return False
+
+    def _check_bag_gen1(self, item_id: int) -> bool:
+        """Check if item exists in Gen 1 bag"""
+        # Gen 1 bag starts at 0xD31D
+        # First byte is item count, then 2 bytes per item (ID, quantity)
+        bag_start = 0xD31D
+
+        # Read item count
+        count = self.read_memory(hex(bag_start))
+        if count is None or count > 20:
+            return False
+
+        # Search through items
+        for i in range(min(count, 20)):
+            item_addr = bag_start + 1 + (i * 2)
+            item_byte = self.read_memory(hex(item_addr))
+            if item_byte == item_id:
+                return True
+
+        return False
+
+    def _check_bag_gen2(self, item_id: int) -> bool:
+        """Check if item exists in Gen 2 bag"""
+        # Gen 2 bag structure similar to Gen 1
+        # Items start at 0xD892 (different from Gen 1)
+        bag_start = 0xD892
+
+        count = self.read_memory(hex(bag_start))
+        if count is None or count > 20:
+            return False
+
+        for i in range(min(count, 20)):
+            item_addr = bag_start + 1 + (i * 2)
+            item_byte = self.read_memory(hex(item_addr))
+            if item_byte == item_id:
+                return True
+
+        return False
+
+    def _check_bag_gen3(self, item_id: int) -> bool:
+        """Check if item exists in Gen 3 bag (GBA WRAM)"""
+        # Gen 3 items are in WRAM
+        # FireRed/LeafGreen: 0x02025E9C (items pocket)
+        # Ruby/Sapphire/Emerald: 0x02025A94 (items pocket)
+
+        # Try FireRed/LeafGreen address first
+        bag_start_fr = 0x02025E9C
+        count = self.read_memory(hex(bag_start_fr))
+
+        if count is not None and count <= 42:
+            # Search FireRed bag
+            for i in range(min(count, 42)):
+                # Gen 3 items are 2 bytes each (little endian)
+                addr_low = bag_start_fr + 4 + (i * 4)
+                addr_high = addr_low + 1
+                item_low = self.read_memory(hex(addr_low))
+                item_high = self.read_memory(hex(addr_high))
+                if item_low is not None and item_high is not None:
+                    item_value = item_low + (item_high << 8)
+                    if item_value == item_id:
+                        return True
+
+        # Try Ruby/Sapphire/Emerald address
+        bag_start_rse = 0x02025A94
+        count = self.read_memory(hex(bag_start_rse))
+
+        if count is not None and count <= 42:
+            for i in range(min(count, 42)):
+                addr_low = bag_start_rse + 4 + (i * 4)
+                addr_high = addr_low + 1
+                item_low = self.read_memory(hex(addr_low))
+                item_high = self.read_memory(hex(addr_high))
+                if item_low is not None and item_high is not None:
+                    item_value = item_low + (item_high << 8)
+                    if item_value == item_id:
+                        return True
+
+        return False
+
 
 # === ACHIEVEMENT TEMPLATES BY GENERATION ===
 
