@@ -1164,9 +1164,15 @@ class PokeAchieveGUI:
         """Detect which game is loaded"""
         game_name = self.retroarch.get_current_game()
         
-        if game_name and game_name != self.tracker.game_name:
-            self._log(f"Game detected: {game_name}")
-            self._load_game_achievements(game_name)
+        if game_name:
+            # If game changed, load new achievements
+            if game_name != self.tracker.game_name:
+                self._log(f"Game detected: {game_name}")
+                self._load_game_achievements(game_name)
+            # If same game but not running, restart tracking
+            elif not self.is_running and self.tracker.achievements:
+                self._log(f"Resuming tracking for {game_name}")
+                self._start_tracking()
     
     def _load_game_achievements(self, game_name: str):
         """Load achievements for detected game"""
@@ -1267,6 +1273,8 @@ class PokeAchieveGUI:
         self.stop_btn.configure(state='disabled')
         self._log("Tracking stopped")
         self.tracker.save_progress(self.progress_file)
+        # Clear game name so it can be re-detected and restarted
+        self.tracker.game_name = None
     
     def _check_unlocks(self):
         """Check for new unlocks"""
