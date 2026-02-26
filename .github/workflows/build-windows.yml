@@ -2,19 +2,19 @@ name: Build Windows Tracker EXE
 
 on:
   push:
-    branches: [ main, master ]
     tags:
       - 'v*'
   workflow_dispatch:
 
 jobs:
-  build-windows:
+  build:
     runs-on: windows-latest
     
     steps:
-    - uses: actions/checkout@v4
+    - name: Checkout code
+      uses: actions/checkout@v4
     
-    - name: Set up Python
+    - name: Setup Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.11'
@@ -25,23 +25,43 @@ jobs:
         pip install pyinstaller requests
     
     - name: Build EXE
+      working-directory: ./tracker/gui
       run: |
-        cd tracker\gui
-        pyinstaller --onefile --windowed --name "PokeAchieveTracker_v1.4" tracker_gui.py
-        move dist\PokeAchieveTracker_v1.4.exe ..\..
-      shell: powershell
+        python -m pyinstaller --onefile --windowed --name "PokeAchieveTracker_v1.4" tracker_gui.py
     
-    - name: Upload artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: PokeAchieveTracker_v1.4
-        path: PokeAchieveTracker_v1.4.exe
+    - name: Prepare release files
+      run: |
+        mkdir release
+        copy tracker\gui\dist\PokeAchieveTracker_v1.4.exe release\
+        xcopy /E /I tracker\achievements release\achievements\
+        echo # PokeAchieve Tracker v1.4 > release\README.txt
+        echo ## Installation >> release\README.txt
+        echo 1. Run PokeAchieveTracker_v1.4.exe >> release\README.txt
+        echo 2. Enter your API key from https://pokeachieve.com/dashboard.html >> release\README.txt
     
-    - name: Create Release (if tagged)
-      if: startsWith(github.ref, 'refs/tags/v')
+    - name: Upload to Release
       uses: softprops/action-gh-release@v1
       with:
-        files: PokeAchieveTracker_v1.4.exe
+        files: |
+          release/PokeAchieveTracker_v1.4.exe
+          release/achievements/**
         name: PokeAchieve Tracker v1.4
+        body: |
+          ## What's New in v1.4
+          - Story achievements (HM detection, Pokedex obtained, etc.)
+          - All 10 Pokemon games supported (Red/Blue/Gold/Silver/Crystal/Ruby/Sapphire/Emerald/FireRed/LeafGreen)
+          - 361 total achievements
+          - API key authentication for cloud sync
+          - HM item detection in bag
+          
+          ## Files
+          - `PokeAchieveTracker_v1.4.exe` - The tracker application
+          - `achievements/` - Achievement definitions for all games
+          
+          ## Installation
+          1. Download `PokeAchieveTracker_v1.4.exe`
+          2. Run it (no install needed)
+          3. Get your API key from https://pokeachieve.com/dashboard.html
+          4. Start tracking your Pokemon journey!
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
