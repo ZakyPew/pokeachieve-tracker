@@ -981,11 +981,14 @@ class AchievementTracker:
             self._api_queue.put({"type": "achievement", "achievement": achievement})
     
     def post_collection_to_platform(self, catches: List[int], party: List[Dict], game: str):
-        """Queue collection update for API posting"""
+        """Queue collection update for API posting - ONLY party Pokemon (actually caught)"""
         if self.api:
+            # Only send PARTY Pokemon as "caught" - not just seen in Pokedex
+            party_ids = [p.get("id") for p in party if p.get("id")]
+            
             self._api_queue.put({
                 "type": "collection",
-                "catches": catches,
+                "catches": party_ids,  # Only Pokemon currently in party (caught)
                 "party": party,
                 "game": game
             })
@@ -1080,7 +1083,7 @@ class PokeAchieveGUI:
     
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("🎮 PokeAchieve Tracker v1.4")
+        self.root.title("🎮 PokeAchieve Tracker v1.5")
         self.root.geometry("900x650")
         self.root.minsize(700, 450)
         
@@ -1333,13 +1336,49 @@ class PokeAchieveGUI:
         
         achievement_file = None
         display_name = None
+        clean_name_lower = clean_name.lower()
+        
+        # Debug logging
+        self._log(f"DEBUG: Looking for achievements in: {self.achievements_dir}")
+        self._log(f"DEBUG: clean_name = '{clean_name}'")
+        self._log(f"DEBUG: achievements_dir exists = {self.achievements_dir.exists()}")
+        if self.achievements_dir.exists():
+            self._log(f"DEBUG: Files in dir: {list(self.achievements_dir.glob('*.json'))}")
+        
+        # Try exact match first
         for key, filename in game_map.items():
-            if key.lower() in clean_name.lower():
+            if key.lower() in clean_name_lower:
                 achievement_file = self.achievements_dir / filename
                 display_name = key
                 break
         
+        # If no match, try fuzzy matching for "Pokemon - X Version" format
+        if not achievement_file:
+            # Map of alternative names
+            alt_names = {
+                "red": "Pokemon Red",
+                "blue": "Pokemon Blue", 
+                "gold": "Pokemon Gold",
+                "silver": "Pokemon Silver",
+                "crystal": "Pokemon Crystal",
+                "emerald": "Pokemon Emerald",
+                "firered": "Pokemon FireRed",
+                "leafgreen": "Pokemon LeafGreen",
+                "ruby": "Pokemon Ruby",
+                "sapphire": "Pokemon Sapphire",
+            }
+            
+            for alt, key in alt_names.items():
+                # Check for "pokemon - red version" or "pokemon red" patterns
+                if f"pokemon - {alt}" in clean_name_lower or f"pokemon {alt}" in clean_name_lower:
+                    filename = game_map.get(key)
+                    if filename:
+                        achievement_file = self.achievements_dir / filename
+                        display_name = key
+                        break
+        
         if achievement_file and achievement_file.exists():
+            self._log(f"DEBUG: Found achievement file: {achievement_file}")
             if self.tracker.load_game(display_name, achievement_file):
                 self.tracker.load_progress(self.progress_file)
                 
@@ -1352,6 +1391,13 @@ class PokeAchieveGUI:
                 
                 if not self.is_running:
                     self._start_tracking()
+            else:
+                self._log(f"DEBUG: load_game failed for {display_name}")
+        else:
+            if achievement_file:
+                self._log(f"DEBUG: Achievement file not found: {achievement_file}")
+            else:
+                self._log(f"DEBUG: No matching game found for: {clean_name}")
     
     def _merge_with_website_data(self, game_name: str):
         """Merge local achievements with website data - never removes server achievements"""
