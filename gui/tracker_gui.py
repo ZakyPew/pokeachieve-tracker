@@ -220,7 +220,8 @@ class PokemonMemoryReader:
         "pokemon_red": {
             "gen": 1,
             "max_pokemon": 151,
-            "pokedex_flags": "0xD2F7",
+            "pokedex_seen": "0xD2F7",      # Pokemon you've encountered
+            "pokedex_caught": "0xD30A",    # Pokemon you've actually CAUGHT ⭐
             "party_count": "0xD163",
             "party_start": "0xD16B",
             "party_slot_size": 44,
@@ -228,7 +229,8 @@ class PokemonMemoryReader:
         "pokemon_blue": {
             "gen": 1,
             "max_pokemon": 151,
-            "pokedex_flags": "0xD2F7",
+            "pokedex_seen": "0xD2F7",
+            "pokedex_caught": "0xD30A",
             "party_count": "0xD163",
             "party_start": "0xD16B",
             "party_slot_size": 44,
@@ -236,7 +238,8 @@ class PokemonMemoryReader:
         "pokemon_yellow": {
             "gen": 1,
             "max_pokemon": 151,
-            "pokedex_flags": "0xD2F7",
+            "pokedex_seen": "0xD2F7",
+            "pokedex_caught": "0xD30A",
             "party_count": "0xD163",
             "party_start": "0xD16B",
             "party_slot_size": 44,
@@ -245,7 +248,8 @@ class PokemonMemoryReader:
         "pokemon_gold": {
             "gen": 2,
             "max_pokemon": 251,
-            "pokedex_flags": "0xDDA4",
+            "pokedex_seen": "0xDDA4",
+            "pokedex_caught": "0xDC44",    # Gen 2 caught flags
             "party_count": "0xDA22",
             "party_start": "0xDA2A",
             "party_slot_size": 48,
@@ -253,7 +257,8 @@ class PokemonMemoryReader:
         "pokemon_silver": {
             "gen": 2,
             "max_pokemon": 251,
-            "pokedex_flags": "0xDDA4",
+            "pokedex_seen": "0xDDA4",
+            "pokedex_caught": "0xDC44",
             "party_count": "0xDA22",
             "party_start": "0xDA2A",
             "party_slot_size": 48,
@@ -261,7 +266,8 @@ class PokemonMemoryReader:
         "pokemon_crystal": {
             "gen": 2,
             "max_pokemon": 251,
-            "pokedex_flags": "0xDDA4",
+            "pokedex_seen": "0xDDA4",
+            "pokedex_caught": "0xDC44",
             "party_count": "0xDA22",
             "party_start": "0xDA2A",
             "party_slot_size": 48,
@@ -286,7 +292,8 @@ class PokemonMemoryReader:
         "pokemon_emerald": {
             "gen": 3,
             "max_pokemon": 386,
-            "pokedex_flags": "0x202F900",
+            "pokedex_seen": "0x202F900",
+            "pokedex_caught": "0x202F900",  # TODO: Find correct caught address for Gen 3
             "party_count": "0x20244E0",
             "party_start": "0x20244E8",
             "party_slot_size": 100,
@@ -294,7 +301,8 @@ class PokemonMemoryReader:
         "pokemon_firered": {
             "gen": 3,
             "max_pokemon": 386,
-            "pokedex_flags": "0x202F900",
+            "pokedex_seen": "0x202F900",
+            "pokedex_caught": "0x202F900",  # TODO: Find correct caught address for Gen 3
             "party_count": "0x20244E0",
             "party_start": "0x20244E8",
             "party_slot_size": 100,
@@ -302,7 +310,8 @@ class PokemonMemoryReader:
         "pokemon_leafgreen": {
             "gen": 3,
             "max_pokemon": 386,
-            "pokedex_flags": "0x202F900",
+            "pokedex_seen": "0x202F900",
+            "pokedex_caught": "0x202F900",  # TODO: Find correct caught address for Gen 3
             "party_count": "0x20244E0",
             "party_start": "0x20244E8",
             "party_slot_size": 100,
@@ -384,13 +393,16 @@ class PokemonMemoryReader:
         return self.GAME_ADDRESSES.get(game_key)
     
     def read_pokedex(self, game_name: str) -> List[int]:
-        """Read Pokedex flags - returns list of caught Pokemon IDs"""
+        """Read Pokedex CAUGHT flags - returns list of CAUGHT Pokemon IDs (not seen!)"""
         config = self.get_game_config(game_name)
         if not config:
             return []
         
         caught = []
-        pokedex_addr = config["pokedex_flags"]
+        # Use pokedex_caught address (0xD30A for Gen 1) not pokedex_seen (0xD2F7)!
+        # pokedex_seen = every Pokemon you encountered
+        # pokedex_caught = only Pokemon you actually caught
+        pokedex_addr = config.get("pokedex_caught", config.get("pokedex_flags", "0xD2F7"))
         
         # Read bytes - each byte contains 8 Pokemon flags
         # Gen 1: 151 Pokemon = 19 bytes
@@ -1203,8 +1215,8 @@ class PokeAchieveGUI:
                 return
             
             success, data = self.api.get_progress(game_id)
-            if success and data:
-                server_unlocked = set(data.get('unlocked_achievements', []))
+            if success and data and isinstance(data, dict):
+                server_unlocked = set(data.get('unlocked_achievement_ids', []))
                 local_unlocked = set(a.id for a in self.tracker.achievements if a.unlocked)
                 
                 # Merge: take union (never remove)
