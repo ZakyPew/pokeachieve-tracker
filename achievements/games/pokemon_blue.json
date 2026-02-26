@@ -31,6 +31,94 @@
       "points": 5
     },
     {
+      "id": "pokemon_blue_story_pokedex_obtained",
+      "name": "Research Assistant",
+      "description": "Receive the Pokedex from Professor Oak",
+      "category": "story",
+      "icon": "story_pokedex.png",
+      "target_value": 1,
+      "rarity": "common",
+      "memory_address": "0xD74B",
+      "memory_condition": "> 2",
+      "points": 15
+    },
+    {
+      "id": "pokemon_blue_story_parcel_delivered",
+      "name": "Special Delivery",
+      "description": "Deliver Oak's Parcel to Professor Oak",
+      "category": "story",
+      "icon": "story_parcel.png",
+      "target_value": 1,
+      "rarity": "common",
+      "memory_address": "0xD74B",
+      "memory_condition": "> 4",
+      "points": 15
+    },
+    {
+      "id": "pokemon_blue_story_fuji_rescued",
+      "name": "Tower Hero",
+      "description": "Rescue Mr. Fuji from Team Rocket at Pokemon Tower",
+      "category": "story",
+      "icon": "story_fuji.png",
+      "target_value": 1,
+      "rarity": "rare",
+      "memory_address": "0xD7A3",
+      "memory_condition": "> 4",
+      "points": 50
+    },
+    {
+      "id": "pokemon_blue_story_silph_saved",
+      "name": "Corporate Savior",
+      "description": "Defeat Giovanni and save Silph Co",
+      "category": "story",
+      "icon": "story_silph.png",
+      "target_value": 1,
+      "rarity": "epic",
+      "memory_address": "0xD839",
+      "memory_condition": "> 4",
+      "points": 75
+    },
+    {
+      "id": "pokemon_blue_story_hm_cut",
+      "name": "Cutting Edge",
+      "description": "Obtain HM01 Cut from the Captain on the S.S. Anne",
+      "category": "story",
+      "icon": "story_cut.png",
+      "target_value": 1,
+      "rarity": "common",
+      "points": 20
+    },
+    {
+      "id": "pokemon_blue_story_hm_fly",
+      "name": "Wings of Freedom",
+      "description": "Obtain HM02 Fly from the Route 16 gatekeeper",
+      "category": "story",
+      "icon": "story_fly.png",
+      "target_value": 1,
+      "rarity": "uncommon",
+      "points": 25
+    },
+    {
+      "id": "pokemon_blue_story_hm_surf",
+      "name": "Surfer Dude",
+      "description": "Obtain HM03 Surf from the Secret House in Safari Zone",
+      "category": "story",
+      "icon": "story_surf.png",
+      "target_value": 1,
+      "rarity": "rare",
+      "points": 30
+    },
+    {
+      "id": "pokemon_blue_story_hm_strength",
+      "name": "Strong Foundation",
+      "description": "Obtain HM04 Strength from the Safari Zone warden",
+      "category": "story",
+      "icon": "story_strength.png",
+      "target_value": 1,
+      "rarity": "uncommon",
+      "points": 25
+    },
+    {
       "id": "pokemon_blue_pokedex_10",
       "name": "Junior Researcher",
       "description": "Register 10 Pokemon in the Pokedex",

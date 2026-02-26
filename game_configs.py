@@ -12,14 +12,14 @@ class GameMemoryConfig:
     name: str
     platform: str  # gb, gbc, gba
     generation: int  # 1, 2, 3
-    
+
     # Pokedex
     pokedex_caught_start: str  # Start of caught flags
     badge_address: str  # Address containing all badge flags
     party_count_address: str
     party_start_address: str
     party_slot_size: int
-    
+
     # Optional fields with defaults
     pokedex_seen_start: Optional[str] = None  # Start of seen flags (if different)
     max_pokemon: int = 151
@@ -55,7 +55,7 @@ GEN2_CONFIG = GameMemoryConfig(
     platform="gbc",
     generation=2,
     pokedex_caught_start="0xDE3C",  # Caught flags
-    pokedex_seen_start="0xD929",  # Seen flags  
+    pokedex_seen_start="0xD929",  # Seen flags
     max_pokemon=251,
     badge_address="0xD35C",  # Different from Gen 1!
     badge_count=8,
@@ -90,12 +90,12 @@ GAME_CONFIGS: Dict[str, GameMemoryConfig] = {
     # Gen 1
     "Pokemon Red": GEN1_CONFIG,
     "Pokemon Blue": GEN1_CONFIG,
-    
-    # Gen 2  
+
+    # Gen 2
     "Pokemon Gold": GEN2_CONFIG,
     "Pokemon Silver": GEN2_CONFIG,
     "Pokemon Crystal": GEN2_CONFIG,
-    
+
     # Gen 3
     "Pokemon Ruby": GEN3_CONFIG,
     "Pokemon Sapphire": GEN3_CONFIG,
@@ -127,107 +127,107 @@ def get_platform(game_name: str) -> str:
 
 class DerivedAchievementChecker:
     """Checks achievements that require calculation from multiple memory locations"""
-    
+
     def __init__(self, retroarch_client, game_name: str):
         self.retroarch = retroarch_client
         self.game_name = game_name
         self.config = get_game_config(game_name)
         if not self.config:
             raise ValueError(f"No configuration for game: {game_name}")
-    
+
     def read_memory(self, addr: str) -> Optional[int]:
         """Read a single byte from memory"""
         return self.retroarch.read_memory(addr)
-    
+
     def read_pokedex_caught(self) -> List[int]:
         """Read all caught Pokemon IDs from Pokedex"""
         if not self.config:
             return []
-        
+
         caught = []
         addr = int(self.config.pokedex_caught_start, 16)
         num_bytes = (self.config.max_pokemon + 7) // 8
-        
+
         for byte_idx in range(num_bytes):
             byte_val = self.read_memory(hex(addr + byte_idx))
             if byte_val is None:
                 continue
-            
+
             for bit_idx in range(8):
                 pokemon_id = byte_idx * 8 + bit_idx + 1
                 if pokemon_id > self.config.max_pokemon:
                     break
                 if (byte_val >> bit_idx) & 1:
                     caught.append(pokemon_id)
-        
+
         return caught
-    
+
     def get_caught_count(self) -> int:
         """Get total number of caught Pokemon"""
         return len(self.read_pokedex_caught())
-    
+
     def check_all_badges(self) -> bool:
         """Check if all gym badges are obtained"""
         if not self.config:
             return False
-        
+
         badge_byte = self.read_memory(self.config.badge_address)
         if badge_byte is None:
             return False
-        
+
         # All badges = all N bits set
         expected = (1 << self.config.badge_count) - 1
         return badge_byte == expected
-    
+
     def check_champion_defeated(self) -> bool:
         """Check if champion/E4 has been defeated"""
         if not self.config:
             return False
-        
+
         if self.config.champion_address:
             value = self.read_memory(self.config.champion_address)
             return value is not None and value > 0
-        
+
         if self.config.hall_of_fame_address:
             value = self.read_memory(self.config.hall_of_fame_address)
             return value is not None and value > 0
-        
+
         return False
-    
+
     def check_elite_four_member(self, member_name: str) -> bool:
         """Check if specific Elite Four member is defeated"""
         if not self.config or not self.config.elite_four_addresses:
             return False
-        
+
         # Map names to indices
         e4_names = ["lorelei", "bruno", "agatha", "lance"]
         if member_name.lower() not in e4_names:
             return False
-        
+
         idx = e4_names.index(member_name.lower())
         if idx >= len(self.config.elite_four_addresses):
             return False
-        
+
         value = self.read_memory(self.config.elite_four_addresses[idx])
         return value is not None and value > 0
-    
+
     def check_all_elite_four(self) -> bool:
         """Check if all Elite Four members are defeated"""
         if not self.config or not self.config.elite_four_addresses:
             # For Gen 3, check Hall of Fame instead
             return self.check_champion_defeated()
-        
+
         for addr in self.config.elite_four_addresses:
             value = self.read_memory(addr)
             if value is None or value == 0:
                 return False
-        
+
         return True
-    
+
     def check_legendary_caught(self, legendary_name: str) -> bool:
         """Check if specific legendary is caught via Pokedex"""
         caught = self.read_pokedex_caught()
-        
+
         # Legendary Pokemon IDs by name
         legendary_ids = {
             "articuno": 144,
@@ -252,23 +252,23 @@ class DerivedAchievementChecker:
             "jirachi": 385,
             "deoxys": 386,
         }
-        
+
         pokemon_id = legendary_ids.get(legendary_name.lower())
         if pokemon_id:
             return pokemon_id in caught
-        
+
         return False
-    
+
     def check_all_legendary_birds(self) -> bool:
         """Check if all 3 legendary birds are caught"""
         caught = self.read_pokedex_caught()
         birds = [144, 145, 146]  # Articuno, Zapdos, Moltres
         return all(bird in caught for bird in birds)
-    
+
     def check_all_legendaries(self) -> bool:
         """Check if all legendaries for this generation are caught"""
         caught = self.read_pokedex_caught()
-        
+
         if self.config.generation == 1:
             legendaries = [144, 145, 146, 150]  # Birds + Mewtwo
         elif self.config.generation == 2:
@@ -277,46 +277,46 @@ class DerivedAchievementChecker:
             legendaries = [377, 378, 379, 380, 381, 382, 383, 384]  # Regis + Eon + Weather
         else:
             return False
-        
+
         return all(leg in caught for leg in legendaries)
-    
+
     def check_first_steps(self) -> bool:
         """Check if player has started (has a starter Pokemon in party)"""
         if not self.config:
             return False
-        
+
         # Read party count
         count = self.read_memory(self.config.party_count_address)
         if count is None or count == 0 or count > 6:
             return False
-        
+
         # Check first party slot for starter
         starter = self.read_memory(self.config.party_start_address)
-        
+
         # Starters by generation
         gen1_starters = {1, 4, 7}  # Bulbasaur, Charmander, Squirtle
         gen2_starters = {152, 155, 158}  # Chikorita, Cyndaquil, Totodile
         gen3_starters = {252, 255, 258}  # Treecko, Torchic, Mudkip
-        
+
         if self.config.generation == 1:
             return starter in gen1_starters
         elif self.config.generation == 2:
             return starter in gen2_starters
         elif self.config.generation == 3:
             return starter in gen3_starters
-        
+
         return False
-    
+
     def check_pokemon_master(self) -> bool:
         """Check Pokemon Master: All badges, Champion, and Complete Pokedex"""
         # All badges
         if not self.check_all_badges():
             return False
-        
+
         # Champion defeated
         if not self.check_champion_defeated():
             return False
-        
+
         # Complete pokedex
         caught_count = self.get_caught_count()
         return caught_count >= self.config.max_pokemon
@@ -326,12 +326,12 @@ class DerivedAchievementChecker:
 
 def get_achievement_template(generation: int, game_name: str) -> List[dict]:
     """Generate achievement template for a game based on its generation"""
-    
+
     prefix = game_name.lower().replace(" ", "_").replace("'", "")
-    
+
     # Special case: FireRed/LeafGreen are Gen 3 platform but Kanto region (Gen 1)
     is_kanto_remake = game_name in ["Pokemon FireRed", "Pokemon LeafGreen"]
-    
+
     # Determine region and max Pokemon
     if is_kanto_remake or generation == 1:
         region_name = "Kanto"
@@ -345,7 +345,7 @@ def get_achievement_template(generation: int, game_name: str) -> List[dict]:
         region_name = "Hoenn"
         max_pokemon = 202  # Ruby/Sapphire/Emerald have 202 Hoenn dex
         actual_generation = 3
-    
+
     # Common achievements for all games
     achievements = [
         # Story
@@ -364,7 +364,7 @@ def get_achievement_template(generation: int, game_name: str) -> List[dict]:
             "id": f"{prefix}_first_steps",
             "name": "First Steps",
             "description": "Begin your Pokemon journey",
-            "category": "story", 
+            "category": "story",
             "icon": "first_steps.png",
             "target_value": 1,
             "rarity": "common",
@@ -373,10 +373,236 @@ def get_achievement_template(generation: int, game_name: str) -> List[dict]:
         },
     ]
     
+    # Story achievements - generation specific
+    if actual_generation == 1:
+        # Gen 1 / Kanto story achievements
+        achievements.extend([
+            {
+                "id": f"{prefix}_story_pokedex_obtained",
+                "name": "Research Assistant",
+                "description": "Receive the Pokedex from Professor Oak",
+                "category": "story",
+                "icon": "story_pokedex.png",
+                "target_value": 1,
+                "rarity": "common",
+                "memory_address": "0xD74B",  # wOaksLabCurScript - Pokedex obtained flag
+                "memory_condition": "> 2",
+                "points": 15
+            },
+            {
+                "id": f"{prefix}_story_parcel_delivered",
+                "name": "Special Delivery",
+                "description": "Deliver Oak's Parcel to Professor Oak",
+                "category": "story",
+                "icon": "story_parcel.png",
+                "target_value": 1,
+                "rarity": "common",
+                "memory_address": "0xD74B",  # wOaksLabCurScript - parcel delivered
+                "memory_condition": "> 4",
+                "points": 15
+            },
+            {
+                "id": f"{prefix}_story_fuji_rescued",
+                "name": "Tower Hero",
+                "description": "Rescue Mr. Fuji from Team Rocket at Pokemon Tower",
+                "category": "story",
+                "icon": "story_fuji.png",
+                "target_value": 1,
+                "rarity": "rare",
+                "memory_address": "0xD7A3",  # wLavenderTownCurScript
+                "memory_condition": "> 4",
+                "points": 50
+            },
+            {
+                "id": f"{prefix}_story_silph_saved",
+                "name": "Corporate Savior",
+                "description": "Defeat Giovanni and save Silph Co",
+                "category": "story",
+                "icon": "story_silph.png",
+                "target_value": 1,
+                "rarity": "epic",
+                "memory_address": "0xD839",  # wSilphCo9FCurScript - Giovanni defeated
+                "memory_condition": "> 4",
+                "points": 75
+            },
+            {
+                "id": f"{prefix}_story_hm_cut",
+                "name": "Cutting Edge",
+                "description": "Obtain HM01 Cut from the Captain on the S.S. Anne",
+                "category": "story",
+                "icon": "story_cut.png",
+                "target_value": 1,
+                "rarity": "common",
+                # HM detection via item - derived check needed
+                "points": 20
+            },
+            {
+                "id": f"{prefix}_story_hm_fly",
+                "name": "Wings of Freedom",
+                "description": "Obtain HM02 Fly from the Route 16 gatekeeper",
+                "category": "story",
+                "icon": "story_fly.png",
+                "target_value": 1,
+                "rarity": "uncommon",
+                # HM detection via item
+                "points": 25
+            },
+            {
+                "id": f"{prefix}_story_hm_surf",
+                "name": "Surfer Dude",
+                "description": "Obtain HM03 Surf from the Secret House in Safari Zone",
+                "category": "story",
+                "icon": "story_surf.png",
+                "target_value": 1,
+                "rarity": "rare",
+                # HM detection via item
+                "points": 30
+            },
+            {
+                "id": f"{prefix}_story_hm_strength",
+                "name": "Strong Foundation",
+                "description": "Obtain HM04 Strength from the Safari Zone warden",
+                "category": "story",
+                "icon": "story_strength.png",
+                "target_value": 1,
+                "rarity": "uncommon",
+                # HM detection via item
+                "points": 25
+            },
+        ])
+    elif actual_generation == 2:
+        # Gen 2 / Johto story achievements
+        achievements.extend([
+            {
+                "id": f"{prefix}_story_pokedex_obtained",
+                "name": "Research Assistant",
+                "description": "Receive the Pokedex from Professor Oak",
+                "category": "story",
+                "icon": "story_pokedex.png",
+                "target_value": 1,
+                "rarity": "common",
+                "memory_address": "0xD74B",  # Similar to Gen 1
+                "memory_condition": "> 0",
+                "points": 15
+            },
+            {
+                "id": f"{prefix}_story_rival_first",
+                "name": "First Blood",
+                "description": "Defeat your rival for the first time",
+                "category": "story",
+                "icon": "story_rival.png",
+                "target_value": 1,
+                "rarity": "common",
+                "memory_address": "0xD74C",  # wRoute22CurScript - first rival battle
+                "memory_condition": "> 2",
+                "points": 15
+            },
+            {
+                "id": f"{prefix}_story_team_rocket_hideout",
+                "name": "Hideout Hunter",
+                "description": "Clear the Team Rocket Hideout in Mahogany Town",
+                "category": "story",
+                "icon": "story_rocket.png",
+                "target_value": 1,
+                "rarity": "rare",
+                "memory_address": "0xD84A",  # Team Rocket event flags
+                "memory_condition": "& 0x01",
+                "points": 50
+            },
+            {
+                "id": f"{prefix}_story_radio_tower",
+                "name": "Airwave Liberator",
+                "description": "Rescue the Radio Tower from Team Rocket",
+                "category": "story",
+                "icon": "story_radio.png",
+                "target_value": 1,
+                "rarity": "epic",
+                "memory_address": "0xD84A",
+                "memory_condition": "& 0x02",
+                "points": 75
+            },
+            {
+                "id": f"{prefix}_story_elite_four_access",
+                "name": "Victory Road Access",
+                "description": "Gain access to the Elite Four at Indigo Plateau",
+                "category": "story",
+                "icon": "story_e4access.png",
+                "target_value": 1,
+                "rarity": "rare",
+                "memory_address": "0xD74E",  # Elite Four access flag
+                "memory_condition": "> 0",
+                "points": 40
+            },
+        ])
+    else:
+        # Gen 3 / Hoenn story achievements
+        achievements.extend([
+            {
+                "id": f"{prefix}_story_pokedex_obtained",
+                "name": "Research Assistant",
+                "description": "Receive the Pokedex from Professor Birch",
+                "category": "story",
+                "icon": "story_pokedex.png",
+                "target_value": 1,
+                "rarity": "common",
+                "memory_address": "0x02024A64",  # GBA script progress
+                "memory_condition": "> 10",
+                "points": 15
+            },
+            {
+                "id": f"{prefix}_story_weather_institute",
+                "name": "Weather Savior",
+                "description": "Rescue the Weather Institute from Team Aqua/Magma",
+                "category": "story",
+                "icon": "story_weather.png",
+                "target_value": 1,
+                "rarity": "uncommon",
+                "memory_address": "0x02024A68",  # Weather Institute event
+                "memory_condition": "> 0",
+                "points": 35
+            },
+            {
+                "id": f"{prefix}_story_mt_chimney",
+                "name": "Mountain Defender",
+                "description": "Defeat Team Aqua/Magma at Mt. Chimney",
+                "category": "story",
+                "icon": "story_chimney.png",
+                "target_value": 1,
+                "rarity": "rare",
+                "memory_address": "0x02024A6C",  # Mt. Chimney event
+                "memory_condition": "> 0",
+                "points": 50
+            },
+            {
+                "id": f"{prefix}_story_space_center",
+                "name": "Space Guardian",
+                "description": "Defend the Mossdeep Space Center",
+                "category": "story",
+                "icon": "story_space.png",
+                "target_value": 1,
+                "rarity": "epic",
+                "memory_address": "0x02024A70",  # Space Center event
+                "memory_condition": "> 0",
+                "points": 75
+            },
+            {
+                "id": f"{prefix}_story_cave_of_origin",
+                "name": "Primal Awakening",
+                "description": "Enter the Cave of Origin",
+                "category": "story",
+                "icon": "story_cave.png",
+                "target_value": 1,
+                "rarity": "epic",
+                "memory_address": "0x02024A74",
+                "memory_condition": "> 0",
+                "points": 60
+            },
+        ])
+
     # Pokedex achievements
     pokedex_targets = [10, 25, 50, 100]
     pokedex_names = ["Junior Researcher", "Collector", "Pokemon Enthusiast", "Pokedex Master"]
-    
+
     for target, name in zip(pokedex_targets, pokedex_names):
         achievements.append({
             "id": f"{prefix}_pokedex_{target}",
@@ -389,7 +615,7 @@ def get_achievement_template(generation: int, game_name: str) -> List[dict]:
             "points": target
             # No memory_address - derived from Pokedex count
         })
-    
+
     # Completion achievement (use already calculated values)
     achievements.append({
         "id": f"{prefix}_pokedex_complete",
@@ -402,23 +628,23 @@ def get_achievement_template(generation: int, game_name: str) -> List[dict]:
         "points": 500
         # No memory_address - derived
     })
-    
+
     # Gym badges - will have memory_address set by game-specific config
     gym_leaders = {
         1: ["Brock", "Misty", "Lt. Surge", "Erika", "Koga", "Sabrina", "Blaine", "Giovanni"],
         2: ["Falkner", "Bugsy", "Whitney", "Morty", "Chuck", "Jasmine", "Pryce", "Clair"],
         3: ["Roxanne", "Brawly", "Wattson", "Flannery", "Norman", "Winona", "Tate & Liza", "Juan/Wallace"]
     }
-    
+
     gym_badges = {
         1: ["Boulder", "Cascade", "Thunder", "Rainbow", "Soul", "Marsh", "Volcano", "Earth"],
         2: ["Zephyr", "Hive", "Plain", "Fog", "Storm", "Mineral", "Glacier", "Rising"],
         3: ["Stone", "Knuckle", "Dynamo", "Heat", "Balance", "Feather", "Mind", "Rain"]
     }
-    
+
     leaders = gym_leaders.get(actual_generation, gym_leaders[1])
     badges = gym_badges.get(actual_generation, gym_badges[1])
-    
+
     for i, (leader, badge) in enumerate(zip(leaders, badges)):
         achievements.append({
             "id": f"{prefix}_gym_{i+1}_{leader.lower().replace(' ', '_').replace('&', 'and')}",
@@ -432,7 +658,7 @@ def get_achievement_template(generation: int, game_name: str) -> List[dict]:
             "memory_condition": f"& {hex(1 << i)}",
             "points": 25
         })
-    
+
     # All gyms - derived
     achievements.append({
         "id": f"{prefix}_gym_all",
@@ -445,7 +671,7 @@ def get_achievement_template(generation: int, game_name: str) -> List[dict]:
         "points": 100
         # No memory_address - derived
     })
-    
+
     # Elite Four - generation specific (use actual_generation for region)
     if actual_generation == 1:
         e4_members = ["Lorelei", "Bruno", "Agatha", "Lance"]
@@ -453,7 +679,7 @@ def get_achievement_template(generation: int, game_name: str) -> List[dict]:
         e4_members = ["Will", "Koga", "Bruno", "Karen"]
     else:  # Gen 3
         e4_members = ["Sidney", "Phoebe", "Glacia", "Drake"]
-    
+
     for member in e4_members:
         achievements.append({
             "id": f"{prefix}_elite_four_{member.lower()}",
@@ -466,7 +692,7 @@ def get_achievement_template(generation: int, game_name: str) -> List[dict]:
             "points": 50
             # No memory_address - derived
         })
-    
+
     # All Elite Four - derived
     achievements.append({
         "id": f"{prefix}_elite_four_all",
@@ -479,7 +705,7 @@ def get_achievement_template(generation: int, game_name: str) -> List[dict]:
         "points": 200
         # No memory_address - derived
     })
-    
+
     # Champion (use actual_generation for region)
     champion_name = "Blue" if actual_generation == 1 else ("Lance" if actual_generation == 2 else "Steven")
     achievements.append({
@@ -494,16 +720,16 @@ def get_achievement_template(generation: int, game_name: str) -> List[dict]:
         "memory_condition": "> 0",
         "points": 300
     })
-    
+
     # Legendary achievements - generation specific (use actual_generation!)
     legendaries = {
         1: [("mewtwo", "Mewtwo"), ("moltres", "Moltres"), ("zapdos", "Zapdos"), ("articuno", "Articuno")],
         2: [("lugia", "Lugia"), ("ho-oh", "Ho-Oh"), ("suicune", "Suicune"), ("entei", "Entei"), ("raikou", "Raikou")],
-        3: [("kyogre", "Kyogre"), ("groudon", "Groudon"), ("rayquaza", "Rayquaza"), 
+        3: [("kyogre", "Kyogre"), ("groudon", "Groudon"), ("rayquaza", "Rayquaza"),
              ("latias", "Latias"), ("latios", "Latios"), ("regirock", "Regirock"),
              ("regice", "Regice"), ("registeel", "Registeel")]
     }
-    
+
     for legendary_id, legendary_name in legendaries.get(actual_generation, []):
         achievements.append({
             "id": f"{prefix}_legendary_{legendary_id}",
@@ -516,7 +742,7 @@ def get_achievement_template(generation: int, game_name: str) -> List[dict]:
             "points": 150
             # No memory_address - derived from Pokedex
         })
-    
+
     # Legendary collection achievements
     if actual_generation == 1:
         achievements.append({
@@ -529,7 +755,7 @@ def get_achievement_template(generation: int, game_name: str) -> List[dict]:
             "rarity": "epic",
             "points": 400
         })
-    
+
     achievements.append({
         "id": f"{prefix}_legendary_all",
         "name": "Legendary Master",
@@ -540,7 +766,7 @@ def get_achievement_template(generation: int, game_name: str) -> List[dict]:
         "rarity": "legendary",
         "points": 1000
     })
-    
+
     # Pokemon Master - ultimate achievement
     achievements.append({
         "id": f"{prefix}_pokemon_master",
@@ -553,14 +779,14 @@ def get_achievement_template(generation: int, game_name: str) -> List[dict]:
         "points": 5000
         # No memory_address - derived
     })
-    
+
     return achievements
 
 
 if __name__ == "__main__":
     # Test generate templates
     import json
-    
+
     for game in ["Pokemon Red", "Pokemon Emerald", "Pokemon Crystal"]:
         gen = get_generation(game)
         template = get_achievement_template(gen, game)

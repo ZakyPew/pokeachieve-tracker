@@ -31,6 +31,66 @@
       "points": 5
     },
     {
+      "id": "pokemon_emerald_story_pokedex_obtained",
+      "name": "Research Assistant",
+      "description": "Receive the Pokedex from Professor Birch",
+      "category": "story",
+      "icon": "story_pokedex.png",
+      "target_value": 1,
+      "rarity": "common",
+      "memory_address": "0x02024A64",
+      "memory_condition": "> 10",
+      "points": 15
+    },
+    {
+      "id": "pokemon_emerald_story_weather_institute",
+      "name": "Weather Savior",
+      "description": "Rescue the Weather Institute from Team Aqua/Magma",
+      "category": "story",
+      "icon": "story_weather.png",
+      "target_value": 1,
+      "rarity": "uncommon",
+      "memory_address": "0x02024A68",
+      "memory_condition": "> 0",
+      "points": 35
+    },
+    {
+      "id": "pokemon_emerald_story_mt_chimney",
+      "name": "Mountain Defender",
+      "description": "Defeat Team Aqua/Magma at Mt. Chimney",
+      "category": "story",
+      "icon": "story_chimney.png",
+      "target_value": 1,
+      "rarity": "rare",
+      "memory_address": "0x02024A6C",
+      "memory_condition": "> 0",
+      "points": 50
+    },
+    {
+      "id": "pokemon_emerald_story_space_center",
+      "name": "Space Guardian",
+      "description": "Defend the Mossdeep Space Center",
+      "category": "story",
+      "icon": "story_space.png",
+      "target_value": 1,
+      "rarity": "epic",
+      "memory_address": "0x02024A70",
+      "memory_condition": "> 0",
+      "points": 75
+    },
+    {
+      "id": "pokemon_emerald_story_cave_of_origin",
+      "name": "Primal Awakening",
+      "description": "Enter the Cave of Origin",
+      "category": "story",
+      "icon": "story_cave.png",
+      "target_value": 1,
+      "rarity": "epic",
+      "memory_address": "0x02024A74",
+      "memory_condition": "> 0",
+      "points": 60
+    },
+    {
       "id": "pokemon_emerald_pokedex_10",
       "name": "Junior Researcher",
       "description": "Register 10 Pokemon in the Pokedex",

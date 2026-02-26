@@ -31,6 +31,66 @@
       "points": 5
     },
     {
+      "id": "pokemon_silver_story_pokedex_obtained",
+      "name": "Research Assistant",
+      "description": "Receive the Pokedex from Professor Oak",
+      "category": "story",
+      "icon": "story_pokedex.png",
+      "target_value": 1,
+      "rarity": "common",
+      "memory_address": "0xD74B",
+      "memory_condition": "> 0",
+      "points": 15
+    },
+    {
+      "id": "pokemon_silver_story_rival_first",
+      "name": "First Blood",
+      "description": "Defeat your rival for the first time",
+      "category": "story",
+      "icon": "story_rival.png",
+      "target_value": 1,
+      "rarity": "common",
+      "memory_address": "0xD74C",
+      "memory_condition": "> 2",
+      "points": 15
+    },
+    {
+      "id": "pokemon_silver_story_team_rocket_hideout",
+      "name": "Hideout Hunter",
+      "description": "Clear the Team Rocket Hideout in Mahogany Town",
+      "category": "story",
+      "icon": "story_rocket.png",
+      "target_value": 1,
+      "rarity": "rare",
+      "memory_address": "0xD84A",
+      "memory_condition": "& 0x01",
+      "points": 50
+    },
+    {
+      "id": "pokemon_silver_story_radio_tower",
+      "name": "Airwave Liberator",
+      "description": "Rescue the Radio Tower from Team Rocket",
+      "category": "story",
+      "icon": "story_radio.png",
+      "target_value": 1,
+      "rarity": "epic",
+      "memory_address": "0xD84A",
+      "memory_condition": "& 0x02",
+      "points": 75
+    },
+    {
+      "id": "pokemon_silver_story_elite_four_access",
+      "name": "Victory Road Access",
+      "description": "Gain access to the Elite Four at Indigo Plateau",
+      "category": "story",
+      "icon": "story_e4access.png",
+      "target_value": 1,
+      "rarity": "rare",
+      "memory_address": "0xD74E",
+      "memory_condition": "> 0",
+      "points": 40
+    },
+    {
       "id": "pokemon_silver_pokedex_10",
       "name": "Junior Researcher",
       "description": "Register 10 Pokemon in the Pokedex",

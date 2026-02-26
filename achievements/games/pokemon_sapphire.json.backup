@@ -73,10 +73,10 @@
     {
       "id": "pokemon_sapphire_pokedex_complete",
       "name": "Hoenn Completionist",
-      "description": "Complete the Hoenn Pokedex (386 Pokemon)",
+      "description": "Complete the Hoenn Pokedex (202 Pokemon)",
       "category": "pokedex",
       "icon": "pokedex_complete.png",
-      "target_value": 386,
+      "target_value": 202,
       "rarity": "epic",
       "points": 500
     },
