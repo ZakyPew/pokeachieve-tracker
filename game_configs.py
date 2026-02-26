@@ -329,6 +329,23 @@ def get_achievement_template(generation: int, game_name: str) -> List[dict]:
     
     prefix = game_name.lower().replace(" ", "_").replace("'", "")
     
+    # Special case: FireRed/LeafGreen are Gen 3 platform but Kanto region (Gen 1)
+    is_kanto_remake = game_name in ["Pokemon FireRed", "Pokemon LeafGreen"]
+    
+    # Determine region and max Pokemon
+    if is_kanto_remake or generation == 1:
+        region_name = "Kanto"
+        max_pokemon = 151
+        actual_generation = 1  # For legendary selection
+    elif generation == 2:
+        region_name = "Johto"
+        max_pokemon = 251
+        actual_generation = 2
+    else:  # Gen 3 proper (Ruby/Sapphire/Emerald)
+        region_name = "Hoenn"
+        max_pokemon = 202  # Ruby/Sapphire/Emerald have 202 Hoenn dex
+        actual_generation = 3
+    
     # Common achievements for all games
     achievements = [
         # Story
@@ -373,10 +390,7 @@ def get_achievement_template(generation: int, game_name: str) -> List[dict]:
             # No memory_address - derived from Pokedex count
         })
     
-    # Completion achievement
-    max_pokemon = 151 if generation == 1 else (251 if generation == 2 else 386)
-    region_name = "Kanto" if generation == 1 else ("Johto" if generation == 2 else "Hoenn")
-    
+    # Completion achievement (use already calculated values)
     achievements.append({
         "id": f"{prefix}_pokedex_complete",
         "name": f"{region_name} Completionist",
@@ -402,8 +416,8 @@ def get_achievement_template(generation: int, game_name: str) -> List[dict]:
         3: ["Stone", "Knuckle", "Dynamo", "Heat", "Balance", "Feather", "Mind", "Rain"]
     }
     
-    leaders = gym_leaders.get(generation, gym_leaders[1])
-    badges = gym_badges.get(generation, gym_badges[1])
+    leaders = gym_leaders.get(actual_generation, gym_leaders[1])
+    badges = gym_badges.get(actual_generation, gym_badges[1])
     
     for i, (leader, badge) in enumerate(zip(leaders, badges)):
         achievements.append({
@@ -432,10 +446,10 @@ def get_achievement_template(generation: int, game_name: str) -> List[dict]:
         # No memory_address - derived
     })
     
-    # Elite Four - generation specific
-    if generation == 1:
+    # Elite Four - generation specific (use actual_generation for region)
+    if actual_generation == 1:
         e4_members = ["Lorelei", "Bruno", "Agatha", "Lance"]
-    elif generation == 2:
+    elif actual_generation == 2:
         e4_members = ["Will", "Koga", "Bruno", "Karen"]
     else:  # Gen 3
         e4_members = ["Sidney", "Phoebe", "Glacia", "Drake"]
@@ -466,8 +480,8 @@ def get_achievement_template(generation: int, game_name: str) -> List[dict]:
         # No memory_address - derived
     })
     
-    # Champion
-    champion_name = "Blue" if generation == 1 else ("Lance" if generation == 2 else "Steven")
+    # Champion (use actual_generation for region)
+    champion_name = "Blue" if actual_generation == 1 else ("Lance" if actual_generation == 2 else "Steven")
     achievements.append({
         "id": f"{prefix}_champion_{champion_name.lower()}",
         "name": f"Champion Slayer: {champion_name}",
@@ -481,7 +495,7 @@ def get_achievement_template(generation: int, game_name: str) -> List[dict]:
         "points": 300
     })
     
-    # Legendary achievements - generation specific
+    # Legendary achievements - generation specific (use actual_generation!)
     legendaries = {
         1: [("mewtwo", "Mewtwo"), ("moltres", "Moltres"), ("zapdos", "Zapdos"), ("articuno", "Articuno")],
         2: [("lugia", "Lugia"), ("ho-oh", "Ho-Oh"), ("suicune", "Suicune"), ("entei", "Entei"), ("raikou", "Raikou")],
@@ -490,7 +504,7 @@ def get_achievement_template(generation: int, game_name: str) -> List[dict]:
              ("regice", "Regice"), ("registeel", "Registeel")]
     }
     
-    for legendary_id, legendary_name in legendaries.get(generation, []):
+    for legendary_id, legendary_name in legendaries.get(actual_generation, []):
         achievements.append({
             "id": f"{prefix}_legendary_{legendary_id}",
             "name": f"Legendary Caught: {legendary_name}",
@@ -504,7 +518,7 @@ def get_achievement_template(generation: int, game_name: str) -> List[dict]:
         })
     
     # Legendary collection achievements
-    if generation == 1:
+    if actual_generation == 1:
         achievements.append({
             "id": f"{prefix}_legendary_birds",
             "name": "Winged Legends",
@@ -522,7 +536,7 @@ def get_achievement_template(generation: int, game_name: str) -> List[dict]:
         "description": "Catch all legendary Pokemon in the game",
         "category": "legendary",
         "icon": "legendary_master.png",
-        "target_value": len(legendaries.get(generation, [])),
+        "target_value": len(legendaries.get(actual_generation, [])),
         "rarity": "legendary",
         "points": 1000
     })
