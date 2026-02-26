@@ -26,14 +26,14 @@ jobs:
     
     - name: Build EXE
       run: |
-        cd tracker\gui
+        cd gui
         python -m pyinstaller --onefile --windowed --name "PokeAchieveTracker_v1.4" tracker_gui.py
     
     - name: Prepare release files
       run: |
         mkdir release
-        copy tracker\gui\dist\PokeAchieveTracker_v1.4.exe release\
-        xcopy /E /I tracker\achievements release\achievements\
+        copy gui\dist\PokeAchieveTracker_v1.4.exe release\
+        xcopy /E /I achievements release\achievements\
         echo # PokeAchieve Tracker v1.4 > release\README.txt
         echo ## Installation >> release\README.txt
         echo 1. Run PokeAchieveTracker_v1.4.exe >> release\README.txt
