@@ -8,9 +8,9 @@ Sync your Pokemon gameplay with PokeAchieve and unlock achievements automaticall
 
 Download the latest release from [GitHub Releases](../../releases)
 
-**File:** `PokeAchieveTracker-v1.1.zip`
+**File:** `PokeAchieveTracker-v1.2.zip`
 
-Extract and run `run_tracker.exe`
+Extract and run `PokeAchieveTracker-v1.2.exe`
 
 ---
 
@@ -67,6 +67,11 @@ Extract and run `run_tracker.exe`
 |------|----------|--------------|
 | Pokemon Red | Game Boy | 50+ |
 | Pokemon Blue | Game Boy | 50+ |
+| Pokemon Gold | Game Boy Color | 50+ |
+| Pokemon Silver | Game Boy Color | 50+ |
+| Pokemon Crystal | Game Boy Color | 50+ |
+| Pokemon Ruby | GBA | 40+ |
+| Pokemon Sapphire | GBA | 40+ |
 | Pokemon Emerald | GBA | 40+ |
 | Pokemon FireRed | GBA | 50+ |
 | Pokemon LeafGreen | GBA | 50+ |
