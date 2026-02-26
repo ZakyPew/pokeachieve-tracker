@@ -3,11 +3,15 @@
     "name": "Pokemon Crystal",
     "platform": "gbc",
     "generation": 2,
-    "rom_hash": "C3D4E5F6A7B8C9D0E1F2A3B4C5D6E7F8A9B0C1D2"
+    "memory_config": {
+      "pokedex_caught_start": "0xDE3C",
+      "badge_address": "0xD35C",
+      "party_count_address": "0xDA22"
+    }
   },
   "achievements": [
     {
-      "id": "crystal_starter_chosen",
+      "id": "pokemon_crystal_starter_chosen",
       "name": "The Journey Begins",
       "description": "Choose your starter Pokemon",
       "category": "story",
@@ -17,18 +21,38 @@
       "points": 10
     },
     {
-      "id": "crystal_pokedex_10",
+      "id": "pokemon_crystal_first_steps",
+      "name": "First Steps",
+      "description": "Begin your Pokemon journey",
+      "category": "story",
+      "icon": "first_steps.png",
+      "target_value": 1,
+      "rarity": "common",
+      "points": 5
+    },
+    {
+      "id": "pokemon_crystal_pokedex_10",
       "name": "Junior Researcher",
       "description": "Register 10 Pokemon in the Pokedex",
       "category": "pokedex",
       "icon": "pokedex_10.png",
       "target_value": 10,
       "rarity": "common",
-      "points": 20
+      "points": 10
     },
     {
-      "id": "crystal_pokedex_50",
-      "name": "Pokemon Collector",
+      "id": "pokemon_crystal_pokedex_25",
+      "name": "Collector",
+      "description": "Register 25 Pokemon in the Pokedex",
+      "category": "pokedex",
+      "icon": "pokedex_25.png",
+      "target_value": 25,
+      "rarity": "common",
+      "points": 25
+    },
+    {
+      "id": "pokemon_crystal_pokedex_50",
+      "name": "Pokemon Enthusiast",
       "description": "Register 50 Pokemon in the Pokedex",
       "category": "pokedex",
       "icon": "pokedex_50.png",
@@ -37,7 +61,7 @@
       "points": 50
     },
     {
-      "id": "crystal_pokedex_100",
+      "id": "pokemon_crystal_pokedex_100",
       "name": "Pokedex Master",
       "description": "Register 100 Pokemon in the Pokedex",
       "category": "pokedex",
@@ -47,9 +71,9 @@
       "points": 100
     },
     {
-      "id": "crystal_pokedex_complete",
+      "id": "pokemon_crystal_pokedex_complete",
       "name": "Johto Completionist",
-      "description": "Complete the Johto Pokedex",
+      "description": "Complete the Johto Pokedex (251 Pokemon)",
       "category": "pokedex",
       "icon": "pokedex_complete.png",
       "target_value": 251,
@@ -57,180 +81,224 @@
       "points": 500
     },
     {
-      "id": "crystal_gym_1_falkner",
+      "id": "pokemon_crystal_gym_1_falkner",
       "name": "Zephyr Badge",
       "description": "Defeat Falkner and earn the Zephyr Badge",
       "category": "gym",
       "icon": "gym_1.png",
       "target_value": 1,
       "rarity": "common",
-      "memory_address": "0xD35C",
-      "memory_condition": "& 0x01",
       "points": 25
     },
     {
-      "id": "crystal_gym_2_bugsy",
+      "id": "pokemon_crystal_gym_2_bugsy",
       "name": "Hive Badge",
       "description": "Defeat Bugsy and earn the Hive Badge",
       "category": "gym",
       "icon": "gym_2.png",
       "target_value": 1,
       "rarity": "common",
-      "memory_address": "0xD35C",
-      "memory_condition": "& 0x02",
       "points": 25
     },
     {
-      "id": "crystal_gym_3_whitney",
+      "id": "pokemon_crystal_gym_3_whitney",
       "name": "Plain Badge",
       "description": "Defeat Whitney and earn the Plain Badge",
       "category": "gym",
       "icon": "gym_3.png",
       "target_value": 1,
       "rarity": "common",
-      "memory_address": "0xD35C",
-      "memory_condition": "& 0x04",
       "points": 25
     },
     {
-      "id": "crystal_gym_4_morty",
+      "id": "pokemon_crystal_gym_4_morty",
       "name": "Fog Badge",
       "description": "Defeat Morty and earn the Fog Badge",
       "category": "gym",
       "icon": "gym_4.png",
       "target_value": 1,
       "rarity": "common",
-      "memory_address": "0xD35C",
-      "memory_condition": "& 0x08",
       "points": 25
     },
     {
-      "id": "crystal_gym_5_chuck",
+      "id": "pokemon_crystal_gym_5_chuck",
       "name": "Storm Badge",
       "description": "Defeat Chuck and earn the Storm Badge",
       "category": "gym",
       "icon": "gym_5.png",
       "target_value": 1,
       "rarity": "common",
-      "memory_address": "0xD35C",
-      "memory_condition": "& 0x10",
       "points": 25
     },
     {
-      "id": "crystal_gym_6_jasmine",
+      "id": "pokemon_crystal_gym_6_jasmine",
       "name": "Mineral Badge",
       "description": "Defeat Jasmine and earn the Mineral Badge",
       "category": "gym",
       "icon": "gym_6.png",
       "target_value": 1,
       "rarity": "common",
-      "memory_address": "0xD35C",
-      "memory_condition": "& 0x20",
       "points": 25
     },
     {
-      "id": "crystal_gym_7_pryce",
+      "id": "pokemon_crystal_gym_7_pryce",
       "name": "Glacier Badge",
       "description": "Defeat Pryce and earn the Glacier Badge",
       "category": "gym",
       "icon": "gym_7.png",
       "target_value": 1,
       "rarity": "common",
-      "memory_address": "0xD35C",
-      "memory_condition": "& 0x40",
       "points": 25
     },
     {
-      "id": "crystal_gym_8_clair",
+      "id": "pokemon_crystal_gym_8_clair",
       "name": "Rising Badge",
       "description": "Defeat Clair and earn the Rising Badge",
       "category": "gym",
       "icon": "gym_8.png",
       "target_value": 1,
-      "rarity": "uncommon",
-      "memory_address": "0xD35C",
-      "memory_condition": "& 0x80",
-      "points": 30
+      "rarity": "common",
+      "points": 25
     },
     {
-      "id": "crystal_gym_all",
-      "name": "Johto Gym Champion",
-      "description": "Defeat all 8 Gym Leaders in Johto",
+      "id": "pokemon_crystal_gym_all",
+      "name": "Gym Leader Conqueror",
+      "description": "Defeat all 8 Gym Leaders",
       "category": "gym",
       "icon": "gym_all.png",
       "target_value": 8,
       "rarity": "rare",
-      "points": 150
+      "points": 100
     },
     {
-      "id": "crystal_elite_four_will",
-      "name": "Psychic Master Slayer",
+      "id": "pokemon_crystal_elite_four_will",
+      "name": "Elite Four: Will",
       "description": "Defeat Will of the Elite Four",
       "category": "elite_four",
-      "icon": "will.png",
-      "target_value": 1,
-      "rarity": "uncommon",
-      "points": 50
-    },
-    {
-      "id": "crystal_elite_four_koga",
-      "name": "Poison Master Slayer",
-      "description": "Defeat Koga of the Elite Four",
-      "category": "elite_four",
-      "icon": "koga.png",
-      "target_value": 1,
-      "rarity": "uncommon",
-      "points": 50
-    },
-    {
-      "id": "crystal_elite_four_bruno",
-      "name": "Fighting Master Slayer",
-      "description": "Defeat Bruno of the Elite Four",
-      "category": "elite_four",
-      "icon": "bruno.png",
-      "target_value": 1,
-      "rarity": "uncommon",
-      "points": 50
-    },
-    {
-      "id": "crystal_elite_four_karen",
-      "name": "Dark Master Slayer",
-      "description": "Defeat Karen of the Elite Four",
-      "category": "elite_four",
-      "icon": "karen.png",
+      "icon": "e4_will.png",
       "target_value": 1,
       "rarity": "rare",
-      "points": 75
+      "points": 50
     },
     {
-      "id": "crystal_elite_four_all",
-      "name": "Elite Four Conqueror",
+      "id": "pokemon_crystal_elite_four_koga",
+      "name": "Elite Four: Koga",
+      "description": "Defeat Koga of the Elite Four",
+      "category": "elite_four",
+      "icon": "e4_koga.png",
+      "target_value": 1,
+      "rarity": "rare",
+      "points": 50
+    },
+    {
+      "id": "pokemon_crystal_elite_four_bruno",
+      "name": "Elite Four: Bruno",
+      "description": "Defeat Bruno of the Elite Four",
+      "category": "elite_four",
+      "icon": "e4_bruno.png",
+      "target_value": 1,
+      "rarity": "rare",
+      "points": 50
+    },
+    {
+      "id": "pokemon_crystal_elite_four_karen",
+      "name": "Elite Four: Karen",
+      "description": "Defeat Karen of the Elite Four",
+      "category": "elite_four",
+      "icon": "e4_karen.png",
+      "target_value": 1,
+      "rarity": "rare",
+      "points": 50
+    },
+    {
+      "id": "pokemon_crystal_elite_four_all",
+      "name": "Elite Four Vanquisher",
       "description": "Defeat all members of the Elite Four",
       "category": "elite_four",
-      "icon": "elite_four.png",
+      "icon": "e4_all.png",
       "target_value": 4,
       "rarity": "epic",
       "points": 200
     },
     {
-      "id": "crystal_champion_lance",
-      "name": "Johto Champion",
-      "description": "Defeat Lance and become the Pokemon Champion",
+      "id": "pokemon_crystal_champion_lance",
+      "name": "Champion Slayer: Lance",
+      "description": "Defeat Champion Lance",
       "category": "champion",
       "icon": "champion.png",
       "target_value": 1,
       "rarity": "epic",
-      "points": 500
+      "points": 300
     },
     {
-      "id": "crystal_red_battle",
-      "name": "Mountain Summit",
-      "description": "Defeat Red at Mt. Silver",
-      "category": "special",
-      "icon": "red.png",
+      "id": "pokemon_crystal_legendary_lugia",
+      "name": "Legendary Caught: Lugia",
+      "description": "Catch the legendary Pokemon Lugia",
+      "category": "legendary",
+      "icon": "legendary_lugia.png",
       "target_value": 1,
+      "rarity": "epic",
+      "points": 150
+    },
+    {
+      "id": "pokemon_crystal_legendary_ho-oh",
+      "name": "Legendary Caught: Ho-Oh",
+      "description": "Catch the legendary Pokemon Ho-Oh",
+      "category": "legendary",
+      "icon": "legendary_ho-oh.png",
+      "target_value": 1,
+      "rarity": "epic",
+      "points": 150
+    },
+    {
+      "id": "pokemon_crystal_legendary_suicune",
+      "name": "Legendary Caught: Suicune",
+      "description": "Catch the legendary Pokemon Suicune",
+      "category": "legendary",
+      "icon": "legendary_suicune.png",
+      "target_value": 1,
+      "rarity": "epic",
+      "points": 150
+    },
+    {
+      "id": "pokemon_crystal_legendary_entei",
+      "name": "Legendary Caught: Entei",
+      "description": "Catch the legendary Pokemon Entei",
+      "category": "legendary",
+      "icon": "legendary_entei.png",
+      "target_value": 1,
+      "rarity": "epic",
+      "points": 150
+    },
+    {
+      "id": "pokemon_crystal_legendary_raikou",
+      "name": "Legendary Caught: Raikou",
+      "description": "Catch the legendary Pokemon Raikou",
+      "category": "legendary",
+      "icon": "legendary_raikou.png",
+      "target_value": 1,
+      "rarity": "epic",
+      "points": 150
+    },
+    {
+      "id": "pokemon_crystal_legendary_all",
+      "name": "Legendary Master",
+      "description": "Catch all legendary Pokemon in the game",
+      "category": "legendary",
+      "icon": "legendary_master.png",
+      "target_value": 5,
       "rarity": "legendary",
       "points": 1000
+    },
+    {
+      "id": "pokemon_crystal_pokemon_master",
+      "name": "Pokemon Master",
+      "description": "All badges, Champion defeated, and complete Johto Pokedex",
+      "category": "master",
+      "icon": "pokemon_master.png",
+      "target_value": 1,
+      "rarity": "legendary",
+      "points": 5000
     }
   ]
 }
