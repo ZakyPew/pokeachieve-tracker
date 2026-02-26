@@ -5,7 +5,7 @@ on:
     branches: [ main, master ]
     tags:
       - 'v*'
-  workflow_dispatch:  # Manual trigger
+  workflow_dispatch:
 
 jobs:
   build-windows:
@@ -26,32 +26,22 @@ jobs:
     
     - name: Build EXE
       run: |
-        cd tracker/gui
-        pyinstaller --onefile --windowed --name "PokeAchieveTracker_v1.4" --add-data "../achievements;achievements" --distpath ../../dist tracker_gui.py
-      shell: cmd
+        cd tracker\gui
+        pyinstaller --onefile --windowed --name "PokeAchieveTracker_v1.4" tracker_gui.py
+        move dist\PokeAchieveTracker_v1.4.exe ..\..
+      shell: powershell
     
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
         name: PokeAchieveTracker_v1.4
-        path: dist/PokeAchieveTracker_v1.4.exe
+        path: PokeAchieveTracker_v1.4.exe
     
     - name: Create Release (if tagged)
       if: startsWith(github.ref, 'refs/tags/v')
       uses: softprops/action-gh-release@v1
       with:
-        files: dist/PokeAchieveTracker_v1.4.exe
+        files: PokeAchieveTracker_v1.4.exe
         name: PokeAchieve Tracker v1.4
-        body: |
-          ## What's New
-          - Story achievements with HM detection
-          - All 10 Pokemon games supported
-          - API key authentication
-          - 361 total achievements
-          
-          ## Installation
-          1. Download `PokeAchieveTracker_v1.4.exe`
-          2. Run it (no install needed)
-          3. Enter your API key from https://pokeachieve.com/dashboard.html
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
