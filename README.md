@@ -19,7 +19,6 @@ Cross-platform GUI application that connects RetroArch to the PokeAchieve platfo
 ### Generation 1
 - ✅ Pokemon Red
 - ✅ Pokemon Blue
-- ✅ Pokemon Yellow
 
 ### Generation 2
 - ✅ Pokemon Gold
@@ -37,12 +36,29 @@ Cross-platform GUI application that connects RetroArch to the PokeAchieve platfo
 
 ## 🚀 Quick Start
 
-### Windows Users
+### Windows Users (Pre-built)
 1. Download `PokeAchieve-Tracker-v1.7-windows.zip` from [Releases](https://github.com/ZakyPew/pokeachieve-tracker/releases)
-2. Extract the ZIP file
-3. Double-click `PokeAchieve-Tracker-v1.7.exe`
-4. Enter your API key from PokeAchieve dashboard
-5. Select your game and click "Connect to RetroArch"
+2. **IMPORTANT**: The ZIP contains both the .exe AND the `achievements/` folder
+3. Extract the entire ZIP to a folder
+4. **Keep the .exe and achievements/ folder together!**
+5. Double-click `PokeAchieve-Tracker-v1.7.exe`
+6. Enter your API key from PokeAchieve dashboard
+7. Select your game and click "Connect to RetroArch"
+
+### Folder Structure (IMPORTANT!)
+```
+YourFolder/
+├── PokeAchieve-Tracker-v1.7.exe
+├── README.txt
+└── achievements/
+    └── games/
+        ├── pokemon_red.json
+        ├── pokemon_blue.json
+        ├── pokemon_ruby.json
+        └── ... (10 game files total)
+```
+
+⚠️ **The achievements/ folder must be in the same folder as the .exe!**
 
 ### Requirements
 - Windows 10/11 or Linux
@@ -70,26 +86,31 @@ Cross-platform GUI application that connects RetroArch to the PokeAchieve platfo
 - Python 3.8 or higher
 - pip
 
-### Windows
+### Windows Build
 ```bash
 pip install pyinstaller
 pyinstaller --onefile --windowed --name "PokeAchieve-Tracker-v1.7" tracker_gui.py
 ```
 
-### Linux
+**After building**: Copy the `achievements/` folder next to the .exe in the `dist/` folder!
+
+### Linux Build
 ```bash
 pip install pyinstaller
 pyinstaller --onefile --windowed --name "PokeAchieve-Tracker" tracker_gui.py
 ```
 
-The executable will be created in the `dist/` folder.
-
-## 📁 Project Structure
+### Project Structure
 
 ```
 pokeachieve-tracker/
 ├── tracker_gui.py          # Main application
 ├── game_configs.py         # Memory configurations per game
+├── achievements/           # Achievement definitions (REQUIRED!)
+│   └── games/
+│       ├── pokemon_red.json
+│       ├── pokemon_blue.json
+│       └── ...
 ├── gui/                    # GUI assets
 ├── TRACKER_INTEGRATION.md  # API documentation
 └── README.md              # This file
@@ -109,6 +130,17 @@ The tracker uses game-specific memory addresses defined in `game_configs.py`:
 - Gen 2: GBC-specific addresses
 - Gen 3 RSE: GBA Hoenn addresses
 - Gen 3 FRLG: GBA Kanto addresses
+
+## ⚠️ Troubleshooting
+
+**"Achievement file not found" error**
+- Make sure the `achievements/games/` folder is next to the .exe
+- Don't move the .exe without the achievements folder
+
+**"Cannot connect to RetroArch"**
+- Make sure RetroArch is running
+- Check that Network Command is enabled in RetroArch settings
+- Verify port 55355 is not blocked
 
 ## 🤝 Support
 
