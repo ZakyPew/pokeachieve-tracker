@@ -1,0 +1,220 @@
+{
+  "game": {
+    "name": "Pokemon Ruby",
+    "platform": "gba",
+    "generation": 3,
+    "rom_hash": "D4E5F6A7B8C9D0E1F2A3B4C5D6E7F8A9B0C1D2E3"
+  },
+  "achievements": [
+    {
+      "id": "ruby_starter_chosen",
+      "name": "First Steps",
+      "description": "Choose your starter Pokemon in Hoenn",
+      "category": "story",
+      "icon": "starter.png",
+      "target_value": 1,
+      "rarity": "common",
+      "points": 10
+    },
+    {
+      "id": "ruby_pokedex_10",
+      "name": "Budding Researcher",
+      "description": "Register 10 Pokemon in the Hoenn Pokedex",
+      "category": "pokedex",
+      "icon": "pokedex_10.png",
+      "target_value": 10,
+      "rarity": "common",
+      "points": 20
+    },
+    {
+      "id": "ruby_pokedex_50",
+      "name": "Pokemon Enthusiast",
+      "description": "Register 50 Pokemon in the Hoenn Pokedex",
+      "category": "pokedex",
+      "icon": "pokedex_50.png",
+      "target_value": 50,
+      "rarity": "uncommon",
+      "points": 50
+    },
+    {
+      "id": "ruby_pokedex_100",
+      "name": "Pokedex Master",
+      "description": "Register 100 Pokemon in the Hoenn Pokedex",
+      "category": "pokedex",
+      "icon": "pokedex_100.png",
+      "target_value": 100,
+      "rarity": "rare",
+      "points": 100
+    },
+    {
+      "id": "ruby_pokedex_complete",
+      "name": "Hoenn Completionist",
+      "description": "Complete the Hoenn Pokedex",
+      "category": "pokedex",
+      "icon": "pokedex_complete.png",
+      "target_value": 200,
+      "rarity": "epic",
+      "points": 500
+    },
+    {
+      "id": "ruby_gym_1_roxanne",
+      "name": "Stone Badge",
+      "description": "Defeat Roxanne and earn the Stone Badge",
+      "category": "gym",
+      "icon": "gym_1.png",
+      "target_value": 1,
+      "rarity": "common",
+      "points": 25
+    },
+    {
+      "id": "ruby_gym_2_brawly",
+      "name": "Knuckle Badge",
+      "description": "Defeat Brawly and earn the Knuckle Badge",
+      "category": "gym",
+      "icon": "gym_2.png",
+      "target_value": 1,
+      "rarity": "common",
+      "points": 25
+    },
+    {
+      "id": "ruby_gym_3_wattson",
+      "name": "Dynamo Badge",
+      "description": "Defeat Wattson and earn the Dynamo Badge",
+      "category": "gym",
+      "icon": "gym_3.png",
+      "target_value": 1,
+      "rarity": "common",
+      "points": 25
+    },
+    {
+      "id": "ruby_gym_4_flannery",
+      "name": "Heat Badge",
+      "description": "Defeat Flannery and earn the Heat Badge",
+      "category": "gym",
+      "icon": "gym_4.png",
+      "target_value": 1,
+      "rarity": "common",
+      "points": 25
+    },
+    {
+      "id": "ruby_gym_5_norman",
+      "name": "Balance Badge",
+      "description": "Defeat Norman and earn the Balance Badge",
+      "category": "gym",
+      "icon": "gym_5.png",
+      "target_value": 1,
+      "rarity": "uncommon",
+      "points": 30
+    },
+    {
+      "id": "ruby_gym_6_winona",
+      "name": "Feather Badge",
+      "description": "Defeat Winona and earn the Feather Badge",
+      "category": "gym",
+      "icon": "gym_6.png",
+      "target_value": 1,
+      "rarity": "uncommon",
+      "points": 30
+    },
+    {
+      "id": "ruby_gym_7_tate_liza",
+      "name": "Mind Badge",
+      "description": "Defeat Tate & Liza and earn the Mind Badge",
+      "category": "gym",
+      "icon": "gym_7.png",
+      "target_value": 1,
+      "rarity": "rare",
+      "points": 35
+    },
+    {
+      "id": "ruby_gym_8_wallace",
+      "name": "Rain Badge",
+      "description": "Defeat Wallace and earn the Rain Badge",
+      "category": "gym",
+      "icon": "gym_8.png",
+      "target_value": 1,
+      "rarity": "rare",
+      "points": 40
+    },
+    {
+      "id": "ruby_gym_all",
+      "name": "Hoenn Gym Champion",
+      "description": "Defeat all 8 Gym Leaders in Hoenn",
+      "category": "gym",
+      "icon": "gym_all.png",
+      "target_value": 8,
+      "rarity": "epic",
+      "points": 200
+    },
+    {
+      "id": "ruby_elite_four_sidney",
+      "name": "Dark Master Slayer",
+      "description": "Defeat Sidney of the Elite Four",
+      "category": "elite_four",
+      "icon": "sidney.png",
+      "target_value": 1,
+      "rarity": "uncommon",
+      "points": 75
+    },
+    {
+      "id": "ruby_elite_four_phoebe",
+      "name": "Ghost Master Slayer",
+      "description": "Defeat Phoebe of the Elite Four",
+      "category": "elite_four",
+      "icon": "phoebe.png",
+      "target_value": 1,
+      "rarity": "uncommon",
+      "points": 75
+    },
+    {
+      "id": "ruby_elite_four_glacia",
+      "name": "Ice Master Slayer",
+      "description": "Defeat Glacia of the Elite Four",
+      "category": "elite_four",
+      "icon": "glacia.png",
+      "target_value": 1,
+      "rarity": "rare",
+      "points": 100
+    },
+    {
+      "id": "ruby_elite_four_drake",
+      "name": "Dragon Master Slayer",
+      "description": "Defeat Drake of the Elite Four",
+      "category": "elite_four",
+      "icon": "drake.png",
+      "target_value": 1,
+      "rarity": "rare",
+      "points": 100
+    },
+    {
+      "id": "ruby_elite_four_all",
+      "name": "Elite Four Conqueror",
+      "description": "Defeat all members of the Elite Four",
+      "category": "elite_four",
+      "icon": "elite_four.png",
+      "target_value": 4,
+      "rarity": "epic",
+      "points": 300
+    },
+    {
+      "id": "ruby_champion_steven",
+      "name": "Hoenn Champion",
+      "description": "Defeat Steven and become the Pokemon Champion",
+      "category": "champion",
+      "icon": "champion.png",
+      "target_value": 1,
+      "rarity": "epic",
+      "points": 500
+    },
+    {
+      "id": "ruby_legendary_groudon",
+      "name": "Titan of the Earth",
+      "description": "Capture the legendary Groudon",
+      "category": "legendary",
+      "icon": "groudon.png",
+      "target_value": 1,
+      "rarity": "legendary",
+      "points": 500
+    }
+  ]
+}
