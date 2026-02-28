@@ -11,7 +11,7 @@ build_exe_options = {
         "tkinter", "socket", "json", "time", "threading", 
         "queue", "os", "pathlib", "typing", 
         "datetime", "dataclasses", "requests", "psutil",
-        "ssl", "urllib", "http", "certifi"
+        "ssl", "urllib", "http", "email", "certifi"
     ],
     "excludes": ["numpy", "pandas", "matplotlib", "test", "pydoc"],
     "include_files": [
