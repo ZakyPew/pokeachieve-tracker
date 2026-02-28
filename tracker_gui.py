@@ -1080,7 +1080,7 @@ class PokeAchieveGUI:
     
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("🎮 PokeAchieve Tracker v1.8.1")
+        self.root.title("🎮 PokeAchieve Tracker v1.2")
         self.root.geometry("900x650")
         self.root.minsize(700, 450)
         
@@ -1619,10 +1619,7 @@ class PokeAchieveGUI:
         
         confirm = msgbox.askyesno(
             "Clear App Data",
-            "This will delete all local progress and settings.
-
-"
-            "Are you sure? This cannot be undone!",
+            "This will delete all local progress and settings. Are you sure? This cannot be undone!",
             icon='warning'
         )
         
@@ -1640,8 +1637,7 @@ class PokeAchieveGUI:
                 self.tracker.unlocked_achievements.clear()
                 self.tracker.unlock_times.clear()
                 
-                msgbox.showinfo("Success", "App data cleared!
-Restart the tracker to start fresh.")
+                msgbox.showinfo("Success", "App data cleared! Restart the tracker to start fresh.")
                 
             except Exception as e:
                 msgbox.showerror("Error", f"Failed to clear data: {e}")
@@ -1652,10 +1648,7 @@ Restart the tracker to start fresh.")
         
         if not self.api:
             msgbox.showwarning("Not Connected", 
-                "No API key configured.
-
-"
-                "Go to Settings → API to add your API key.")
+                "No API key configured. Go to Settings → API to add your API key.")
             return
         
         try:
