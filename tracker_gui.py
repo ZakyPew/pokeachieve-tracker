@@ -106,7 +106,7 @@ class PokeAchieveAPI:
     
     def get_progress(self, game_id: int) -> tuple[bool, list]:
         """Get user's progress for a game"""
-        success, data = self._request("GET", f"/tracker/progress/{game_id}")
+        success, data = self._request("GET", f"/users/me/achievements")
         if success:
             return True, data.get("unlocked_achievement_ids", [])
         return False, []
@@ -118,7 +118,7 @@ class PokeAchieveAPI:
             "achievement_id": achievement_id,
             "unlocked_at": datetime.now().isoformat()
         }
-        return self._request("POST", "/tracker/unlock", payload)
+        return self._request("POST", "/progress/update", payload)
     
     # Pokemon Collection API Methods
     def post_collection_batch(self, pokemon_list: List[Dict]) -> tuple[bool, dict]:
