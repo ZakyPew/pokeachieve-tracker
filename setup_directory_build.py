@@ -37,7 +37,7 @@ if not os.path.exists("achievements"):
 
 setup(
     name="PokeAchieve Tracker",
-    version="1.8.4",
+    version="1.8.5",
     description="Pokemon Achievement Tracker for RetroArch - Directory Mode",
     author="PokeAchieve",
     options={"build_exe": build_exe_options},
