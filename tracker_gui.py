@@ -63,9 +63,10 @@ class PokeAchieveAPI:
     def __init__(self, base_url: str = "https://pokeachieve.com/api", api_key: str = ""):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
+        self.api_key = api_key.strip() if api_key else ""
         self.headers = {
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}"
+            "Authorization": f"Bearer {self.api_key}"
         }
     
     def _request(self, method: str, endpoint: str, data: dict = None) -> tuple[bool, dict]:
