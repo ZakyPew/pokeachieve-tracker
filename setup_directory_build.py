@@ -9,11 +9,14 @@ from cx_Freeze import setup, Executable
 build_exe_options = {
     "packages": [
         "tkinter", "socket", "json", "time", "threading", 
-        "queue", "os", "urllib", "pathlib", "typing", 
-        "datetime", "dataclasses", "requests", "psutil"
+        "queue", "os", "pathlib", "typing", 
+        "datetime", "dataclasses", "requests", "psutil",
+        "ssl", "urllib", "http", "certifi"
     ],
-    "excludes": ["numpy", "pandas", "matplotlib", "ssl", "test"],
-    "include_files": [("achievements", "achievements")],
+    "excludes": ["numpy", "pandas", "matplotlib", "test", "pydoc"],
+    "include_files": [
+        ("achievements", "achievements"),
+    ],
     "optimize": 2,
     "build_exe": "build/PokeAchieveTracker",
 }
