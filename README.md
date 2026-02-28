@@ -15,7 +15,7 @@ A Pokemon achievement tracker for RetroArch that automatically detects in-game p
 - **Beautiful Overlay**: Stream-ready overlay showing your current progress
 - **API Key Support**: Secure authentication with your PokeAchieve account
 
-## What's New in v1.8.3 🎉
+## What's New in v1.8.4 🎉
 
 ### Directory Build Mode
 This release uses **directory mode** instead of a single-file executable:
@@ -33,7 +33,7 @@ This release uses **directory mode** instead of a single-file executable:
 
 Download the latest release from the [Releases page](../../releases).
 
-1. Download `PokeAchieveTracker-v1.8.3.zip`
+1. Download `PokeAchieveTracker-v1.8.4.zip`
 2. Extract to any folder
 3. Run `PokeAchieveTracker.exe`
 4. Log in with your PokeAchieve.com account

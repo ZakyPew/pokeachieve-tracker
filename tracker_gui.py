@@ -100,7 +100,7 @@ class PokeAchieveAPI:
     
     def test_auth(self) -> tuple[bool, str]:
         """Test API key authentication"""
-        success, data = self._request("POST", "/users/me")
+        success, data = self._request("GET", "/users/me")
         if success:
             return True, data.get("message", "Authentication successful")
         return False, data.get("error", "Authentication failed")
@@ -1654,14 +1654,14 @@ class PokeAchieveGUI:
         
         try:
             # Fetch achievements from server
-            response = self.api.session.get(f"{self.api.base_url}/achievements")
-            if response.status_code == 200:
-                server_achievements = response.json()
+            success, data = self.api._request("GET", "/users/me/achievements")
+            if success:
+                server_achievements = data if isinstance(data, list) else data.get('achievements', [])
                 
                 # Update local tracker
                 for ach in server_achievements:
-                    if ach.get('unlocked'):
-                        self.tracker.unlocked_achievements.add(ach['id'])
+                    if isinstance(ach, dict) and ach.get('unlocked'):
+                        self.tracker.unlocked_achievements.add(ach.get('id') or ach.get('achievement_id'))
                 
                 # Save to local file
                 self._save_progress()
@@ -1672,7 +1672,7 @@ class PokeAchieveGUI:
                 # Refresh display
                 self._update_achievements_display()
             else:
-                msgbox.showerror("Sync Failed", f"Server error: {response.status_code}")
+                msgbox.showerror("Sync Failed", f"Server error: {data.get('detail', 'Unknown error')}")
                 
         except Exception as e:
             msgbox.showerror("Sync Error", f"Failed to sync: {e}")
