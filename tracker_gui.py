@@ -99,7 +99,7 @@ class PokeAchieveAPI:
     
     def test_auth(self) -> tuple[bool, str]:
         """Test API key authentication"""
-        success, data = self._request("POST", "/tracker/test")
+        success, data = self._request("POST", "/users/me")
         if success:
             return True, data.get("message", "Authentication successful")
         return False, data.get("error", "Authentication failed")
