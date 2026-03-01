@@ -125,6 +125,9 @@ class PokeAchieveAPI:
     def post_collection_batch(self, pokemon_list: List[Dict]) -> tuple[bool, dict]:
         """Post batch of Pokemon collection updates"""
         return self._request("POST", "/collection/batch-update", pokemon_list)
+
+    def start_session(self, game_id: int) -> tuple[bool, dict]:
+        return self._request("POST", "/sessions/start", {"game_id": game_id})
     
     def post_party_update(self, pokemon_id: int, in_party: bool, party_slot: int = None) -> tuple[bool, dict]:
         """Update party status for a Pokemon"""
@@ -203,6 +206,11 @@ class RetroArchClient:
                 # Now split by first comma to get platform and game name
                 if "," in before_crc:
                     platform, game_name = before_crc.split(",", 1)
+                    game_name = game_name.strip()
+                    # Clean up game name parsing
+                    game_name = re.sub(r"\s*Playing", "", game_name)
+                    game_name = re.sub(r"\s*\(USA, Europe\)", "", game_name)
+                    game_name = re.sub(r" - (.*) Version", r" \1", game_name)
                     game_name = game_name.strip()
                     print(f"[DEBUG] Detected game: {game_name}")
                     return game_name
@@ -1555,7 +1563,7 @@ class PokeAchieveGUI:
                 "pokemon_name": self._get_pokemon_name(pokemon_id),
                 "caught": True,
                 "shiny": False,
-                "game": game
+                "game_id": self.tracker.GAME_IDS.get(game, 0)
             }
             batch.append(entry)
             print(f"[COLLECTION SYNC] Adding to batch: {entry}")
