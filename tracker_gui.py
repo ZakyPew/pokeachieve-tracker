@@ -188,13 +188,18 @@ class RetroArchClient:
     def get_current_game(self) -> Optional[str]:
         """Get name of currently loaded game from GET_STATUS"""
         response = self.send_command("GET_STATUS")
+        print(f"[DEBUG] RetroArch GET_STATUS response: {response}")
         if response and response.startswith("GET_STATUS"):
             # Parse: GET_STATUS PAUSED game_boy,Pokemon Red(Enhanced),crc32=...
             try:
                 parts = response.replace("GET_STATUS ", "").split(",")
+                print(f"[DEBUG] Parsed parts: {parts}")
                 if len(parts) >= 2:
-                    return parts[1].strip()  # Pokemon name is 2nd part
-            except:
+                    game_name = parts[1].strip()
+                    print(f"[DEBUG] Detected game: {game_name}")
+                    return game_name
+            except Exception as e:
+                print(f"[DEBUG] Error parsing game name: {e}")
                 pass
         return None
     
