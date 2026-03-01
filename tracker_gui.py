@@ -191,11 +191,19 @@ class RetroArchClient:
         print(f"[DEBUG] RetroArch GET_STATUS response: {response}")
         if response and response.startswith("GET_STATUS"):
             # Parse: GET_STATUS PAUSED game_boy,Pokemon Red(Enhanced),crc32=...
+            # Handle game names with commas like "Pokemon - Emerald Version (USA, Europe)"
             try:
-                parts = response.replace("GET_STATUS ", "").split(",")
-                print(f"[DEBUG] Parsed parts: {parts}")
-                if len(parts) >= 2:
-                    game_name = parts[1].strip()
+                # Remove GET_STATUS prefix
+                rest = response.replace("GET_STATUS ", "")
+                # Split by crc32= to get the part before it
+                if ",crc32=" in rest:
+                    before_crc = rest.split(",crc32=")[0]
+                else:
+                    before_crc = rest
+                # Now split by first comma to get platform and game name
+                if "," in before_crc:
+                    platform, game_name = before_crc.split(",", 1)
+                    game_name = game_name.strip()
                     print(f"[DEBUG] Detected game: {game_name}")
                     return game_name
             except Exception as e:
