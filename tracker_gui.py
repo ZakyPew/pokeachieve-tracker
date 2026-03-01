@@ -1094,7 +1094,7 @@ class PokeAchieveGUI:
     
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("🎮 PokeAchieve Tracker v1.8.8")
+        self.root.title("🎮 PokeAchieve Tracker v1.8.9")
         self.root.geometry("900x650")
         self.root.minsize(700, 450)
         
@@ -1338,6 +1338,10 @@ class PokeAchieveGUI:
         """Load achievements for detected game"""
         # Strip ROM hack suffixes like "(Enhanced)" for matching
         clean_name = re.sub(r'\([^)]*\)', '', game_name).strip()
+        print(f"[DEBUG] Loading achievements for: {game_name}")
+        print(f"[DEBUG] Cleaned name: {clean_name}")
+        print(f"[DEBUG] Achievements dir: {self.achievements_dir}")
+        print(f"[DEBUG] Achievements dir exists: {self.achievements_dir.exists()}")
         game_map = {
             "Pokemon Red": "pokemon_red.json",
             "Pokemon Blue": "pokemon_blue.json",
@@ -1359,6 +1363,11 @@ class PokeAchieveGUI:
                 display_name = key
                 break
         
+        print(f"[DEBUG] Looking for match in: {clean_name.lower()}")
+        for key, filename in game_map.items():
+            print(f"[DEBUG] Checking if '{key.lower()}' in '{clean_name.lower()}'")
+        print(f"[DEBUG] Achievement file: {achievement_file}")
+        print(f"[DEBUG] Achievement file exists: {achievement_file.exists() if achievement_file else False}")
         if achievement_file and achievement_file.exists():
             if self.tracker.load_game(display_name, achievement_file):
                 self.tracker.load_progress(self.progress_file)
