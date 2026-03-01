@@ -1,8 +1,8 @@
 @echo off
-REM Build PokeAchieve Tracker v1.8.9 - DIRECTORY MODE
+REM Build PokeAchieve Tracker v1.8.10 - DIRECTORY MODE
 
 echo ==========================================
-echo PokeAchieve Tracker v1.8.9 - Directory Build
+echo PokeAchieve Tracker v1.8.10 - Directory Build
 echo ==========================================
 echo.
 

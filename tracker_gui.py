@@ -1094,7 +1094,7 @@ class PokeAchieveGUI:
     
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("🎮 PokeAchieve Tracker v1.8.9")
+        self.root.title("🎮 PokeAchieve Tracker v1.8.10")
         self.root.geometry("900x650")
         self.root.minsize(700, 450)
         
@@ -1357,10 +1357,23 @@ class PokeAchieveGUI:
         
         achievement_file = None
         display_name = None
+        clean_lower = clean_name.lower()
+        print(f"[DEBUG] Cleaned name (lower): {clean_lower}")
         for key, filename in game_map.items():
-            if key.lower() in clean_name.lower():
+            key_lower = key.lower()
+            print(f"[DEBUG] Checking if '{key_lower}' in '{clean_lower}'")
+            # Check if key is in cleaned name (handles "pokemon emerald" in "pokemon - emerald version playing")
+            if key_lower in clean_lower:
                 achievement_file = self.achievements_dir / filename
                 display_name = key
+                print(f"[DEBUG] MATCH FOUND: {key} -> {filename}")
+                break
+            # Also try matching individual words (e.g., "emerald" matches)
+            key_words = key_lower.replace("pokemon ", "")
+            if key_words in clean_lower:
+                achievement_file = self.achievements_dir / filename
+                display_name = key
+                print(f"[DEBUG] MATCH FOUND (word match): {key} -> {filename}")
                 break
         
         print(f"[DEBUG] Looking for match in: {clean_name.lower()}")
