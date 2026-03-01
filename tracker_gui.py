@@ -1563,6 +1563,7 @@ class PokeAchieveGUI:
                 "pokemon_name": self._get_pokemon_name(pokemon_id),
                 "caught": True,
                 "shiny": False,
+                "game": game,
                 "game_id": self.tracker.GAME_IDS.get(game, 0)
             }
             batch.append(entry)
