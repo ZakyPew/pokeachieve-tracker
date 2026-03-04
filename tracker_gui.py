@@ -185,51 +185,48 @@ class PokeAchieveAPI:
         return None
 
     def test_auth(self) -> tuple[bool, str]:
-        """Test API key authentication against authenticated user profile endpoint"""
-        success, data = self._request("GET", "/api/users/me")
-        if not success:
-            success, data = self._request("GET", "/users/me")
-
+        """Test tracker API-key authentication using tracker test endpoint."""
+        success, data = self._request("POST", "/api/tracker/test")
         if success:
             username = data.get("username") if isinstance(data, dict) else None
-            return True, f"Authenticated as {username}" if username else "Authentication successful"
+            message = data.get("message") if isinstance(data, dict) else None
+            if username:
+                return True, f"{message or 'API key valid'} ({username})"
+            return True, message or "API key valid"
         return False, data.get("error", "Authentication failed")
     
     def get_progress(self, game_id: int) -> tuple[bool, list]:
-        """Get user's progress for a game"""
+        """Get user's progress for a game."""
         success, data = self._request("GET", f"/api/tracker/progress/{game_id}")
-        if not success:
-            # Backwards compatibility with legacy backend route
-            success, data = self._request("GET", "/users/me/achievements")
         if success:
-            return True, data.get("unlocked_achievement_ids", [])
+            return True, self._extract_unlocked_ids(data, game_id)
+
+        # Backwards compatibility with legacy backend route
+        legacy_success, legacy_data = self._request("GET", "/users/me/achievements")
+        if legacy_success:
+            return True, self._extract_unlocked_ids(legacy_data, game_id)
+
         return False, []
     
     def post_unlock(self, game_id: int, achievement_id: str, achievement_name: Optional[str] = None) -> tuple[bool, dict]:
-        """Post achievement unlock to platform"""
-        live_achievement_id: object = achievement_id
-        if isinstance(achievement_id, str) and not achievement_id.isdigit():
-            resolved = self._resolve_achievement_id(game_id, achievement_name)
-            if resolved is not None:
-                live_achievement_id = resolved
-
+        """Post achievement unlock to platform."""
         payload = {
             "game_id": game_id,
-            "achievement_id": live_achievement_id,
-            "current_value": 1,
-            "unlocked": True,
+            "achievement_id": str(achievement_id),
+            "unlocked_at": datetime.now().isoformat(),
         }
         success, data = self._request("POST", "/api/tracker/unlock", payload)
-        if not success:
-            # Backwards compatibility with legacy backend route
-            legacy_payload = {
-                "game_id": game_id,
-                "achievement_id": achievement_id,
-                "achievement_name": achievement_name,
-                "unlocked_at": datetime.now().isoformat()
-            }
-            return self._request("POST", "/progress/update", legacy_payload)
-        return success, data
+        if success:
+            return True, data
+
+        # Backwards compatibility with legacy backend route
+        legacy_payload = {
+            "game_id": game_id,
+            "achievement_id": achievement_id,
+            "achievement_name": achievement_name,
+            "unlocked_at": datetime.now().isoformat()
+        }
+        return self._request("POST", "/progress/update", legacy_payload)
     
     # Pokemon Collection API Methods
     def post_collection_batch(self, pokemon_list: List[Dict]) -> tuple[bool, dict]:
@@ -241,6 +238,9 @@ class PokeAchieveAPI:
         return success, data
 
     def start_session(self, game_id: int) -> tuple[bool, dict]:
+        success, data = self._request("POST", "/sessions/start", {"game_id": game_id})
+        if success:
+            return True, data
         return self._request("POST", "/api/sessions/start", {"game_id": game_id})
     
     def post_party_update(self, pokemon_id: int, in_party: bool, party_slot: int = None) -> tuple[bool, dict]:
