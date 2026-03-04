@@ -97,6 +97,7 @@ class PokeAchieveAPI:
         """Make API request and return (success, response_data)"""
         url = self._make_url(endpoint)
         log_event(logging.INFO, "api_request", method=method, url=url)
+        print(f"[API REQUEST] {method} {url}")
         try:
             req = urllib.request.Request(
                 url,
@@ -255,11 +256,11 @@ class RetroArchClient:
     def get_current_game(self) -> Optional[str]:
         """Get name of currently loaded game from GET_STATUS"""
         response = self.send_command("GET_STATUS")
-        log_event(logging.DEBUG, "retroarch_status_response", response=response)
+        print(f"[DEBUG] RetroArch GET_STATUS response: {response}")
         if response:
             normalized = self._normalize_game_name(response)
             if normalized:
-                log_event(logging.INFO, "game_normalized", source="status", game=normalized)
+                print(f"[DEBUG] Normalized game from status: {normalized}")
                 return normalized
 
         if response and response.startswith("GET_STATUS"):
@@ -284,9 +285,9 @@ class RetroArchClient:
                     game_name = game_name.strip()
                     normalized = self._normalize_game_name(game_name)
                     if normalized:
-                        log_event(logging.INFO, "game_detected", game=normalized)
+                        print(f"[DEBUG] Detected game: {normalized}")
                         return normalized
-                    log_event(logging.INFO, "game_detected_raw", game=game_name)
+                    print(f"[DEBUG] Detected game (raw): {game_name}")
                     return game_name
             except Exception as e:
                 log_event(logging.WARNING, "game_parse_error", error=str(e))
@@ -1851,7 +1852,7 @@ class PokeAchieveGUI:
         log_event(logging.INFO, "collection_sync_start", catches=len(catches), party=len(party), game=game)
         
         if not catches and not party:
-            log_event(logging.DEBUG, "collection_sync_empty")
+            print("[COLLECTION SYNC] Nothing to sync")
             return True
         
         # Build batch update for new catches
@@ -1873,11 +1874,11 @@ class PokeAchieveGUI:
             success, data = self.api.post_collection_batch(batch)
             if success:
                 self._threadsafe_log(f"Synced {len(batch)} Pokemon to collection", "api")
-                log_event(logging.INFO, "collection_sync_batch_success", response=data)
+                print(f"[COLLECTION SYNC] Success: {data}")
             else:
                 error_msg = data.get('error', 'Unknown error')
                 self._threadsafe_log(f"Failed to sync collection: {error_msg}", "error")
-                log_event(logging.ERROR, "collection_sync_batch_failed", error=error_msg)
+                print(f"[COLLECTION SYNC] Failed: {error_msg}")
                 return False
         
         # Update party
