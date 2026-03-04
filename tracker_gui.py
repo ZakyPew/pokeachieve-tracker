@@ -871,6 +871,7 @@ class AchievementTracker:
         self._collection_queue: queue.Queue = queue.Queue()
         self._last_party: List[Dict] = []
         self._last_pokedex: List[int] = []
+        self._collection_baseline_initialized = False
         self._derived_checker: Optional[DerivedAchievementChecker] = None
     
     def load_game(self, game_name: str, achievements_file: Path) -> bool:
@@ -894,7 +895,10 @@ class AchievementTracker:
             
             self.game_name = game_name
             self.game_id = self.GAME_IDS.get(game_name)
-            
+            self._last_party = []
+            self._last_pokedex = []
+            self._collection_baseline_initialized = False
+
             # Initialize derived achievement checker
             if GAME_CONFIGS_AVAILABLE and self.game_name:
                 try:
@@ -1296,6 +1300,13 @@ class AchievementTracker:
         # Read current party
         current_party = self.pokemon_reader.read_party(self.game_name)
         
+        # First read after game load/start establishes baseline only
+        if not self._collection_baseline_initialized:
+            self._last_pokedex = current_pokedex
+            self._last_party = current_party
+            self._collection_baseline_initialized = True
+            return
+
         # Find new catches
         new_catches = [p for p in current_pokedex if p not in self._last_pokedex]
         
@@ -2085,6 +2096,7 @@ class PokeAchieveGUI:
                 self.tracker.game_id = None
                 self.tracker._last_party = []
                 self.tracker._last_pokedex = []
+                self.tracker._collection_baseline_initialized = False
 
                 self.game_label.configure(text="Game: None")
                 self.progress_label.configure(text="0/0 (0%) - 0/0 pts")
