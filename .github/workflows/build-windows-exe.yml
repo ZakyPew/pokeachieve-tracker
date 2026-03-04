@@ -1,0 +1,58 @@
+name: Build Windows EXE
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install build dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install cx_Freeze requests psutil pywin32 pillow tkinter-tooltip
+
+      - name: Build directory executable
+        shell: pwsh
+        run: |
+          python setup_directory_build.py build
+
+      - name: Add release docs to build directory
+        shell: pwsh
+        run: |
+          Copy-Item README.md build/PokeAchieveTracker/ -Force
+          if (Test-Path TRACKER_INTEGRATION.md) {
+            Copy-Item TRACKER_INTEGRATION.md build/PokeAchieveTracker/ -Force
+          }
+
+      - name: Archive build output
+        shell: pwsh
+        run: |
+          Compress-Archive -Path build/PokeAchieveTracker/* -DestinationPath PokeAchieveTracker-windows.zip -Force
+
+      - name: Upload build directory artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PokeAchieveTracker-windows-directory
+          path: build/PokeAchieveTracker
+          if-no-files-found: error
+
+      - name: Upload zip artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PokeAchieveTracker-windows-zip
+          path: PokeAchieveTracker-windows.zip
+          if-no-files-found: error
