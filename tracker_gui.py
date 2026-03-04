@@ -184,10 +184,14 @@ class PokeAchieveAPI:
         return None
 
     def test_auth(self) -> tuple[bool, str]:
-        """Test API key authentication using tracker test endpoint"""
-        success, data = self._request("POST", "/api/tracker/test")
+        """Test API key authentication against authenticated user profile endpoint"""
+        success, data = self._request("GET", "/api/users/me")
+        if not success:
+            success, data = self._request("GET", "/users/me")
+
         if success:
-            return True, data.get("message", "Authentication successful")
+            username = data.get("username") if isinstance(data, dict) else None
+            return True, f"Authenticated as {username}" if username else "Authentication successful"
         return False, data.get("error", "Authentication failed")
     
     def get_progress(self, game_id: int) -> tuple[bool, list]:
@@ -872,6 +876,7 @@ class AchievementTracker:
         self._last_party: List[Dict] = []
         self._last_pokedex: List[int] = []
         self._collection_baseline_initialized = False
+        self._unlock_streaks: Dict[str, int] = {}
         self._derived_checker: Optional[DerivedAchievementChecker] = None
     
     def load_game(self, game_name: str, achievements_file: Path) -> bool:
@@ -898,6 +903,7 @@ class AchievementTracker:
             self._last_party = []
             self._last_pokedex = []
             self._collection_baseline_initialized = False
+            self._unlock_streaks = {}
 
             # Initialize derived achievement checker
             if GAME_CONFIGS_AVAILABLE and self.game_name:
@@ -982,11 +988,16 @@ class AchievementTracker:
                 unlocked = self._check_derived_achievement(achievement)
             
             if unlocked:
-                achievement.unlocked = True
-                achievement.unlocked_at = datetime.now().isoformat()
-                newly_unlocked.append(achievement)
-                self._unlock_queue.put(achievement)
-                self.post_unlock_to_platform(achievement)
+                self._unlock_streaks[achievement.id] = self._unlock_streaks.get(achievement.id, 0) + 1
+                # Require two consecutive positive polls to avoid transient memory-read false positives.
+                if self._unlock_streaks[achievement.id] >= 2:
+                    achievement.unlocked = True
+                    achievement.unlocked_at = datetime.now().isoformat()
+                    newly_unlocked.append(achievement)
+                    self._unlock_queue.put(achievement)
+                    self.post_unlock_to_platform(achievement)
+            else:
+                self._unlock_streaks[achievement.id] = 0
         
         return newly_unlocked
     
@@ -1702,7 +1713,7 @@ class PokeAchieveGUI:
                 self.ra_status_label.configure(text="RetroArch: Disconnected")
 
             if status.get("api_configured"):
-                self.api_status_label.configure(text="API: Connected ✓")
+                self.api_status_label.configure(text="API: Configured")
             else:
                 self.api_status_label.configure(text="API: Not configured")
         finally:
@@ -2110,6 +2121,7 @@ class PokeAchieveGUI:
                 self.tracker._last_party = []
                 self.tracker._last_pokedex = []
                 self.tracker._collection_baseline_initialized = False
+                self.tracker._unlock_streaks = {}
 
                 self.game_label.configure(text="Game: None")
                 self.progress_label.configure(text="0/0 (0%) - 0/0 pts")
@@ -2211,7 +2223,7 @@ class PokeAchieveGUI:
             def test():
                 success, message = self.api.test_auth()
                 if success:
-                    self.api_status_label.configure(text="API: Connected ✓")
+                    self.api_status_label.configure(text="API: Configured")
                     self._log("API authentication successful", "success")
                 else:
                     self.api_status_label.configure(text="API: Failed")
