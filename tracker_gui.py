@@ -1309,6 +1309,19 @@ class AchievementTracker:
 
         # Find new catches
         new_catches = [p for p in current_pokedex if p not in self._last_pokedex]
+
+        # Guard against bad memory reads causing impossible bulk catch spikes.
+        # In normal gameplay, catches increment gradually (typically 0-1 per poll).
+        if len(new_catches) > 6:
+            log_event(
+                logging.WARNING,
+                "collection_spike_ignored",
+                game=self.game_name,
+                spike_count=len(new_catches),
+            )
+            self._last_pokedex = current_pokedex
+            self._last_party = current_party
+            return
         
         # Find party changes
         party_changes = []
