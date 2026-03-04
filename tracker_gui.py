@@ -97,6 +97,7 @@ class PokeAchieveAPI:
         """Make API request and return (success, response_data)"""
         url = self._make_url(endpoint)
         log_event(logging.INFO, "api_request", method=method, url=url)
+        print(f"[API REQUEST] {method} {url}")
         try:
             req = urllib.request.Request(
                 url,
@@ -184,26 +185,22 @@ class PokeAchieveAPI:
 
     def test_auth(self) -> tuple[bool, str]:
         """Test API key authentication"""
-        for endpoint in ("/api/users/me", "/users/me"):
-            success, data = self._request("GET", endpoint)
-            if success and isinstance(data, dict):
-                return True, data.get("message", "Authentication successful")
-        return False, "Authentication failed"
+        success, data = self._request("GET", "/api/users/me")
+        if not success:
+            # Backwards compatibility with legacy backend route
+            success, data = self._request("GET", "/users/me")
+        if success:
+            return True, data.get("message", "Authentication successful")
+        return False, data.get("error", "Authentication failed")
     
     def get_progress(self, game_id: int) -> tuple[bool, list]:
         """Get user's progress for a game"""
-        # Order reflects live API first, then legacy/fallbacks.
-        endpoints = (
-            "/api/users/me/achievements",
-            "/users/me/achievements",
-            f"/api/tracker/progress/{game_id}",
-        )
-        for endpoint in endpoints:
-            success, data = self._request("GET", endpoint)
-            if not success:
-                continue
-            unlocked_ids = self._extract_unlocked_ids(data, game_id)
-            return True, unlocked_ids
+        success, data = self._request("GET", f"/api/tracker/progress/{game_id}")
+        if not success:
+            # Backwards compatibility with legacy backend route
+            success, data = self._request("GET", "/users/me/achievements")
+        if success:
+            return True, data.get("unlocked_achievement_ids", [])
         return False, []
     
     def post_unlock(self, game_id: int, achievement_id: str, achievement_name: Optional[str] = None) -> tuple[bool, dict]:
@@ -226,34 +223,23 @@ class PokeAchieveAPI:
             "achievement_name": achievement_name,
             "unlocked_at": datetime.now().isoformat()
         }
-
-        success, data = self._request("POST", "/api/progress/update", live_payload)
-        if success:
-            return success, data
-
-        for endpoint in ("/progress/update", "/api/tracker/unlock"):
-            success, data = self._request("POST", endpoint, legacy_payload)
-            if success:
-                return success, data
-
-        return False, {"error": "All unlock endpoints failed"}
+        success, data = self._request("POST", "/api/tracker/unlock", payload)
+        if not success:
+            # Backwards compatibility with legacy backend route
+            return self._request("POST", "/progress/update", payload)
+        return success, data
     
     # Pokemon Collection API Methods
     def post_collection_batch(self, pokemon_list: List[Dict]) -> tuple[bool, dict]:
         """Post batch of Pokemon collection updates"""
-        # Kept for backward compatibility with older platform builds.
-        for endpoint in ("/api/collection/batch-update", "/collection/batch-update"):
-            success, data = self._request("POST", endpoint, pokemon_list)
-            if success:
-                return success, data
-        return False, {"error": "Collection batch endpoint unavailable"}
+        success, data = self._request("POST", "/api/collection/batch-update", pokemon_list)
+        if not success:
+            # Backwards compatibility with legacy backend route
+            return self._request("POST", "/collection/batch-update", pokemon_list)
+        return success, data
 
     def start_session(self, game_id: int) -> tuple[bool, dict]:
-        for endpoint in ("/api/sessions/start", "/sessions/start"):
-            success, data = self._request("POST", endpoint, {"game_id": game_id})
-            if success:
-                return success, data
-        return False, {"error": "Session start endpoint unavailable"}
+        return self._request("POST", "/api/sessions/start", {"game_id": game_id})
     
     def post_party_update(self, pokemon_id: int, in_party: bool, party_slot: int = None) -> tuple[bool, dict]:
         """Update party status for a Pokemon"""
@@ -262,12 +248,11 @@ class PokeAchieveAPI:
             "in_party": in_party,
             "party_slot": party_slot
         }
-        # Kept for backward compatibility with older platform builds.
-        for endpoint in ("/api/collection/party", "/collection/party"):
-            success, data = self._request("POST", endpoint, payload)
-            if success:
-                return success, data
-        return False, {"error": "Party endpoint unavailable"}
+        success, data = self._request("POST", "/api/collection/party", payload)
+        if not success:
+            # Backwards compatibility with legacy backend route
+            return self._request("POST", "/collection/party", payload)
+        return success, data
 
 
 class RetroArchClient:
@@ -344,11 +329,11 @@ class RetroArchClient:
     def get_current_game(self) -> Optional[str]:
         """Get name of currently loaded game from GET_STATUS"""
         response = self.send_command("GET_STATUS")
-        log_event(logging.DEBUG, "retroarch_status_response", response=response)
+        print(f"[DEBUG] RetroArch GET_STATUS response: {response}")
         if response:
             normalized = self._normalize_game_name(response)
             if normalized:
-                log_event(logging.INFO, "game_normalized", source="status", game=normalized)
+                print(f"[DEBUG] Normalized game from status: {normalized}")
                 return normalized
 
         if response and response.startswith("GET_STATUS"):
@@ -373,9 +358,9 @@ class RetroArchClient:
                     game_name = game_name.strip()
                     normalized = self._normalize_game_name(game_name)
                     if normalized:
-                        log_event(logging.INFO, "game_detected", game=normalized)
+                        print(f"[DEBUG] Detected game: {normalized}")
                         return normalized
-                    log_event(logging.INFO, "game_detected_raw", game=game_name)
+                    print(f"[DEBUG] Detected game (raw): {game_name}")
                     return game_name
             except Exception as e:
                 log_event(logging.WARNING, "game_parse_error", error=str(e))
@@ -1770,7 +1755,7 @@ class PokeAchieveGUI:
             
             success, unlocked_ids = self.api.get_progress(game_id)
             if success:
-                server_unlocked = set(str(x) for x in (unlocked_ids or []))
+                server_unlocked = set(unlocked_ids or [])
 
                 # Update local achievements to include server ones
                 newly_added = 0
@@ -1895,7 +1880,7 @@ class PokeAchieveGUI:
             ach = item.get("achievement")
             if not ach or not self.tracker.game_id:
                 return True
-            success, data = self.api.post_unlock(self.tracker.game_id, ach.id, ach.name)
+            success, data = self.api.post_unlock(self.tracker.game_id, ach.id)
             if success:
                 self._threadsafe_log(f"Posted unlock to platform: {ach.name}", "api")
                 return True
@@ -1945,7 +1930,7 @@ class PokeAchieveGUI:
         log_event(logging.INFO, "collection_sync_start", catches=len(catches), party=len(party), game=game)
         
         if not catches and not party:
-            log_event(logging.DEBUG, "collection_sync_empty")
+            print("[COLLECTION SYNC] Nothing to sync")
             return True
         
         # Build batch update for new catches
@@ -1967,11 +1952,11 @@ class PokeAchieveGUI:
             success, data = self.api.post_collection_batch(batch)
             if success:
                 self._threadsafe_log(f"Synced {len(batch)} Pokemon to collection", "api")
-                log_event(logging.INFO, "collection_sync_batch_success", response=data)
+                print(f"[COLLECTION SYNC] Success: {data}")
             else:
                 error_msg = data.get('error', 'Unknown error')
                 self._threadsafe_log(f"Failed to sync collection: {error_msg}", "error")
-                log_event(logging.ERROR, "collection_sync_batch_failed", error=error_msg)
+                print(f"[COLLECTION SYNC] Failed: {error_msg}")
                 return False
         
         # Update party
