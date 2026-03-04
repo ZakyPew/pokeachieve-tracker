@@ -123,6 +123,66 @@ class PokeAchieveAPI:
             log_event(logging.ERROR, "api_exception", method=method, endpoint=endpoint, error_type=type(e).__name__, error=str(e))
             return False, {"error": str(e)}
     
+    def _extract_unlocked_ids(self, data: object, game_id: int) -> List[str]:
+        """Normalize different progress response shapes into comparable unlock keys."""
+        if isinstance(data, dict):
+            if isinstance(data.get("unlocked_achievement_ids"), list):
+                return [str(x) for x in data.get("unlocked_achievement_ids", [])]
+
+            achievements = data.get("achievements")
+            if isinstance(achievements, list):
+                return [
+                    str(a.get("id") or a.get("achievement_id"))
+                    for a in achievements
+                    if isinstance(a, dict) and a.get("unlocked") and (a.get("id") or a.get("achievement_id"))
+                ]
+
+        if isinstance(data, list):
+            unlocked: List[str] = []
+            for item in data:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("game_id") not in (None, game_id):
+                    continue
+                if item.get("unlocked") or item.get("is_unlocked") or item.get("status") == "unlocked":
+                    ach_id = item.get("id") or item.get("achievement_id")
+                    if ach_id is not None:
+                        unlocked.append(str(ach_id))
+
+                    nested = item.get("achievement") if isinstance(item.get("achievement"), dict) else {}
+                    ach_name = nested.get("name") or item.get("achievement_name")
+                    if isinstance(ach_name, str) and ach_name.strip():
+                        unlocked.append(f"name:{ach_name.strip().lower()}")
+            return unlocked
+
+        return []
+
+    def _resolve_achievement_id(self, game_id: int, achievement_name: Optional[str]) -> Optional[int]:
+        """Resolve numeric achievement ID required by live API using the user's achievement list."""
+        if not achievement_name:
+            return None
+
+        endpoints = ("/api/users/me/achievements", "/users/me/achievements")
+        target = achievement_name.strip().lower()
+        for endpoint in endpoints:
+            success, data = self._request("GET", endpoint)
+            if not success or not isinstance(data, list):
+                continue
+            for item in data:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("game_id") not in (None, game_id):
+                    continue
+                nested = item.get("achievement") if isinstance(item.get("achievement"), dict) else {}
+                ach_name = nested.get("name") or item.get("achievement_name")
+                ach_id = nested.get("id") or item.get("achievement_id") or item.get("id")
+                if isinstance(ach_name, str) and ach_name.strip().lower() == target and ach_id is not None:
+                    try:
+                        return int(ach_id)
+                    except (TypeError, ValueError):
+                        continue
+        return None
+
     def test_auth(self) -> tuple[bool, str]:
         """Test API key authentication"""
         success, data = self._request("GET", "/api/users/me")
@@ -143,11 +203,24 @@ class PokeAchieveAPI:
             return True, data.get("unlocked_achievement_ids", [])
         return False, []
     
-    def post_unlock(self, game_id: int, achievement_id: str) -> tuple[bool, dict]:
+    def post_unlock(self, game_id: int, achievement_id: str, achievement_name: Optional[str] = None) -> tuple[bool, dict]:
         """Post achievement unlock to platform"""
-        payload = {
+        live_achievement_id: object = achievement_id
+        if isinstance(achievement_id, str) and not achievement_id.isdigit():
+            resolved = self._resolve_achievement_id(game_id, achievement_name)
+            if resolved is not None:
+                live_achievement_id = resolved
+
+        live_payload = {
+            "game_id": game_id,
+            "achievement_id": live_achievement_id,
+            "current_value": 1,
+            "unlocked": True,
+        }
+        legacy_payload = {
             "game_id": game_id,
             "achievement_id": achievement_id,
+            "achievement_name": achievement_name,
             "unlocked_at": datetime.now().isoformat()
         }
         success, data = self._request("POST", "/api/tracker/unlock", payload)
@@ -859,8 +932,11 @@ class AchievementTracker:
             return 0, 1
         
         newly_synced = 0
+        unlocked_set = set(str(x) for x in unlocked_ids)
         for ach in self.achievements:
-            if ach.id in unlocked_ids and not ach.unlocked:
+            by_id = ach.id in unlocked_set
+            by_name = f"name:{ach.name.strip().lower()}" in unlocked_set
+            if (by_id or by_name) and not ach.unlocked:
                 ach.unlocked = True
                 newly_synced += 1
         
@@ -1684,7 +1760,9 @@ class PokeAchieveGUI:
                 # Update local achievements to include server ones
                 newly_added = 0
                 for ach in self.tracker.achievements:
-                    if ach.id in server_unlocked and not ach.unlocked:
+                    by_id = ach.id in server_unlocked
+                    by_name = f"name:{ach.name.strip().lower()}" in server_unlocked
+                    if (by_id or by_name) and not ach.unlocked:
                         ach.unlocked = True
                         ach.unlocked_at = datetime.now()
                         newly_added += 1
