@@ -184,10 +184,14 @@ class PokeAchieveAPI:
         return None
 
     def test_auth(self) -> tuple[bool, str]:
-        """Test API key authentication using tracker test endpoint"""
-        success, data = self._request("POST", "/api/tracker/test")
+        """Test API key authentication against authenticated user profile endpoint"""
+        success, data = self._request("GET", "/api/users/me")
+        if not success:
+            success, data = self._request("GET", "/users/me")
+
         if success:
-            return True, data.get("message", "Authentication successful")
+            username = data.get("username") if isinstance(data, dict) else None
+            return True, f"Authenticated as {username}" if username else "Authentication successful"
         return False, data.get("error", "Authentication failed")
     
     def get_progress(self, game_id: int) -> tuple[bool, list]:
@@ -470,44 +474,46 @@ class PokemonMemoryReader:
         "pokemon_ruby": {
             "gen": 3,
             "max_pokemon": 386,
-            "pokedex_flags": "0x202F900",
-            "party_count": "0x20244E0",
-            "party_start": "0x20244E8",
+            "pokedex_seen": "0x02024C0C",
+            "pokedex_caught": "0x02024D0C",
+            "party_count": "0x02024284",
+            "party_start": "0x02024284",
             "party_slot_size": 100,
         },
         "pokemon_sapphire": {
             "gen": 3,
             "max_pokemon": 386,
-            "pokedex_flags": "0x202F900",
-            "party_count": "0x20244E0",
-            "party_start": "0x20244E8",
+            "pokedex_seen": "0x02024C0C",
+            "pokedex_caught": "0x02024D0C",
+            "party_count": "0x02024284",
+            "party_start": "0x02024284",
             "party_slot_size": 100,
         },
         "pokemon_emerald": {
             "gen": 3,
             "max_pokemon": 386,
-            "pokedex_seen": "0x202F900",
-            "pokedex_caught": "0x202F900",  # TODO: Find correct caught address for Gen 3
-            "party_count": "0x20244E0",
-            "party_start": "0x20244E8",
+            "pokedex_seen": "0x02024C0C",
+            "pokedex_caught": "0x02024D0C",
+            "party_count": "0x02024284",
+            "party_start": "0x02024284",
             "party_slot_size": 100,
         },
         "pokemon_firered": {
             "gen": 3,
             "max_pokemon": 386,
-            "pokedex_seen": "0x202F900",
-            "pokedex_caught": "0x202F900",  # TODO: Find correct caught address for Gen 3
-            "party_count": "0x20244E0",
-            "party_start": "0x20244E8",
+            "pokedex_seen": "0x02024C0C",
+            "pokedex_caught": "0x02024D0C",
+            "party_count": "0x02024284",
+            "party_start": "0x02024284",
             "party_slot_size": 100,
         },
         "pokemon_leafgreen": {
             "gen": 3,
             "max_pokemon": 386,
-            "pokedex_seen": "0x202F900",
-            "pokedex_caught": "0x202F900",  # TODO: Find correct caught address for Gen 3
-            "party_count": "0x20244E0",
-            "party_start": "0x20244E8",
+            "pokedex_seen": "0x02024C0C",
+            "pokedex_caught": "0x02024D0C",
+            "party_count": "0x02024284",
+            "party_start": "0x02024284",
             "party_slot_size": 100,
         },
     }
@@ -869,6 +875,8 @@ class AchievementTracker:
         self._collection_queue: queue.Queue = queue.Queue()
         self._last_party: List[Dict] = []
         self._last_pokedex: List[int] = []
+        self._collection_baseline_initialized = False
+        self._unlock_streaks: Dict[str, int] = {}
         self._derived_checker: Optional[DerivedAchievementChecker] = None
     
     def load_game(self, game_name: str, achievements_file: Path) -> bool:
@@ -892,7 +900,11 @@ class AchievementTracker:
             
             self.game_name = game_name
             self.game_id = self.GAME_IDS.get(game_name)
-            
+            self._last_party = []
+            self._last_pokedex = []
+            self._collection_baseline_initialized = False
+            self._unlock_streaks = {}
+
             # Initialize derived achievement checker
             if GAME_CONFIGS_AVAILABLE and self.game_name:
                 try:
@@ -976,11 +988,16 @@ class AchievementTracker:
                 unlocked = self._check_derived_achievement(achievement)
             
             if unlocked:
-                achievement.unlocked = True
-                achievement.unlocked_at = datetime.now().isoformat()
-                newly_unlocked.append(achievement)
-                self._unlock_queue.put(achievement)
-                self.post_unlock_to_platform(achievement)
+                self._unlock_streaks[achievement.id] = self._unlock_streaks.get(achievement.id, 0) + 1
+                # Require two consecutive positive polls to avoid transient memory-read false positives.
+                if self._unlock_streaks[achievement.id] >= 2:
+                    achievement.unlocked = True
+                    achievement.unlocked_at = datetime.now().isoformat()
+                    newly_unlocked.append(achievement)
+                    self._unlock_queue.put(achievement)
+                    self.post_unlock_to_platform(achievement)
+            else:
+                self._unlock_streaks[achievement.id] = 0
         
         return newly_unlocked
     
@@ -1294,8 +1311,28 @@ class AchievementTracker:
         # Read current party
         current_party = self.pokemon_reader.read_party(self.game_name)
         
+        # First read after game load/start establishes baseline only
+        if not self._collection_baseline_initialized:
+            self._last_pokedex = current_pokedex
+            self._last_party = current_party
+            self._collection_baseline_initialized = True
+            return
+
         # Find new catches
         new_catches = [p for p in current_pokedex if p not in self._last_pokedex]
+
+        # Guard against bad memory reads causing impossible bulk catch spikes.
+        # In normal gameplay, catches increment gradually (typically 0-1 per poll).
+        if len(new_catches) > 6:
+            log_event(
+                logging.WARNING,
+                "collection_spike_ignored",
+                game=self.game_name,
+                spike_count=len(new_catches),
+            )
+            self._last_pokedex = current_pokedex
+            self._last_party = current_party
+            return
         
         # Find party changes
         party_changes = []
@@ -1676,7 +1713,7 @@ class PokeAchieveGUI:
                 self.ra_status_label.configure(text="RetroArch: Disconnected")
 
             if status.get("api_configured"):
-                self.api_status_label.configure(text="API: Connected ✓")
+                self.api_status_label.configure(text="API: Configured")
             else:
                 self.api_status_label.configure(text="API: Not configured")
         finally:
@@ -2083,6 +2120,8 @@ class PokeAchieveGUI:
                 self.tracker.game_id = None
                 self.tracker._last_party = []
                 self.tracker._last_pokedex = []
+                self.tracker._collection_baseline_initialized = False
+                self.tracker._unlock_streaks = {}
 
                 self.game_label.configure(text="Game: None")
                 self.progress_label.configure(text="0/0 (0%) - 0/0 pts")
@@ -2184,7 +2223,7 @@ class PokeAchieveGUI:
             def test():
                 success, message = self.api.test_auth()
                 if success:
-                    self.api_status_label.configure(text="API: Connected ✓")
+                    self.api_status_label.configure(text="API: Configured")
                     self._log("API authentication successful", "success")
                 else:
                     self.api_status_label.configure(text="API: Failed")
