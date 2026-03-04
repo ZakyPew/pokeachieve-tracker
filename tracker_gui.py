@@ -1459,8 +1459,9 @@ class PokeAchieveGUI:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("🎮 PokeAchieve Tracker v1.9")
-        self.root.geometry("900x650")
-        self.root.minsize(700, 450)
+        self.root.geometry("980x700")
+        self.root.minsize(760, 520)
+        self._configure_styles()
         
         # Setup paths
         # Handle both regular Python and PyInstaller frozen .exe
@@ -1513,6 +1514,22 @@ class PokeAchieveGUI:
         self._build_ui()
         self._start_status_check()
     
+    def _configure_styles(self):
+        """Apply a cleaner, modern ttk theme and spacing."""
+        style = ttk.Style(self.root)
+        for theme in ("clam", "vista", "default"):
+            if theme in style.theme_names():
+                style.theme_use(theme)
+                break
+
+        style.configure("TNotebook", tabposition="n")
+        style.configure("TNotebook.Tab", padding=(14, 8), font=("Segoe UI", 10, "bold"))
+        style.configure("TLabel", font=("Segoe UI", 10))
+        style.configure("TButton", font=("Segoe UI", 10), padding=(10, 6))
+        style.configure("Header.TLabel", font=("Segoe UI", 12, "bold"))
+        style.configure("Subtle.TLabel", foreground="#4b5563")
+        style.configure("Primary.TButton", font=("Segoe UI", 10, "bold"), padding=(12, 7))
+
     def _load_config(self) -> dict:
         """Load configuration from file"""
         if self.config_file.exists():
@@ -1535,78 +1552,102 @@ class PokeAchieveGUI:
         """Build the user interface"""
         # Create notebook (tabs)
         self.notebook = ttk.Notebook(self.root)
-        self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        self.notebook.pack(fill=tk.BOTH, expand=True, padx=14, pady=14)
         
         # Status Tab
         self.status_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.status_frame, text="📊 Status")
+        self.notebook.add(self.status_frame, text="Status")
         self._build_status_tab()
         
         # Achievements Tab
         self.achievements_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.achievements_frame, text="🏆 Achievements")
+        self.notebook.add(self.achievements_frame, text="Achievements")
         self._build_achievements_tab()
         
         # Collection Tab (NEW!)
         self.collection_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.collection_frame, text="📱 Collection")
+        self.notebook.add(self.collection_frame, text="Collection")
         self._build_collection_tab()
         
         # Log Tab
         self.log_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.log_frame, text="📝 Log")
+        self.notebook.add(self.log_frame, text="Log")
         self._build_log_tab()
     
     def _build_status_tab(self):
         """Build status tab"""
+        container = ttk.Frame(self.status_frame, padding=8)
+        container.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(container, text="Tracker Overview", style="Header.TLabel").pack(anchor=tk.W, padx=4, pady=(2, 8))
+        ttk.Label(
+            container,
+            text="Connection, progress, and controls in one place.",
+            style="Subtle.TLabel"
+        ).pack(anchor=tk.W, padx=4, pady=(0, 12))
+
         # Connection status
-        conn_frame = ttk.LabelFrame(self.status_frame, text="Connection Status", padding=10)
-        conn_frame.pack(fill=tk.X, padx=10, pady=10)
-        
+        conn_frame = ttk.LabelFrame(container, text="Connection Status", padding=12)
+        conn_frame.pack(fill=tk.X, pady=(0, 10))
+
         self.ra_status_label = ttk.Label(conn_frame, text="RetroArch: Disconnected")
-        self.ra_status_label.pack(anchor=tk.W)
-        
+        self.ra_status_label.pack(anchor=tk.W, pady=1)
+
         self.api_status_label = ttk.Label(conn_frame, text="API: Not configured")
-        self.api_status_label.pack(anchor=tk.W)
-        
+        self.api_status_label.pack(anchor=tk.W, pady=1)
+
         self.game_label = ttk.Label(conn_frame, text="Game: None")
-        self.game_label.pack(anchor=tk.W)
-        
+        self.game_label.pack(anchor=tk.W, pady=1)
+
         # Progress
-        progress_frame = ttk.LabelFrame(self.status_frame, text="Progress", padding=10)
-        progress_frame.pack(fill=tk.X, padx=10, pady=10)
-        
+        progress_frame = ttk.LabelFrame(container, text="Progress", padding=12)
+        progress_frame.pack(fill=tk.X, pady=(0, 10))
+
         self.progress_label = ttk.Label(progress_frame, text="0/0 (0%) - 0/0 pts")
         self.progress_label.pack(anchor=tk.W)
-        
-        self.progress_bar = ttk.Progressbar(progress_frame, mode='determinate', length=400)
-        self.progress_bar.pack(fill=tk.X, pady=5)
-        
-        # Collection Summary (NEW!)
-        collection_frame = ttk.LabelFrame(self.status_frame, text="Pokemon Collection", padding=10)
-        collection_frame.pack(fill=tk.X, padx=10, pady=10)
-        
+
+        self.progress_bar = ttk.Progressbar(progress_frame, mode='determinate')
+        self.progress_bar.pack(fill=tk.X, pady=(8, 0))
+
+        # Collection Summary
+        collection_frame = ttk.LabelFrame(container, text="Pokemon Collection", padding=12)
+        collection_frame.pack(fill=tk.X, pady=(0, 10))
+
         self.collection_label = ttk.Label(collection_frame, text="Caught: 0 | Shiny: 0 | Party: 0")
         self.collection_label.pack(anchor=tk.W)
-        
+
         # Controls
-        controls_frame = ttk.Frame(self.status_frame)
-        controls_frame.pack(fill=tk.X, padx=10, pady=10)
-        
-        self.start_btn = ttk.Button(controls_frame, text="▶ Start Tracking", command=self._start_tracking)
-        self.start_btn.pack(side=tk.LEFT, padx=5)
-        
-        self.stop_btn = ttk.Button(controls_frame, text="⏹ Stop", command=self._stop_tracking, state='disabled')
-        self.stop_btn.pack(side=tk.LEFT, padx=5)
-        
-        # NEW: Clear App Data button
-        ttk.Button(controls_frame, text="🗑 Clear Data", command=self._clear_app_data).pack(side=tk.LEFT, padx=5)
-        
-        # NEW: Sync with Server button  
-        ttk.Button(controls_frame, text="🔄 Sync", command=self._sync_with_server).pack(side=tk.LEFT, padx=5)
-        
-        ttk.Button(controls_frame, text="⚙ Settings", command=self._show_settings).pack(side=tk.LEFT, padx=5)
-    
+        controls_frame = ttk.LabelFrame(container, text="Actions", padding=10)
+        controls_frame.pack(fill=tk.X)
+        for col in range(5):
+            controls_frame.columnconfigure(col, weight=1)
+
+        self.start_btn = ttk.Button(
+            controls_frame,
+            text="▶ Start Tracking",
+            command=self._start_tracking,
+            style="Primary.TButton"
+        )
+        self.start_btn.grid(row=0, column=0, padx=4, pady=4, sticky="ew")
+
+        self.stop_btn = ttk.Button(
+            controls_frame,
+            text="⏹ Stop",
+            command=self._stop_tracking,
+            state='disabled'
+        )
+        self.stop_btn.grid(row=0, column=1, padx=4, pady=4, sticky="ew")
+
+        ttk.Button(controls_frame, text="🔄 Sync", command=self._sync_with_server).grid(
+            row=0, column=2, padx=4, pady=4, sticky="ew"
+        )
+        ttk.Button(controls_frame, text="⚙ Settings", command=self._show_settings).grid(
+            row=0, column=3, padx=4, pady=4, sticky="ew"
+        )
+        ttk.Button(controls_frame, text="🗑 Clear Data", command=self._clear_app_data).grid(
+            row=0, column=4, padx=4, pady=4, sticky="ew"
+        )
+
     def _build_achievements_tab(self):
         """Build achievements tab"""
         # Recent unlocks
