@@ -15,10 +15,26 @@ import os
 import sys
 import urllib.request
 import urllib.error
+import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Callable, Tuple
 from datetime import datetime
 from dataclasses import dataclass, asdict
+
+LOGGER = logging.getLogger("pokeachieve_tracker")
+if not LOGGER.handlers:
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+    LOGGER.addHandler(_handler)
+LOGGER.setLevel(logging.INFO)
+
+
+def log_event(level: int, event: str, **fields):
+    """Structured logging helper."""
+    if fields:
+        LOGGER.log(level, "%s %s", event, json.dumps(fields, default=str, sort_keys=True))
+    else:
+        LOGGER.log(level, "%s", event)
 
 # Import game configuration system
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -30,7 +46,7 @@ try:
     GAME_CONFIGS_AVAILABLE = True
 except ImportError:
     GAME_CONFIGS_AVAILABLE = False
-    print("Warning: game_configs.py not found, using legacy hardcoded addresses")
+    LOGGER.warning("game_configs_unavailable using legacy hardcoded addresses")
 
 
 @dataclass
@@ -80,6 +96,7 @@ class PokeAchieveAPI:
     def _request(self, method: str, endpoint: str, data: dict = None) -> tuple[bool, dict]:
         """Make API request and return (success, response_data)"""
         url = self._make_url(endpoint)
+        log_event(logging.INFO, "api_request", method=method, url=url)
         print(f"[API REQUEST] {method} {url}")
         try:
             req = urllib.request.Request(
@@ -91,19 +108,19 @@ class PokeAchieveAPI:
             with urllib.request.urlopen(req, timeout=10) as response:
                 status = response.getcode()
                 body = response.read().decode()
-                print(f"[API SUCCESS] {method} {endpoint} -> HTTP {status}")
+                log_event(logging.INFO, "api_success", method=method, endpoint=endpoint, status=status)
                 return True, json.loads(body)
         except urllib.error.HTTPError as e:
             status = e.getcode()
             error_body = e.read().decode()
-            print(f"[API ERROR] {method} {endpoint} -> HTTP {status}: {error_body[:200]}")
+            log_event(logging.ERROR, "api_http_error", method=method, endpoint=endpoint, status=status, body_preview=error_body[:200])
             try:
                 error_data = json.loads(error_body)
                 return False, {"error": error_data.get("detail", str(e)), "status": status}
-            except:
+            except (json.JSONDecodeError, UnicodeDecodeError):
                 return False, {"error": f"HTTP {status}: {error_body[:200]}", "status": status}
         except Exception as e:
-            print(f"[API ERROR] {method} {endpoint} -> {type(e).__name__}: {str(e)}")
+            log_event(logging.ERROR, "api_exception", method=method, endpoint=endpoint, error_type=type(e).__name__, error=str(e))
             return False, {"error": str(e)}
     
     def test_auth(self) -> tuple[bool, str]:
@@ -210,7 +227,7 @@ class RetroArchClient:
             if self.socket:
                 try:
                     self.socket.close()
-                except:
+                except OSError:
                     pass
                 self.socket = None
     
@@ -273,7 +290,7 @@ class RetroArchClient:
                     print(f"[DEBUG] Detected game (raw): {game_name}")
                     return game_name
             except Exception as e:
-                print(f"[DEBUG] Error parsing game name: {e}")
+                log_event(logging.WARNING, "game_parse_error", error=str(e))
                 pass
         return None
     
@@ -806,18 +823,18 @@ class AchievementTracker:
         """Load previously unlocked achievements"""
         if not progress_file.exists():
             return
-        
+
         try:
             with open(progress_file, 'r') as f:
                 data = json.load(f)
-            
+
             unlocked_ids = set(data.get("unlocked", []))
             for ach in self.achievements:
                 if ach.id in unlocked_ids:
                     ach.unlocked = True
-        except:
-            pass
-    
+        except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
+            log_event(logging.WARNING, "progress_load_failed", file=str(progress_file), error=str(exc))
+
     def save_progress(self, progress_file: Path):
         """Save unlocked achievements"""
         try:
@@ -829,9 +846,9 @@ class AchievementTracker:
             progress_file.parent.mkdir(parents=True, exist_ok=True)
             with open(progress_file, 'w') as f:
                 json.dump(data, f, indent=2)
-        except:
-            pass
-    
+        except OSError as exc:
+            log_event(logging.WARNING, "progress_save_failed", file=str(progress_file), error=str(exc))
+
     def sync_with_platform(self) -> tuple[int, int]:
         """Sync progress with platform. Returns (newly_synced, errors)"""
         if not self.api or not self.game_id:
@@ -1233,38 +1250,38 @@ class AchievementTracker:
         if condition.startswith(">="):
             try:
                 return value >= int(condition[2:].strip())
-            except:
+            except ValueError:
                 pass
         elif condition.startswith("<="):
             try:
                 return value <= int(condition[2:].strip())
-            except:
+            except ValueError:
                 pass
         elif condition.startswith(">"):
             try:
                 return value > int(condition[1:].strip())
-            except:
+            except ValueError:
                 pass
         elif condition.startswith("<"):
             try:
                 return value < int(condition[1:].strip())
-            except:
+            except ValueError:
                 pass
         elif condition.startswith("=="):
             try:
                 return value == int(condition[2:].strip())
-            except:
+            except ValueError:
                 pass
         elif condition.startswith("!="):
             try:
                 return value != int(condition[2:].strip())
-            except:
+            except ValueError:
                 pass
         elif condition.startswith("&"):
             try:
                 target = int(condition[1:].strip(), 16) if "x" in condition else int(condition[1:].strip())
                 return (value & target) == target
-            except:
+            except ValueError:
                 pass
         
         return False
@@ -1331,9 +1348,9 @@ class PokeAchieveGUI:
         self.achievements_dir = self.script_dir.parent / "achievements" / "games"
         
         # Debug: Log what paths we're checking
-        print(f"DEBUG: script_dir = {self.script_dir}")
-        print(f"DEBUG: achievements_dir = {self.achievements_dir}")
-        print(f"DEBUG: achievements_dir exists = {self.achievements_dir.exists()}")
+        log_event(logging.DEBUG, "startup_paths", script_dir=str(self.script_dir))
+        log_event(logging.DEBUG, "startup_paths", achievements_dir=str(self.achievements_dir))
+        log_event(logging.DEBUG, "startup_paths", achievements_exists=self.achievements_dir.exists())
         
         # If achievements not found, try same directory (for packaged .exe)
         if not self.achievements_dir.exists():
@@ -1377,8 +1394,8 @@ class PokeAchieveGUI:
             try:
                 with open(self.config_file, 'r') as f:
                     return json.load(f)
-            except:
-                pass
+            except (OSError, json.JSONDecodeError, ValueError) as exc:
+                log_event(logging.WARNING, "config_load_failed", file=str(self.config_file), error=str(exc))
         return {}
     
     def _save_config(self):
@@ -1386,8 +1403,8 @@ class PokeAchieveGUI:
         try:
             with open(self.config_file, 'w') as f:
                 json.dump(self.config, f, indent=2)
-        except:
-            pass
+        except OSError as exc:
+            log_event(logging.WARNING, "config_save_failed", file=str(self.config_file), error=str(exc))
     
     def _build_ui(self):
         """Build the user interface"""
@@ -1596,10 +1613,10 @@ class PokeAchieveGUI:
         """Load achievements for detected game"""
         # Strip ROM hack suffixes like "(Enhanced)" for matching
         clean_name = re.sub(r'\([^)]*\)', '', game_name).strip()
-        print(f"[DEBUG] Loading achievements for: {game_name}")
-        print(f"[DEBUG] Cleaned name: {clean_name}")
-        print(f"[DEBUG] Achievements dir: {self.achievements_dir}")
-        print(f"[DEBUG] Achievements dir exists: {self.achievements_dir.exists()}")
+        log_event(logging.INFO, "load_achievements_start", game=game_name)
+        log_event(logging.DEBUG, "load_achievements_clean_name", clean_name=clean_name)
+        log_event(logging.DEBUG, "load_achievements_dir", path=str(self.achievements_dir))
+        log_event(logging.DEBUG, "load_achievements_dir_exists", exists=self.achievements_dir.exists())
         game_map = {
             "Pokemon Red": "pokemon_red.json",
             "Pokemon Blue": "pokemon_blue.json",
@@ -1616,29 +1633,29 @@ class PokeAchieveGUI:
         achievement_file = None
         display_name = None
         clean_lower = clean_name.lower()
-        print(f"[DEBUG] Cleaned name (lower): {clean_lower}")
+        log_event(logging.DEBUG, "load_achievements_clean_lower", clean_lower=clean_lower)
         for key, filename in game_map.items():
             key_lower = key.lower()
-            print(f"[DEBUG] Checking if '{key_lower}' in '{clean_lower}'")
+            log_event(logging.DEBUG, "load_achievements_match_check", key=key_lower, candidate=clean_lower)
             # Check if key is in cleaned name (handles "pokemon emerald" in "pokemon - emerald version playing")
             if key_lower in clean_lower:
                 achievement_file = self.achievements_dir / filename
                 display_name = key
-                print(f"[DEBUG] MATCH FOUND: {key} -> {filename}")
+                log_event(logging.INFO, "load_achievements_match", game=key, file=filename)
                 break
             # Also try matching individual words (e.g., "emerald" matches)
             key_words = key_lower.replace("pokemon ", "")
             if key_words in clean_lower:
                 achievement_file = self.achievements_dir / filename
                 display_name = key
-                print(f"[DEBUG] MATCH FOUND (word match): {key} -> {filename}")
+                log_event(logging.INFO, "load_achievements_word_match", game=key, file=filename)
                 break
         
-        print(f"[DEBUG] Looking for match in: {clean_name.lower()}")
+        log_event(logging.DEBUG, "load_achievements_match_scan", candidate=clean_name.lower())
         for key, filename in game_map.items():
-            print(f"[DEBUG] Checking if '{key.lower()}' in '{clean_name.lower()}'")
-        print(f"[DEBUG] Achievement file: {achievement_file}")
-        print(f"[DEBUG] Achievement file exists: {achievement_file.exists() if achievement_file else False}")
+            log_event(logging.DEBUG, "load_achievements_scan_item", key=key.lower(), candidate=clean_name.lower())
+        log_event(logging.DEBUG, "load_achievements_file", file=str(achievement_file) if achievement_file else None)
+        log_event(logging.DEBUG, "load_achievements_file_exists", exists=achievement_file.exists() if achievement_file else False)
         if achievement_file and achievement_file.exists():
             if self.tracker.load_game(display_name, achievement_file):
                 self.tracker.load_progress(self.progress_file)
@@ -1832,7 +1849,7 @@ class PokeAchieveGUI:
     
     def _sync_collection_to_api(self, catches: List[int], party: List[Dict], game: str) -> bool:
         """Sync collection data to PokeAchieve API"""
-        print(f"[COLLECTION SYNC] Starting sync for {len(catches)} catches, {len(party)} party members")
+        log_event(logging.INFO, "collection_sync_start", catches=len(catches), party=len(party), game=game)
         
         if not catches and not party:
             print("[COLLECTION SYNC] Nothing to sync")
@@ -1850,10 +1867,10 @@ class PokeAchieveGUI:
                 "game_id": self.tracker.GAME_IDS.get(game, 0)
             }
             batch.append(entry)
-            print(f"[COLLECTION SYNC] Adding to batch: {entry}")
+            log_event(logging.DEBUG, "collection_sync_batch_item", entry=entry)
         
         if batch:
-            print(f"[COLLECTION SYNC] Sending batch of {len(batch)} to API...")
+            log_event(logging.INFO, "collection_sync_batch_send", count=len(batch))
             success, data = self.api.post_collection_batch(batch)
             if success:
                 self._threadsafe_log(f"Synced {len(batch)} Pokemon to collection", "api")
@@ -1866,7 +1883,7 @@ class PokeAchieveGUI:
         
         # Update party
         for member in party:
-            print(f"[COLLECTION SYNC] Updating party slot {member.get('slot')}: Pokemon {member['id']}")
+            log_event(logging.DEBUG, "collection_sync_party_update", slot=member.get("slot"), pokemon_id=member["id"])
             success, data = self.api.post_party_update(
                 member["id"],
                 True,
@@ -1935,7 +1952,7 @@ class PokeAchieveGUI:
         
         try:
             self.root.bell()
-        except:
+        except tk.TclError:
             pass
     
     def _update_progress(self):
