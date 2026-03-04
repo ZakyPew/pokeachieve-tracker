@@ -1735,6 +1735,11 @@ class PokeAchieveGUI:
 
     def _start_api_worker(self):
         """Start a single API worker to process queued sync jobs sequentially."""
+        if not hasattr(self, "_api_worker_thread"):
+            self._api_worker_thread = None
+        if not hasattr(self, "_api_worker_stop"):
+            self._api_worker_stop = threading.Event()
+
         if not (self.api and self.config.get("api_sync", True)):
             return
 
@@ -1766,6 +1771,8 @@ class PokeAchieveGUI:
 
     def _stop_api_worker(self):
         """Signal API worker to stop; leaves queued items for next start."""
+        if not hasattr(self, "_api_worker_stop"):
+            self._api_worker_stop = threading.Event()
         self._api_worker_stop.set()
 
     def _process_api_item(self, item: Dict) -> bool:
