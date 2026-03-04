@@ -184,11 +184,8 @@ class PokeAchieveAPI:
         return None
 
     def test_auth(self) -> tuple[bool, str]:
-        """Test API key authentication"""
-        success, data = self._request("GET", "/api/users/me")
-        if not success:
-            # Backwards compatibility with legacy backend route
-            success, data = self._request("GET", "/users/me")
+        """Test API key authentication using tracker test endpoint"""
+        success, data = self._request("POST", "/api/tracker/test")
         if success:
             return True, data.get("message", "Authentication successful")
         return False, data.get("error", "Authentication failed")
@@ -211,22 +208,22 @@ class PokeAchieveAPI:
             if resolved is not None:
                 live_achievement_id = resolved
 
-        live_payload = {
+        payload = {
             "game_id": game_id,
             "achievement_id": live_achievement_id,
             "current_value": 1,
             "unlocked": True,
         }
-        legacy_payload = {
-            "game_id": game_id,
-            "achievement_id": achievement_id,
-            "achievement_name": achievement_name,
-            "unlocked_at": datetime.now().isoformat()
-        }
         success, data = self._request("POST", "/api/tracker/unlock", payload)
         if not success:
             # Backwards compatibility with legacy backend route
-            return self._request("POST", "/progress/update", payload)
+            legacy_payload = {
+                "game_id": game_id,
+                "achievement_id": achievement_id,
+                "achievement_name": achievement_name,
+                "unlocked_at": datetime.now().isoformat()
+            }
+            return self._request("POST", "/progress/update", legacy_payload)
         return success, data
     
     # Pokemon Collection API Methods
@@ -252,6 +249,21 @@ class PokeAchieveAPI:
         if not success:
             # Backwards compatibility with legacy backend route
             return self._request("POST", "/collection/party", payload)
+        return success, data
+
+    def get_collection(self) -> tuple[bool, dict]:
+        """Get tracker-style collection summary (total_caught, total_shiny, completion_percentage, collection, party)"""
+        success, data = self._request("GET", "/api/collection")
+        if success:
+            return True, data
+        return False, data
+
+    def post_collection_update(self, pokemon_data: Dict) -> tuple[bool, dict]:
+        """Update a single Pokemon entry (supports caught_at parsing)"""
+        success, data = self._request("POST", "/api/collection/update", pokemon_data)
+        if not success:
+            # Backwards compatibility with legacy backend route
+            return self._request("POST", "/collection/update", pokemon_data)
         return success, data
 
 
