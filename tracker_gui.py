@@ -60,18 +60,26 @@ class Pokemon:
 class PokeAchieveAPI:
     """Client for PokeAchieve platform API"""
     
-    def __init__(self, base_url: str = "https://pokeachieve.com/api", api_key: str = ""):
+    def __init__(self, base_url: str = "https://pokeachieve.com", api_key: str = ""):
         self.base_url = base_url.rstrip("/")
-        self.api_key = api_key
         self.api_key = api_key.strip() if api_key else ""
         self.headers = {
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.api_key}"
+            "User-Agent": "PokeAchieveTracker/1.0"
         }
+        if self.api_key:
+            self.headers["Authorization"] = f"Bearer {self.api_key}"
+
+    def _make_url(self, endpoint: str) -> str:
+        if endpoint.startswith("http://") or endpoint.startswith("https://"):
+            return endpoint
+        if not endpoint.startswith("/"):
+            endpoint = f"/{endpoint}"
+        return f"{self.base_url}{endpoint}"
     
     def _request(self, method: str, endpoint: str, data: dict = None) -> tuple[bool, dict]:
         """Make API request and return (success, response_data)"""
-        url = f"{self.base_url}{endpoint}"
+        url = self._make_url(endpoint)
         print(f"[API REQUEST] {method} {url}")
         try:
             req = urllib.request.Request(
@@ -100,14 +108,20 @@ class PokeAchieveAPI:
     
     def test_auth(self) -> tuple[bool, str]:
         """Test API key authentication"""
-        success, data = self._request("GET", "/users/me")
+        success, data = self._request("GET", "/api/users/me")
+        if not success:
+            # Backwards compatibility with legacy backend route
+            success, data = self._request("GET", "/users/me")
         if success:
             return True, data.get("message", "Authentication successful")
         return False, data.get("error", "Authentication failed")
     
     def get_progress(self, game_id: int) -> tuple[bool, list]:
         """Get user's progress for a game"""
-        success, data = self._request("GET", f"/users/me/achievements")
+        success, data = self._request("GET", f"/api/tracker/progress/{game_id}")
+        if not success:
+            # Backwards compatibility with legacy backend route
+            success, data = self._request("GET", "/users/me/achievements")
         if success:
             return True, data.get("unlocked_achievement_ids", [])
         return False, []
@@ -119,15 +133,23 @@ class PokeAchieveAPI:
             "achievement_id": achievement_id,
             "unlocked_at": datetime.now().isoformat()
         }
-        return self._request("POST", "/progress/update", payload)
+        success, data = self._request("POST", "/api/tracker/unlock", payload)
+        if not success:
+            # Backwards compatibility with legacy backend route
+            return self._request("POST", "/progress/update", payload)
+        return success, data
     
     # Pokemon Collection API Methods
     def post_collection_batch(self, pokemon_list: List[Dict]) -> tuple[bool, dict]:
         """Post batch of Pokemon collection updates"""
-        return self._request("POST", "/collection/batch-update", pokemon_list)
+        success, data = self._request("POST", "/api/collection/batch-update", pokemon_list)
+        if not success:
+            # Backwards compatibility with legacy backend route
+            return self._request("POST", "/collection/batch-update", pokemon_list)
+        return success, data
 
     def start_session(self, game_id: int) -> tuple[bool, dict]:
-        return self._request("POST", "/sessions/start", {"game_id": game_id})
+        return self._request("POST", "/api/sessions/start", {"game_id": game_id})
     
     def post_party_update(self, pokemon_id: int, in_party: bool, party_slot: int = None) -> tuple[bool, dict]:
         """Update party status for a Pokemon"""
@@ -136,12 +158,31 @@ class PokeAchieveAPI:
             "in_party": in_party,
             "party_slot": party_slot
         }
-        return self._request("POST", "/collection/party", payload)
+        success, data = self._request("POST", "/api/collection/party", payload)
+        if not success:
+            # Backwards compatibility with legacy backend route
+            return self._request("POST", "/collection/party", payload)
+        return success, data
 
 
 class RetroArchClient:
     """Client for connecting to RetroArch network command interface"""
     
+    GAME_ALIASES: Dict[str, str] = {
+        "pokemon red": "Pokemon Red",
+        "pokemon blue": "Pokemon Blue",
+        "pokemon yellow": "Pokemon Yellow",
+        "pokemon gold": "Pokemon Gold",
+        "pokemon silver": "Pokemon Silver",
+        "pokemon crystal": "Pokemon Crystal",
+        "pokemon ruby": "Pokemon Ruby",
+        "pokemon sapphire": "Pokemon Sapphire",
+        "pokemon emerald": "Pokemon Emerald",
+        "pokemon firered": "Pokemon FireRed",
+        "pokemon fire red": "Pokemon FireRed",
+        "pokemon leafgreen": "Pokemon LeafGreen",
+        "pokemon leaf green": "Pokemon LeafGreen",
+    }
     def __init__(self, host: str = "127.0.0.1", port: int = 55355):
         self.host = host
         self.port = port
@@ -188,10 +229,23 @@ class RetroArchClient:
                 self.connected = False
                 return None
     
+    def _normalize_game_name(self, raw_text: str) -> Optional[str]:
+        normalized = re.sub(r"[^a-z0-9]+", " ", raw_text.lower()).strip()
+        for alias, canonical in self.GAME_ALIASES.items():
+            if alias in normalized:
+                return canonical
+        return None
+
     def get_current_game(self) -> Optional[str]:
         """Get name of currently loaded game from GET_STATUS"""
         response = self.send_command("GET_STATUS")
         print(f"[DEBUG] RetroArch GET_STATUS response: {response}")
+        if response:
+            normalized = self._normalize_game_name(response)
+            if normalized:
+                print(f"[DEBUG] Normalized game from status: {normalized}")
+                return normalized
+
         if response and response.startswith("GET_STATUS"):
             # Parse: GET_STATUS PAUSED game_boy,Pokemon Red(Enhanced),crc32=...
             # Handle game names with commas like "Pokemon - Emerald Version (USA, Europe)"
@@ -212,7 +266,11 @@ class RetroArchClient:
                     game_name = re.sub(r"\s*\(USA, Europe\)", "", game_name)
                     game_name = re.sub(r" - (.*) Version", r" \1", game_name)
                     game_name = game_name.strip()
-                    print(f"[DEBUG] Detected game: {game_name}")
+                    normalized = self._normalize_game_name(game_name)
+                    if normalized:
+                        print(f"[DEBUG] Detected game: {normalized}")
+                        return normalized
+                    print(f"[DEBUG] Detected game (raw): {game_name}")
                     return game_name
             except Exception as e:
                 print(f"[DEBUG] Error parsing game name: {e}")
@@ -1293,7 +1351,7 @@ class PokeAchieveGUI:
         self.api = None
         if self.config.get("api_key"):
             self.api = PokeAchieveAPI(
-                base_url=self.config.get("api_url", "https://pokeachieve.com/api"),
+                base_url=self.config.get("api_url", "https://pokeachieve.com"),
                 api_key=self.config["api_key"]
             )
         self.tracker = AchievementTracker(self.retroarch, self.api)
@@ -1303,6 +1361,12 @@ class PokeAchieveGUI:
         self.status_check_interval = 3000
         self.poll_interval = self.config.get("poll_interval", 2000)
         self.api_sync_enabled = self.config.get("api_sync", True)
+        self._status_check_in_flight = False
+        self._max_log_lines = 500
+        self._max_recent_lines = 200
+        self._max_catch_lines = 200
+        self._api_worker_thread: Optional[threading.Thread] = None
+        self._api_worker_stop = threading.Event()
         
         self._build_ui()
         self._start_status_check()
@@ -1449,6 +1513,12 @@ class PokeAchieveGUI:
         )
         self.log_text.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
     
+    def _trim_scrolled_text(self, widget: scrolledtext.ScrolledText, max_lines: int):
+        """Keep text widgets fast by trimming old lines."""
+        line_count = int(widget.index('end-1c').split('.')[0])
+        if line_count > max_lines:
+            widget.delete('1.0', f"{line_count - max_lines + 1}.0")
+
     def _log(self, message: str, level: str = "info"):
         """Add message to log"""
         timestamp = datetime.now().strftime("%H:%M:%S")
@@ -1456,37 +1526,61 @@ class PokeAchieveGUI:
         
         self.log_text.configure(state='normal')
         self.log_text.insert('end', f"[{timestamp}] {prefix} {message}\n")
+        self._trim_scrolled_text(self.log_text, self._max_log_lines)
         self.log_text.see('end')
         self.log_text.configure(state='disabled')
     
     def _start_status_check(self):
         """Start periodic status check"""
         self._check_status()
-    
-    def _check_status(self):
-        """Check RetroArch connection and game status"""
-        # Check RetroArch
+
+    def _run_status_probe(self) -> Dict:
+        """Run network status checks outside the Tk main thread."""
         ra_connected = self.retroarch.connected
         if not ra_connected:
             ra_connected = self.retroarch.connect()
-        
-        if ra_connected:
-            self.ra_status_label.configure(text="RetroArch: Connected ✓")
-            self._detect_game()
-        else:
-            self.ra_status_label.configure(text="RetroArch: Disconnected")
-        
-        # Check API
-        if self.api:
-            self.api_status_label.configure(text="API: Connected ✓")
-        else:
-            self.api_status_label.configure(text="API: Not configured")
-        
-        self.root.after(self.status_check_interval, self._check_status)
+
+        game_name = self.retroarch.get_current_game() if ra_connected else None
+        return {
+            "ra_connected": ra_connected,
+            "game_name": game_name,
+            "api_configured": bool(self.api),
+        }
+
+    def _check_status(self):
+        """Check RetroArch connection and game status without freezing the UI."""
+        if self._status_check_in_flight:
+            self.root.after(self.status_check_interval, self._check_status)
+            return
+
+        self._status_check_in_flight = True
+
+        def worker():
+            status = self._run_status_probe()
+            self.root.after(0, lambda: self._apply_status_probe(status))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _apply_status_probe(self, status: Dict):
+        """Apply async status results on the Tk main thread."""
+        try:
+            if status.get("ra_connected"):
+                self.ra_status_label.configure(text="RetroArch: Connected ✓")
+                self._detect_game(status.get("game_name"))
+            else:
+                self.ra_status_label.configure(text="RetroArch: Disconnected")
+
+            if status.get("api_configured"):
+                self.api_status_label.configure(text="API: Connected ✓")
+            else:
+                self.api_status_label.configure(text="API: Not configured")
+        finally:
+            self._status_check_in_flight = False
+            self.root.after(self.status_check_interval, self._check_status)
     
-    def _detect_game(self):
+    def _detect_game(self, detected_game_name: Optional[str] = None):
         """Detect which game is loaded"""
-        game_name = self.retroarch.get_current_game()
+        game_name = detected_game_name or self.retroarch.get_current_game()
         
         if game_name:
             # If game changed, load new achievements
@@ -1566,14 +1660,10 @@ class PokeAchieveGUI:
             if not game_id:
                 return
             
-            success, data = self.api.get_progress(game_id)
-            if success and data and isinstance(data, dict):
-                server_unlocked = set(data.get('unlocked_achievement_ids', []))
-                local_unlocked = set(a.id for a in self.tracker.achievements if a.unlocked)
-                
-                # Merge: take union (never remove)
-                all_unlocked = server_unlocked | local_unlocked
-                
+            success, unlocked_ids = self.api.get_progress(game_id)
+            if success:
+                server_unlocked = set(unlocked_ids or [])
+
                 # Update local achievements to include server ones
                 newly_added = 0
                 for ach in self.tracker.achievements:
@@ -1581,14 +1671,12 @@ class PokeAchieveGUI:
                         ach.unlocked = True
                         ach.unlocked_at = datetime.now()
                         newly_added += 1
-                
+
                 if newly_added > 0:
                     self._log(f"Synced {newly_added} achievements from website", "info")
                     self.tracker.save_progress(self.progress_file)
         except Exception as e:
             self._log(f"Could not sync with website: {e}", "warning")
-        else:
-            self.game_label.configure(text=f"Game: {game_name} (No achievements)")
     
     def _start_tracking(self):
         """Start achievement and collection tracking"""
@@ -1604,16 +1692,17 @@ class PokeAchieveGUI:
         self.tracker.start_polling(self.poll_interval)
         self.start_btn.configure(state='disabled')
         self.stop_btn.configure(state='normal')
+        self._start_api_worker()
         self._log("Tracking started - Monitoring achievements and Pokemon collection", "success")
         
         # Start processing queues
         self._check_unlocks()
-        self._process_api_queue()
         self._process_collection_updates()
     
     def _stop_tracking(self):
         """Stop tracking"""
         self.is_running = False
+        self._stop_api_worker()
         self.tracker.stop_polling()
         self.start_btn.configure(state='normal')
         self.stop_btn.configure(state='disabled')
@@ -1640,38 +1729,69 @@ class PokeAchieveGUI:
         
         self.root.after(2000, self._check_unlocks)
     
-    def _process_api_queue(self):
-        """Process API post queue"""
-        if not self.is_running:
+    def _threadsafe_log(self, message: str, level: str = "info"):
+        """Schedule log writes from worker threads safely onto Tk main loop."""
+        self.root.after(0, lambda: self._log(message, level))
+
+    def _start_api_worker(self):
+        """Start a single API worker to process queued sync jobs sequentially."""
+        if not (self.api and self.config.get("api_sync", True)):
             return
-        
-        if self.api and self.config.get("api_sync", True):
-            while not self.tracker._api_queue.empty():
+
+        if self._api_worker_thread and self._api_worker_thread.is_alive():
+            return
+
+        self._api_worker_stop.clear()
+
+        def worker():
+            while not self._api_worker_stop.is_set():
                 try:
-                    item = self.tracker._api_queue.get_nowait()
-                    
-                    if item["type"] == "achievement":
-                        ach = item["achievement"]
-                        def post_ach(a=ach):
-                            success, data = self.api.post_unlock(self.tracker.game_id, a.id)
-                            if success:
-                                self._log(f"Posted unlock to platform: {a.name}", "api")
-                            else:
-                                self._log(f"Failed to post unlock: {data.get('error', 'Unknown error')}", "error")
-                        threading.Thread(target=post_ach, daemon=True).start()
-                    
-                    elif item["type"] == "collection":
-                        catches = item["catches"]
-                        party = item["party"]
-                        game = item["game"]
-                        def post_collection():
-                            self._sync_collection_to_api(catches, party, game)
-                        threading.Thread(target=post_collection, daemon=True).start()
-                    
+                    item = self.tracker._api_queue.get(timeout=0.5)
                 except queue.Empty:
-                    break
-        
-        self.root.after(3000, self._process_api_queue)
+                    continue
+
+                success = self._process_api_item(item)
+                if not success and not self._api_worker_stop.is_set():
+                    retries = item.get("retries", 0)
+                    if retries < 3:
+                        item["retries"] = retries + 1
+                        backoff_seconds = 2 ** retries
+                        time.sleep(backoff_seconds)
+                        self.tracker._api_queue.put(item)
+
+                self.tracker._api_queue.task_done()
+
+        self._api_worker_thread = threading.Thread(target=worker, daemon=True)
+        self._api_worker_thread.start()
+
+    def _stop_api_worker(self):
+        """Signal API worker to stop; leaves queued items for next start."""
+        self._api_worker_stop.set()
+
+    def _process_api_item(self, item: Dict) -> bool:
+        """Post one queued API update. Returns True when delivered."""
+        if not self.api:
+            return True
+
+        item_type = item.get("type")
+        if item_type == "achievement":
+            ach = item.get("achievement")
+            if not ach or not self.tracker.game_id:
+                return True
+            success, data = self.api.post_unlock(self.tracker.game_id, ach.id)
+            if success:
+                self._threadsafe_log(f"Posted unlock to platform: {ach.name}", "api")
+                return True
+            self._threadsafe_log(f"Failed to post unlock: {data.get('error', 'Unknown error')}", "error")
+            return False
+
+        if item_type == "collection":
+            catches = item.get("catches", [])
+            party = item.get("party", [])
+            game = item.get("game", "")
+            return self._sync_collection_to_api(catches, party, game)
+
+        return True
     
     def _process_collection_updates(self):
         """Process collection updates from memory reading"""
@@ -1703,13 +1823,13 @@ class PokeAchieveGUI:
         
         self.root.after(2000, self._process_collection_updates)
     
-    def _sync_collection_to_api(self, catches: List[int], party: List[Dict], game: str):
+    def _sync_collection_to_api(self, catches: List[int], party: List[Dict], game: str) -> bool:
         """Sync collection data to PokeAchieve API"""
         print(f"[COLLECTION SYNC] Starting sync for {len(catches)} catches, {len(party)} party members")
         
         if not catches and not party:
             print("[COLLECTION SYNC] Nothing to sync")
-            return
+            return True
         
         # Build batch update for new catches
         batch = []
@@ -1729,12 +1849,13 @@ class PokeAchieveGUI:
             print(f"[COLLECTION SYNC] Sending batch of {len(batch)} to API...")
             success, data = self.api.post_collection_batch(batch)
             if success:
-                self._log(f"Synced {len(batch)} Pokemon to collection", "api")
+                self._threadsafe_log(f"Synced {len(batch)} Pokemon to collection", "api")
                 print(f"[COLLECTION SYNC] Success: {data}")
             else:
                 error_msg = data.get('error', 'Unknown error')
-                self._log(f"Failed to sync collection: {error_msg}", "error")
+                self._threadsafe_log(f"Failed to sync collection: {error_msg}", "error")
                 print(f"[COLLECTION SYNC] Failed: {error_msg}")
+                return False
         
         # Update party
         for member in party:
@@ -1745,11 +1866,14 @@ class PokeAchieveGUI:
                 member.get("slot")
             )
             if success:
-                self._log(f"Updated party: {member['id']} in slot {member.get('slot')}", "api")
+                self._threadsafe_log(f"Updated party: {member['id']} in slot {member.get('slot')}", "api")
             else:
                 error_msg = data.get('error', 'Unknown error')
-                self._log(f"Failed to update party: {error_msg}", "error")
+                self._threadsafe_log(f"Failed to update party: {error_msg}", "error")
+                return False
     
+        return True
+
     def _get_pokemon_name(self, pokemon_id: int) -> str:
         """Get Pokemon name from ID"""
         if self.tracker and self.tracker.pokemon_reader:
@@ -1763,6 +1887,7 @@ class PokeAchieveGUI:
         timestamp = datetime.now().strftime("%H:%M:%S")
         game_info = f" [{game}]" if game else ""
         self.catches_list.insert('1.0', f"[{timestamp}] ✓ Caught {pokemon_name} (#{pokemon_id}){game_info}!\n")
+        self._trim_scrolled_text(self.catches_list, self._max_catch_lines)
         self.catches_list.configure(state='disabled')
     
     def _update_party_display(self, party: List[Dict], game: str = ""):
@@ -1796,6 +1921,7 @@ class PokeAchieveGUI:
         rarity_emoji = {"common": "⚪", "uncommon": "🟢", "rare": "🔵", "epic": "🟣", "legendary": "🟠"}.get(achievement.rarity, "⚪")
         
         self.recent_list.insert('1.0', f"[{timestamp}] {rarity_emoji} {achievement.name}\n")
+        self._trim_scrolled_text(self.recent_list, self._max_recent_lines)
         self.recent_list.configure(state='disabled')
         
         self.tracker.save_progress(self.progress_file)
@@ -1826,6 +1952,9 @@ class PokeAchieveGUI:
         
         if confirm:
             try:
+                if self.is_running:
+                    self._stop_tracking()
+
                 # Clear progress file
                 if self.progress_file.exists():
                     self.progress_file.unlink()
@@ -1835,9 +1964,19 @@ class PokeAchieveGUI:
                     self.config_file.unlink()
                 
                 # Clear tracker state
-                self.tracker.unlocked_achievements.clear()
-                self.tracker.unlock_times.clear()
-                
+                self.tracker.achievements = []
+                self.tracker.game_name = None
+                self.tracker.game_id = None
+                self.tracker._last_party = []
+                self.tracker._last_pokedex = []
+
+                self.game_label.configure(text="Game: None")
+                self.progress_label.configure(text="0/0 (0%) - 0/0 pts")
+                self.progress_bar["value"] = 0
+                self.collection_label.configure(text="Caught: 0 | Shiny: 0 | Party: 0")
+                self.party_display.configure(text="No party data yet - start tracking to see your Pokemon!")
+
+                self._threadsafe_log("Local app data cleared", "info")
                 msgbox.showinfo("Success", "App data cleared! Restart the tracker to start fresh.")
                 
             except Exception as e:
@@ -1846,34 +1985,26 @@ class PokeAchieveGUI:
     def _sync_with_server(self):
         """Sync achievements with PokeAchieve.com server"""
         import tkinter.messagebox as msgbox
-        
+
         if not self.api:
             msgbox.showwarning("Not Connected", 
                 "No API key configured. Go to Settings → API to add your API key.")
             return
-        
+
+        if not self.tracker.game_id:
+            msgbox.showwarning("No Game", "Load a supported Pokemon game before syncing progress.")
+            return
+
         try:
-            # Fetch achievements from server
-            success, data = self.api._request("GET", "/users/me/achievements")
-            if success:
-                server_achievements = data if isinstance(data, list) else data.get('achievements', [])
-                
-                # Update local tracker
-                for ach in server_achievements:
-                    if isinstance(ach, dict) and ach.get('unlocked'):
-                        self.tracker.unlocked_achievements.add(ach.get('id') or ach.get('achievement_id'))
-                
-                # Save to local file
-                self._save_progress()
-                
-                msgbox.showinfo("Sync Complete", 
-                    f"Synced {len(server_achievements)} achievements from server!")
-                
-                # Refresh display
-                self._update_achievements_display()
-            else:
-                msgbox.showerror("Sync Failed", f"Server error: {data.get('detail', 'Unknown error')}")
-                
+            newly_synced, errors = self.tracker.sync_with_platform()
+            if errors:
+                msgbox.showerror("Sync Failed", "Could not fetch progress from server.")
+                return
+
+            self.tracker.save_progress(self.progress_file)
+            self._update_progress()
+            self._threadsafe_log(f"Synced {newly_synced} achievements from server", "api")
+            msgbox.showinfo("Sync Complete", f"Synced {newly_synced} achievements from server!")
         except Exception as e:
             msgbox.showerror("Sync Error", f"Failed to sync: {e}")
     
@@ -1892,7 +2023,7 @@ class PokeAchieveGUI:
         
         ttk.Label(api_frame, text="Platform URL:").grid(row=0, column=0, sticky="w", pady=5)
         url_entry = ttk.Entry(api_frame)
-        url_entry.insert(0, self.config.get("api_url", "https://pokeachieve.com/api"))
+        url_entry.insert(0, self.config.get("api_url", "https://pokeachieve.com"))
         url_entry.grid(row=0, column=1, sticky="ew", padx=(10, 0), pady=5)
         
         ttk.Label(api_frame, text="API Key:").grid(row=1, column=0, sticky="w", pady=5)
@@ -1917,7 +2048,13 @@ class PokeAchieveGUI:
             if self.config["api_key"]:
                 self.api = PokeAchieveAPI(self.config["api_url"], self.config["api_key"])
                 self.tracker.api = self.api
-            
+                if self.is_running:
+                    self._start_api_worker()
+            else:
+                self.api = None
+                self.tracker.api = None
+                self._stop_api_worker()
+
             self._save_config()
             self._log("Settings saved")
             dialog.destroy()
