@@ -4,7 +4,7 @@ Connects to RetroArch and syncs achievements + Pokemon collection to PokeAchieve
 """
 
 import tkinter as tk
-from tkinter import ttk, scrolledtext, messagebox, simpledialog
+from tkinter import ttk, scrolledtext, messagebox, simpledialog, filedialog
 import socket
 import json
 import time
@@ -19,6 +19,7 @@ import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Callable, Tuple
 from datetime import datetime
+from hashlib import sha256
 from dataclasses import dataclass, asdict
 
 LOGGER = logging.getLogger("pokeachieve_tracker")
@@ -184,10 +185,14 @@ class PokeAchieveAPI:
         return None
 
     def test_auth(self) -> tuple[bool, str]:
-        """Test API key authentication using tracker test endpoint"""
-        success, data = self._request("POST", "/api/tracker/test")
+        """Test API key authentication against authenticated user profile endpoint"""
+        success, data = self._request("GET", "/api/users/me")
+        if not success:
+            success, data = self._request("GET", "/users/me")
+
         if success:
-            return True, data.get("message", "Authentication successful")
+            username = data.get("username") if isinstance(data, dict) else None
+            return True, f"Authenticated as {username}" if username else "Authentication successful"
         return False, data.get("error", "Authentication failed")
     
     def get_progress(self, game_id: int) -> tuple[bool, list]:
@@ -470,44 +475,46 @@ class PokemonMemoryReader:
         "pokemon_ruby": {
             "gen": 3,
             "max_pokemon": 386,
-            "pokedex_flags": "0x202F900",
-            "party_count": "0x20244E0",
-            "party_start": "0x20244E8",
+            "pokedex_seen": "0x02024C0C",
+            "pokedex_caught": "0x02024D0C",
+            "party_count": "0x02024284",
+            "party_start": "0x02024284",
             "party_slot_size": 100,
         },
         "pokemon_sapphire": {
             "gen": 3,
             "max_pokemon": 386,
-            "pokedex_flags": "0x202F900",
-            "party_count": "0x20244E0",
-            "party_start": "0x20244E8",
+            "pokedex_seen": "0x02024C0C",
+            "pokedex_caught": "0x02024D0C",
+            "party_count": "0x02024284",
+            "party_start": "0x02024284",
             "party_slot_size": 100,
         },
         "pokemon_emerald": {
             "gen": 3,
             "max_pokemon": 386,
-            "pokedex_seen": "0x202F900",
-            "pokedex_caught": "0x202F900",  # TODO: Find correct caught address for Gen 3
-            "party_count": "0x20244E0",
-            "party_start": "0x20244E8",
+            "pokedex_seen": "0x02024C0C",
+            "pokedex_caught": "0x02024D0C",
+            "party_count": "0x02024284",
+            "party_start": "0x02024284",
             "party_slot_size": 100,
         },
         "pokemon_firered": {
             "gen": 3,
             "max_pokemon": 386,
-            "pokedex_seen": "0x202F900",
-            "pokedex_caught": "0x202F900",  # TODO: Find correct caught address for Gen 3
-            "party_count": "0x20244E0",
-            "party_start": "0x20244E8",
+            "pokedex_seen": "0x02024C0C",
+            "pokedex_caught": "0x02024D0C",
+            "party_count": "0x02024284",
+            "party_start": "0x02024284",
             "party_slot_size": 100,
         },
         "pokemon_leafgreen": {
             "gen": 3,
             "max_pokemon": 386,
-            "pokedex_seen": "0x202F900",
-            "pokedex_caught": "0x202F900",  # TODO: Find correct caught address for Gen 3
-            "party_count": "0x20244E0",
-            "party_start": "0x20244E8",
+            "pokedex_seen": "0x02024C0C",
+            "pokedex_caught": "0x02024D0C",
+            "party_count": "0x02024284",
+            "party_start": "0x02024284",
             "party_slot_size": 100,
         },
     }
@@ -759,6 +766,27 @@ class PokemonMemoryReader:
         # Fallback to legacy hardcoded addresses
         return self.GAME_ADDRESSES.get(game_key)
     
+    def validate_memory_profile(self, game_name: str) -> Dict[str, object]:
+        """Validate key memory addresses for the selected game."""
+        config = self.get_game_config(game_name)
+        if not config:
+            return {"ok": False, "reason": "missing_config"}
+
+        checks = {
+            "pokedex_caught": config.get("pokedex_caught"),
+            "party_count": config.get("party_count"),
+        }
+        failures = []
+        for key, addr in checks.items():
+            if not addr:
+                failures.append(f"{key}:missing")
+                continue
+            value = self.retroarch.read_memory(addr)
+            if value is None:
+                failures.append(f"{key}:unreadable")
+
+        return {"ok": len(failures) == 0, "failures": failures, "checks": checks}
+
     def read_pokedex(self, game_name: str) -> List[int]:
         """Read Pokedex CAUGHT flags - returns list of CAUGHT Pokemon IDs (not seen!)"""
         config = self.get_game_config(game_name)
@@ -869,8 +897,36 @@ class AchievementTracker:
         self._collection_queue: queue.Queue = queue.Queue()
         self._last_party: List[Dict] = []
         self._last_pokedex: List[int] = []
+        self._collection_baseline_initialized = False
+        self._unlock_streaks: Dict[str, int] = {}
+        self._bad_read_streak = 0
         self._derived_checker: Optional[DerivedAchievementChecker] = None
     
+    def _get_validation_profile(self) -> Dict[str, int]:
+        """Per-game validation thresholds used for read-confidence checks."""
+        gen = 1
+        if self.game_name and self.pokemon_reader:
+            cfg = self.pokemon_reader.get_game_config(self.game_name)
+            if cfg:
+                gen = int(cfg.get("gen", 1))
+
+        by_gen = {
+            1: {"max_unlocks_per_poll": 3, "max_new_catches_per_poll": 5},
+            2: {"max_unlocks_per_poll": 3, "max_new_catches_per_poll": 5},
+            3: {"max_unlocks_per_poll": 4, "max_new_catches_per_poll": 6},
+        }
+        return by_gen.get(gen, by_gen[1])
+
+    def _handle_bad_read(self, reason: str):
+        """Track repeated suspicious reads and attempt lightweight auto-recovery."""
+        self._bad_read_streak += 1
+        log_event(logging.WARNING, "memory_read_suspicious", game=self.game_name, reason=reason, streak=self._bad_read_streak)
+        if self._bad_read_streak >= 3:
+            log_event(logging.WARNING, "memory_read_reconnect", game=self.game_name)
+            self.retroarch.disconnect()
+            self.retroarch.connect()
+            self._bad_read_streak = 0
+
     def load_game(self, game_name: str, achievements_file: Path) -> bool:
         """Load achievements for a specific game"""
         try:
@@ -892,7 +948,15 @@ class AchievementTracker:
             
             self.game_name = game_name
             self.game_id = self.GAME_IDS.get(game_name)
-            
+            self._last_party = []
+            self._last_pokedex = []
+            self._collection_baseline_initialized = False
+            self._unlock_streaks = {}
+            self._bad_read_streak = 0
+
+            validation = self.pokemon_reader.validate_memory_profile(game_name)
+            log_event(logging.INFO, "memory_profile_validation", game=game_name, ok=validation.get("ok"), failures=validation.get("failures", []))
+
             # Initialize derived achievement checker
             if GAME_CONFIGS_AVAILABLE and self.game_name:
                 try:
@@ -957,7 +1021,9 @@ class AchievementTracker:
     def check_achievements(self) -> List[Achievement]:
         """Check all achievements, return newly unlocked ones"""
         newly_unlocked = []
-        
+        profile = self._get_validation_profile()
+        candidates_this_poll = 0
+
         for achievement in self.achievements:
             if achievement.unlocked:
                 continue
@@ -976,11 +1042,21 @@ class AchievementTracker:
                 unlocked = self._check_derived_achievement(achievement)
             
             if unlocked:
-                achievement.unlocked = True
-                achievement.unlocked_at = datetime.now().isoformat()
-                newly_unlocked.append(achievement)
-                self._unlock_queue.put(achievement)
-                self.post_unlock_to_platform(achievement)
+                candidates_this_poll += 1
+                if candidates_this_poll > profile["max_unlocks_per_poll"]:
+                    log_event(logging.WARNING, "unlock_spike_ignored", game=self.game_name, candidates=candidates_this_poll, threshold=profile["max_unlocks_per_poll"])
+                    self._unlock_streaks[achievement.id] = 0
+                    continue
+                self._unlock_streaks[achievement.id] = self._unlock_streaks.get(achievement.id, 0) + 1
+                # Require two consecutive positive polls to avoid transient memory-read false positives.
+                if self._unlock_streaks[achievement.id] >= 2:
+                    achievement.unlocked = True
+                    achievement.unlocked_at = datetime.now().isoformat()
+                    newly_unlocked.append(achievement)
+                    self._unlock_queue.put(achievement)
+                    self.post_unlock_to_platform(achievement)
+            else:
+                self._unlock_streaks[achievement.id] = 0
         
         return newly_unlocked
     
@@ -1294,8 +1370,37 @@ class AchievementTracker:
         # Read current party
         current_party = self.pokemon_reader.read_party(self.game_name)
         
+        # First read after game load/start establishes baseline only
+        if not self._collection_baseline_initialized:
+            self._last_pokedex = current_pokedex
+            self._last_party = current_party
+            self._collection_baseline_initialized = True
+            return
+
+        profile = self._get_validation_profile()
+
+        # Detect suspicious empty reads after we already had a populated baseline.
+        if not current_pokedex and len(self._last_pokedex) >= 10:
+            self._handle_bad_read("empty_pokedex_after_non_empty")
+            return
+
         # Find new catches
         new_catches = [p for p in current_pokedex if p not in self._last_pokedex]
+
+        # Guard against bad memory reads causing impossible bulk catch spikes.
+        if len(new_catches) > profile["max_new_catches_per_poll"]:
+            log_event(
+                logging.WARNING,
+                "collection_spike_ignored",
+                game=self.game_name,
+                spike_count=len(new_catches),
+                threshold=profile["max_new_catches_per_poll"],
+            )
+            self._handle_bad_read("bulk_catch_spike")
+            self._last_pokedex = current_pokedex
+            self._last_party = current_party
+            return
+        self._bad_read_streak = 0
         
         # Find party changes
         party_changes = []
@@ -1319,16 +1424,22 @@ class AchievementTracker:
     def post_unlock_to_platform(self, achievement: Achievement):
         """Queue achievement unlock for API posting"""
         if self.api and self.game_id:
-            self._api_queue.put({"type": "achievement", "achievement": achievement})
+            event_id = f"unlock:{self.game_id}:{achievement.id}"
+            self._api_queue.put({"type": "achievement", "achievement": achievement, "event_id": event_id, "confidence": "high"})
     
     def post_collection_to_platform(self, catches: List[int], party: List[Dict], game: str):
         """Queue collection update for API posting"""
         if self.api:
+            payload_key = json.dumps({"catches": sorted(catches), "party": party, "game": game}, sort_keys=True, default=str)
+            event_id = "collection:" + sha256(payload_key.encode()).hexdigest()[:24]
+            confidence = "high" if len(catches) <= 2 else "medium"
             self._api_queue.put({
                 "type": "collection",
                 "catches": catches,
                 "party": party,
-                "game": game
+                "game": game,
+                "event_id": event_id,
+                "confidence": confidence,
             })
     
     def evaluate_condition(self, value: int, condition: str) -> bool:
@@ -1422,8 +1533,9 @@ class PokeAchieveGUI:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("🎮 PokeAchieve Tracker v1.9")
-        self.root.geometry("900x650")
-        self.root.minsize(700, 450)
+        self.root.geometry("980x700")
+        self.root.minsize(760, 520)
+        self._configure_styles()
         
         # Setup paths
         # Handle both regular Python and PyInstaller frozen .exe
@@ -1452,7 +1564,10 @@ class PokeAchieveGUI:
         self.config = self._load_config()
         
         # Components
-        self.retroarch = RetroArchClient()
+        self.retroarch = RetroArchClient(
+            host=self.config.get("retroarch_host", "127.0.0.1"),
+            port=int(self.config.get("retroarch_port", 55355))
+        )
         self.api = None
         if self.config.get("api_key"):
             self.api = PokeAchieveAPI(
@@ -1472,10 +1587,31 @@ class PokeAchieveGUI:
         self._max_catch_lines = 200
         self._api_worker_thread: Optional[threading.Thread] = None
         self._api_worker_stop = threading.Event()
-        
+        self._api_status_state = "Not configured"
+        self._last_sync_status = "Idle"
+        self.sent_events_file = self.data_dir / "sent_events.json"
+        self._sent_event_ids = self._load_sent_events()
+
         self._build_ui()
         self._start_status_check()
+        self.root.after(250, self._maybe_run_setup_wizard)
     
+    def _configure_styles(self):
+        """Apply a cleaner, modern ttk theme and spacing."""
+        style = ttk.Style(self.root)
+        for theme in ("clam", "vista", "default"):
+            if theme in style.theme_names():
+                style.theme_use(theme)
+                break
+
+        style.configure("TNotebook", tabposition="n")
+        style.configure("TNotebook.Tab", padding=(14, 8), font=("Segoe UI", 10, "bold"))
+        style.configure("TLabel", font=("Segoe UI", 10))
+        style.configure("TButton", font=("Segoe UI", 10), padding=(10, 6))
+        style.configure("Header.TLabel", font=("Segoe UI", 12, "bold"))
+        style.configure("Subtle.TLabel", foreground="#4b5563")
+        style.configure("Primary.TButton", font=("Segoe UI", 10, "bold"), padding=(12, 7))
+
     def _load_config(self) -> dict:
         """Load configuration from file"""
         if self.config_file.exists():
@@ -1494,82 +1630,182 @@ class PokeAchieveGUI:
         except OSError as exc:
             log_event(logging.WARNING, "config_save_failed", file=str(self.config_file), error=str(exc))
     
+    def _load_sent_events(self) -> set[str]:
+        if not self.sent_events_file.exists():
+            return set()
+        try:
+            with open(self.sent_events_file, "r") as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                return set(str(x) for x in data)
+        except (OSError, json.JSONDecodeError, ValueError):
+            pass
+        return set()
+
+    def _save_sent_events(self):
+        try:
+            with open(self.sent_events_file, "w") as f:
+                json.dump(sorted(self._sent_event_ids), f, indent=2)
+        except OSError as exc:
+            log_event(logging.WARNING, "sent_events_save_failed", error=str(exc))
+
+    def _set_api_status(self, state: str):
+        self._api_status_state = state
+        self.api_status_label.configure(text=f"API: {state}")
+
+    def _maybe_run_setup_wizard(self):
+        if self.config.get("setup_completed"):
+            return
+        if not messagebox.askyesno("Setup Wizard", "Run quick setup now? (RetroArch + API)"):
+            return
+
+        host = simpledialog.askstring("RetroArch Host", "RetroArch host:", initialvalue=self.config.get("retroarch_host", "127.0.0.1"), parent=self.root)
+        port = simpledialog.askinteger("RetroArch Port", "RetroArch UDP command port:", initialvalue=int(self.config.get("retroarch_port", 55355)), parent=self.root, minvalue=1, maxvalue=65535)
+        if host and port:
+            self.config["retroarch_host"] = host.strip()
+            self.config["retroarch_port"] = int(port)
+            self.retroarch.host = self.config["retroarch_host"]
+            self.retroarch.port = self.config["retroarch_port"]
+
+        key = simpledialog.askstring("API Key", "Paste API key (optional):", initialvalue=self.config.get("api_key", ""), parent=self.root)
+        if key is not None:
+            self.config["api_key"] = key.strip()
+            if self.config["api_key"]:
+                self.api = PokeAchieveAPI(self.config.get("api_url", "https://pokeachieve.com"), self.config["api_key"])
+                self.tracker.api = self.api
+                self._test_api_connection()
+
+        self.config["setup_completed"] = True
+        self._save_config()
+
+    def _export_diagnostics(self):
+        snapshot = {
+            "generated_at": datetime.now().isoformat(),
+            "retroarch": {"connected": self.retroarch.connected, "host": self.retroarch.host, "port": self.retroarch.port},
+            "game": self.tracker.game_name,
+            "api_status": self._api_status_state,
+            "sync_status": self._last_sync_status,
+            "queue": {
+                "api_pending": self.tracker._api_queue.qsize(),
+                "collection_pending": self.tracker._collection_queue.qsize(),
+                "unlock_pending": self.tracker._unlock_queue.qsize(),
+            },
+            "validation_profile": self.tracker._get_validation_profile() if self.tracker.game_name else None,
+        }
+        default = self.data_dir / f"diagnostics_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        path = filedialog.asksaveasfilename(title="Export Diagnostics", defaultextension=".json", initialfile=default.name, initialdir=str(self.data_dir), filetypes=[("JSON", "*.json")])
+        if not path:
+            return
+        with open(path, "w") as f:
+            json.dump(snapshot, f, indent=2)
+        self._log(f"Diagnostics exported: {path}", "success")
+
     def _build_ui(self):
         """Build the user interface"""
         # Create notebook (tabs)
         self.notebook = ttk.Notebook(self.root)
-        self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        self.notebook.pack(fill=tk.BOTH, expand=True, padx=14, pady=14)
         
         # Status Tab
         self.status_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.status_frame, text="📊 Status")
+        self.notebook.add(self.status_frame, text="Status")
         self._build_status_tab()
         
         # Achievements Tab
         self.achievements_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.achievements_frame, text="🏆 Achievements")
+        self.notebook.add(self.achievements_frame, text="Achievements")
         self._build_achievements_tab()
         
         # Collection Tab (NEW!)
         self.collection_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.collection_frame, text="📱 Collection")
+        self.notebook.add(self.collection_frame, text="Collection")
         self._build_collection_tab()
         
         # Log Tab
         self.log_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.log_frame, text="📝 Log")
+        self.notebook.add(self.log_frame, text="Log")
         self._build_log_tab()
     
     def _build_status_tab(self):
         """Build status tab"""
+        container = ttk.Frame(self.status_frame, padding=8)
+        container.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(container, text="Tracker Overview", style="Header.TLabel").pack(anchor=tk.W, padx=4, pady=(2, 8))
+        ttk.Label(
+            container,
+            text="Connection, progress, and controls in one place.",
+            style="Subtle.TLabel"
+        ).pack(anchor=tk.W, padx=4, pady=(0, 12))
+
         # Connection status
-        conn_frame = ttk.LabelFrame(self.status_frame, text="Connection Status", padding=10)
-        conn_frame.pack(fill=tk.X, padx=10, pady=10)
-        
+        conn_frame = ttk.LabelFrame(container, text="Connection Status", padding=12)
+        conn_frame.pack(fill=tk.X, pady=(0, 10))
+
         self.ra_status_label = ttk.Label(conn_frame, text="RetroArch: Disconnected")
-        self.ra_status_label.pack(anchor=tk.W)
-        
+        self.ra_status_label.pack(anchor=tk.W, pady=1)
+
         self.api_status_label = ttk.Label(conn_frame, text="API: Not configured")
-        self.api_status_label.pack(anchor=tk.W)
-        
+        self.api_status_label.pack(anchor=tk.W, pady=1)
+
+        self.sync_status_label = ttk.Label(conn_frame, text="Sync: Idle")
+        self.sync_status_label.pack(anchor=tk.W, pady=1)
+
         self.game_label = ttk.Label(conn_frame, text="Game: None")
-        self.game_label.pack(anchor=tk.W)
-        
+        self.game_label.pack(anchor=tk.W, pady=1)
+
         # Progress
-        progress_frame = ttk.LabelFrame(self.status_frame, text="Progress", padding=10)
-        progress_frame.pack(fill=tk.X, padx=10, pady=10)
-        
+        progress_frame = ttk.LabelFrame(container, text="Progress", padding=12)
+        progress_frame.pack(fill=tk.X, pady=(0, 10))
+
         self.progress_label = ttk.Label(progress_frame, text="0/0 (0%) - 0/0 pts")
         self.progress_label.pack(anchor=tk.W)
-        
-        self.progress_bar = ttk.Progressbar(progress_frame, mode='determinate', length=400)
-        self.progress_bar.pack(fill=tk.X, pady=5)
-        
-        # Collection Summary (NEW!)
-        collection_frame = ttk.LabelFrame(self.status_frame, text="Pokemon Collection", padding=10)
-        collection_frame.pack(fill=tk.X, padx=10, pady=10)
-        
+
+        self.progress_bar = ttk.Progressbar(progress_frame, mode='determinate')
+        self.progress_bar.pack(fill=tk.X, pady=(8, 0))
+
+        # Collection Summary
+        collection_frame = ttk.LabelFrame(container, text="Pokemon Collection", padding=12)
+        collection_frame.pack(fill=tk.X, pady=(0, 10))
+
         self.collection_label = ttk.Label(collection_frame, text="Caught: 0 | Shiny: 0 | Party: 0")
         self.collection_label.pack(anchor=tk.W)
-        
+
         # Controls
-        controls_frame = ttk.Frame(self.status_frame)
-        controls_frame.pack(fill=tk.X, padx=10, pady=10)
-        
-        self.start_btn = ttk.Button(controls_frame, text="▶ Start Tracking", command=self._start_tracking)
-        self.start_btn.pack(side=tk.LEFT, padx=5)
-        
-        self.stop_btn = ttk.Button(controls_frame, text="⏹ Stop", command=self._stop_tracking, state='disabled')
-        self.stop_btn.pack(side=tk.LEFT, padx=5)
-        
-        # NEW: Clear App Data button
-        ttk.Button(controls_frame, text="🗑 Clear Data", command=self._clear_app_data).pack(side=tk.LEFT, padx=5)
-        
-        # NEW: Sync with Server button  
-        ttk.Button(controls_frame, text="🔄 Sync", command=self._sync_with_server).pack(side=tk.LEFT, padx=5)
-        
-        ttk.Button(controls_frame, text="⚙ Settings", command=self._show_settings).pack(side=tk.LEFT, padx=5)
-    
+        controls_frame = ttk.LabelFrame(container, text="Actions", padding=10)
+        controls_frame.pack(fill=tk.X)
+        for col in range(6):
+            controls_frame.columnconfigure(col, weight=1)
+
+        self.start_btn = ttk.Button(
+            controls_frame,
+            text="▶ Start Tracking",
+            command=self._start_tracking,
+            style="Primary.TButton"
+        )
+        self.start_btn.grid(row=0, column=0, padx=4, pady=4, sticky="ew")
+
+        self.stop_btn = ttk.Button(
+            controls_frame,
+            text="⏹ Stop",
+            command=self._stop_tracking,
+            state='disabled'
+        )
+        self.stop_btn.grid(row=0, column=1, padx=4, pady=4, sticky="ew")
+
+        ttk.Button(controls_frame, text="🔄 Sync", command=self._sync_with_server).grid(
+            row=0, column=2, padx=4, pady=4, sticky="ew"
+        )
+        ttk.Button(controls_frame, text="⚙ Settings", command=self._show_settings).grid(
+            row=0, column=3, padx=4, pady=4, sticky="ew"
+        )
+        ttk.Button(controls_frame, text="🗑 Clear Data", command=self._clear_app_data).grid(
+            row=0, column=4, padx=4, pady=4, sticky="ew"
+        )
+        ttk.Button(controls_frame, text="📦 Export Diagnostics", command=self._export_diagnostics).grid(
+            row=0, column=5, padx=4, pady=4, sticky="ew"
+        )
+
     def _build_achievements_tab(self):
         """Build achievements tab"""
         # Recent unlocks
@@ -1676,9 +1912,11 @@ class PokeAchieveGUI:
                 self.ra_status_label.configure(text="RetroArch: Disconnected")
 
             if status.get("api_configured"):
-                self.api_status_label.configure(text="API: Connected ✓")
+                if self._api_status_state == "Not configured":
+                    self._set_api_status("Configured")
             else:
-                self.api_status_label.configure(text="API: Not configured")
+                self._set_api_status("Not configured")
+            self.sync_status_label.configure(text=f"Sync: {self._last_sync_status}")
         finally:
             self._status_check_in_flight = False
             self.root.after(self.status_check_interval, self._check_status)
@@ -1848,6 +2086,8 @@ class PokeAchieveGUI:
             self._api_worker_stop = threading.Event()
 
         if not (self.api and self.config.get("api_sync", True)):
+            self._last_sync_status = "Disabled"
+            self.root.after(0, lambda: self.sync_status_label.configure(text=f"Sync: {self._last_sync_status}"))
             return
 
         if self._api_worker_thread and self._api_worker_thread.is_alive():
@@ -1862,6 +2102,8 @@ class PokeAchieveGUI:
                 except queue.Empty:
                     continue
 
+                self._last_sync_status = "Syncing"
+                self.root.after(0, lambda: self.sync_status_label.configure(text=f"Sync: {self._last_sync_status}"))
                 success = self._process_api_item(item)
                 if not success and not self._api_worker_stop.is_set():
                     retries = item.get("retries", 0)
@@ -1872,6 +2114,8 @@ class PokeAchieveGUI:
                         self.tracker._api_queue.put(item)
 
                 self.tracker._api_queue.task_done()
+                self._last_sync_status = "Idle"
+                self.root.after(0, lambda: self.sync_status_label.configure(text=f"Sync: {self._last_sync_status}"))
 
         self._api_worker_thread = threading.Thread(target=worker, daemon=True)
         self._api_worker_thread.start()
@@ -1887,6 +2131,11 @@ class PokeAchieveGUI:
         if not self.api:
             return True
 
+        event_id = item.get("event_id")
+        if event_id and event_id in self._sent_event_ids:
+            log_event(logging.INFO, "api_event_deduped", event_id=event_id)
+            return True
+
         item_type = item.get("type")
         if item_type == "achievement":
             ach = item.get("achievement")
@@ -1894,6 +2143,9 @@ class PokeAchieveGUI:
                 return True
             success, data = self.api.post_unlock(self.tracker.game_id, ach.id)
             if success:
+                if event_id:
+                    self._sent_event_ids.add(event_id)
+                    self._save_sent_events()
                 self._threadsafe_log(f"Posted unlock to platform: {ach.name}", "api")
                 return True
             self._threadsafe_log(f"Failed to post unlock: {data.get('error', 'Unknown error')}", "error")
@@ -1903,7 +2155,11 @@ class PokeAchieveGUI:
             catches = item.get("catches", [])
             party = item.get("party", [])
             game = item.get("game", "")
-            return self._sync_collection_to_api(catches, party, game)
+            success = self._sync_collection_to_api(catches, party, game)
+            if success and event_id:
+                self._sent_event_ids.add(event_id)
+                self._save_sent_events()
+            return success
 
         return True
     
@@ -2083,6 +2339,11 @@ class PokeAchieveGUI:
                 self.tracker.game_id = None
                 self.tracker._last_party = []
                 self.tracker._last_pokedex = []
+                self.tracker._collection_baseline_initialized = False
+                self.tracker._unlock_streaks = {}
+                self._sent_event_ids = set()
+                self._save_sent_events()
+                self._set_api_status("Not configured" if not self.api else "Configured")
 
                 self.game_label.configure(text="Game: None")
                 self.progress_label.configure(text="0/0 (0%) - 0/0 pts")
@@ -2134,6 +2395,18 @@ class PokeAchieveGUI:
         api_frame = ttk.LabelFrame(dialog, text="PokeAchieve API", padding="10")
         api_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=10)
         api_frame.columnconfigure(1, weight=1)
+
+        retro_frame = ttk.LabelFrame(dialog, text="RetroArch", padding="10")
+        retro_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 10))
+        retro_frame.columnconfigure(1, weight=1)
+        ttk.Label(retro_frame, text="Host:").grid(row=0, column=0, sticky="w", pady=5)
+        host_entry = ttk.Entry(retro_frame)
+        host_entry.insert(0, self.config.get("retroarch_host", "127.0.0.1"))
+        host_entry.grid(row=0, column=1, sticky="ew", padx=(10, 0), pady=5)
+        ttk.Label(retro_frame, text="Port:").grid(row=1, column=0, sticky="w", pady=5)
+        port_entry = ttk.Entry(retro_frame)
+        port_entry.insert(0, str(self.config.get("retroarch_port", 55355)))
+        port_entry.grid(row=1, column=1, sticky="ew", padx=(10, 0), pady=5)
         
         ttk.Label(api_frame, text="Platform URL:").grid(row=0, column=0, sticky="w", pady=5)
         url_entry = ttk.Entry(api_frame)
@@ -2158,6 +2431,13 @@ class PokeAchieveGUI:
         def save():
             self.config["api_url"] = url_entry.get()
             self.config["api_key"] = key_entry.get()
+            self.config["retroarch_host"] = host_entry.get().strip() or "127.0.0.1"
+            try:
+                self.config["retroarch_port"] = int(port_entry.get())
+            except ValueError:
+                self.config["retroarch_port"] = 55355
+            self.retroarch.host = self.config["retroarch_host"]
+            self.retroarch.port = int(self.config["retroarch_port"])
             
             if self.config["api_key"]:
                 self.api = PokeAchieveAPI(self.config["api_url"], self.config["api_key"])
@@ -2174,7 +2454,7 @@ class PokeAchieveGUI:
             dialog.destroy()
             self._test_api_connection()
         
-        ttk.Button(dialog, text="Save", command=save).grid(row=4, column=0, pady=10)
+        ttk.Button(dialog, text="Save", command=save).grid(row=5, column=0, pady=10)
         
         dialog.columnconfigure(0, weight=1)
     
@@ -2184,10 +2464,10 @@ class PokeAchieveGUI:
             def test():
                 success, message = self.api.test_auth()
                 if success:
-                    self.api_status_label.configure(text="API: Connected ✓")
+                    self._set_api_status("Authenticated")
                     self._log("API authentication successful", "success")
                 else:
-                    self.api_status_label.configure(text="API: Failed")
+                    self._set_api_status("Configured (auth failed)")
                     self._log(f"API authentication failed: {message}", "error")
             
             threading.Thread(target=test, daemon=True).start()
