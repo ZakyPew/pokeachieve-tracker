@@ -761,6 +761,8 @@ class PokemonMemoryReader:
                     "party_start": config.party_start_address,
                     "party_slot_size": config.party_slot_size,
                     "badge_address": config.badge_address,
+                    "champion_address": config.champion_address,
+                    "hall_of_fame_address": config.hall_of_fame_address,
                 }
         
         # Fallback to legacy hardcoded addresses
@@ -775,7 +777,11 @@ class PokemonMemoryReader:
         checks = {
             "pokedex_caught": config.get("pokedex_caught"),
             "party_count": config.get("party_count"),
+            "badge_address": config.get("badge_address"),
         }
+        if int(config.get("gen", 1)) == 3:
+            checks["hall_of_fame_address"] = config.get("hall_of_fame_address")
+            checks["champion_address"] = config.get("champion_address")
         failures = []
         for key, addr in checks.items():
             if not addr:
@@ -900,32 +906,107 @@ class AchievementTracker:
         self._collection_baseline_initialized = False
         self._unlock_streaks: Dict[str, int] = {}
         self._bad_read_streak = 0
+        self.validation_profiles: Dict[str, object] = {}
+        self.recent_anomalies: List[Dict] = []
         self._derived_checker: Optional[DerivedAchievementChecker] = None
     
+    def set_validation_profiles(self, profiles: Dict[str, object]):
+        """Inject validation profile config loaded from JSON."""
+        self.validation_profiles = profiles or {}
+
+    def _record_anomaly(self, kind: str, **fields):
+        entry = {"time": datetime.now().isoformat(), "kind": kind, **fields}
+        self.recent_anomalies.append(entry)
+        if len(self.recent_anomalies) > 100:
+            self.recent_anomalies = self.recent_anomalies[-100:]
+
     def _get_validation_profile(self) -> Dict[str, int]:
-        """Per-game validation thresholds used for read-confidence checks."""
+        """Per-game validation thresholds loaded from JSON config."""
         gen = 1
         if self.game_name and self.pokemon_reader:
             cfg = self.pokemon_reader.get_game_config(self.game_name)
             if cfg:
                 gen = int(cfg.get("gen", 1))
 
-        by_gen = {
-            1: {"max_unlocks_per_poll": 3, "max_new_catches_per_poll": 5},
-            2: {"max_unlocks_per_poll": 3, "max_new_catches_per_poll": 5},
-            3: {"max_unlocks_per_poll": 4, "max_new_catches_per_poll": 6},
-        }
-        return by_gen.get(gen, by_gen[1])
+        config = self.validation_profiles if isinstance(self.validation_profiles, dict) else {}
+        default_by_gen = config.get("default_by_gen", {}) if isinstance(config.get("default_by_gen", {}), dict) else {}
+        fallback_defaults = {"max_unlocks_per_poll": 3, "max_new_catches_per_poll": 5, "max_major_unlocks_per_poll": 2}
+
+        raw_default = default_by_gen.get(str(gen), {})
+        profile = dict(raw_default) if isinstance(raw_default, dict) else dict(fallback_defaults)
+        if not profile:
+            profile = dict(fallback_defaults)
+
+        per_game = config.get("per_game", {}) if isinstance(config.get("per_game", {}), dict) else {}
+        if self.game_name:
+            key = self.game_name.lower().replace(" ", "_").replace("'", "")
+            override = per_game.get(key)
+            if isinstance(override, dict):
+                profile.update({k: int(v) for k, v in override.items() if isinstance(v, (int, float))})
+
+        return {k: int(v) for k, v in profile.items() if isinstance(v, (int, float))}
 
     def _handle_bad_read(self, reason: str):
         """Track repeated suspicious reads and attempt lightweight auto-recovery."""
         self._bad_read_streak += 1
+        self._record_anomaly("memory_read_suspicious", game=self.game_name, reason=reason, streak=self._bad_read_streak)
         log_event(logging.WARNING, "memory_read_suspicious", game=self.game_name, reason=reason, streak=self._bad_read_streak)
         if self._bad_read_streak >= 3:
+            self._record_anomaly("memory_read_reconnect", game=self.game_name)
             log_event(logging.WARNING, "memory_read_reconnect", game=self.game_name)
             self.retroarch.disconnect()
             self.retroarch.connect()
             self._bad_read_streak = 0
+
+    def _current_generation(self) -> int:
+        if self.game_name and self.pokemon_reader:
+            cfg = self.pokemon_reader.get_game_config(self.game_name)
+            if cfg:
+                return int(cfg.get("gen", 1))
+        return 1
+
+    def _is_plausible_badge_byte(self, badge_byte: int) -> bool:
+        """Badge byte should usually be a contiguous progression mask (0b000..0111..1)."""
+        plausible = {0, 1, 3, 7, 15, 31, 63, 127, 255}
+        return badge_byte in plausible
+
+    def _safe_gen3_story_check(self, achievement: Achievement) -> Optional[bool]:
+        """Extra guardrails for noisy Gen 3 story-memory reads."""
+        if self._current_generation() != 3 or not self.game_name:
+            return None
+
+        if achievement.category not in {"gym", "elite_four", "champion"}:
+            return None
+
+        config = self.pokemon_reader.get_game_config(self.game_name) if self.pokemon_reader else None
+        if not config:
+            return None
+
+        badge_addr = config.get("badge_address")
+        if not badge_addr:
+            return None
+
+        badge_byte = self.retroarch.read_memory(badge_addr)
+        if badge_byte is None:
+            return False
+
+        if not self._is_plausible_badge_byte(badge_byte):
+            self._record_anomaly("badge_state_implausible", game=self.game_name, badge_byte=badge_byte)
+            log_event(logging.WARNING, "badge_state_implausible", game=self.game_name, badge_byte=badge_byte)
+            return False
+
+        if achievement.category == "gym":
+            return self.evaluate_condition(badge_byte, achievement.memory_condition)
+
+        # Elite Four/Champion should not unlock without all badges.
+        if badge_byte != 0xFF:
+            return False
+
+        # Fall back to raw memory flag once badge precondition is met.
+        value = self.retroarch.read_memory(achievement.memory_address)
+        if value is None:
+            return False
+        return self.evaluate_condition(value, achievement.memory_condition)
 
     def load_game(self, game_name: str, achievements_file: Path) -> bool:
         """Load achievements for a specific game"""
@@ -1023,6 +1104,7 @@ class AchievementTracker:
         newly_unlocked = []
         profile = self._get_validation_profile()
         candidates_this_poll = 0
+        major_candidates_this_poll = 0
 
         for achievement in self.achievements:
             if achievement.unlocked:
@@ -1032,10 +1114,14 @@ class AchievementTracker:
             
             # Direct memory check (achievements with memory_address)
             if achievement.memory_address and achievement.memory_condition:
-                value = self.retroarch.read_memory(achievement.memory_address)
-                if value is not None:
-                    if self.evaluate_condition(value, achievement.memory_condition):
-                        unlocked = True
+                safe_result = self._safe_gen3_story_check(achievement)
+                if safe_result is not None:
+                    unlocked = safe_result
+                else:
+                    value = self.retroarch.read_memory(achievement.memory_address)
+                    if value is not None:
+                        if self.evaluate_condition(value, achievement.memory_condition):
+                            unlocked = True
             
             # Derived achievement checks (achievements without direct memory addresses)
             else:
@@ -1044,9 +1130,19 @@ class AchievementTracker:
             if unlocked:
                 candidates_this_poll += 1
                 if candidates_this_poll > profile["max_unlocks_per_poll"]:
+                    self._record_anomaly("unlock_spike_ignored", game=self.game_name, candidates=candidates_this_poll, threshold=profile["max_unlocks_per_poll"])
                     log_event(logging.WARNING, "unlock_spike_ignored", game=self.game_name, candidates=candidates_this_poll, threshold=profile["max_unlocks_per_poll"])
                     self._unlock_streaks[achievement.id] = 0
                     continue
+
+                if achievement.category in {"gym", "elite_four", "champion", "legendary"}:
+                    major_candidates_this_poll += 1
+                    if major_candidates_this_poll > profile.get("max_major_unlocks_per_poll", 2):
+                        self._record_anomaly("major_unlock_spike_ignored", game=self.game_name, category=achievement.category, count=major_candidates_this_poll, threshold=profile.get("max_major_unlocks_per_poll", 2))
+                        log_event(logging.WARNING, "major_unlock_spike_ignored", game=self.game_name, category=achievement.category, count=major_candidates_this_poll, threshold=profile.get("max_major_unlocks_per_poll", 2))
+                        self._unlock_streaks[achievement.id] = 0
+                        continue
+
                 self._unlock_streaks[achievement.id] = self._unlock_streaks.get(achievement.id, 0) + 1
                 # Require two consecutive positive polls to avoid transient memory-read false positives.
                 if self._unlock_streaks[achievement.id] >= 2:
@@ -1589,8 +1685,11 @@ class PokeAchieveGUI:
         self._api_worker_stop = threading.Event()
         self._api_status_state = "Not configured"
         self._last_sync_status = "Idle"
+        self._last_api_error = ""
+        self._retry_count = 0
         self.sent_events_file = self.data_dir / "sent_events.json"
         self._sent_event_ids = self._load_sent_events()
+        self._load_validation_profiles()
 
         self._build_ui()
         self._start_status_check()
@@ -1630,6 +1729,27 @@ class PokeAchieveGUI:
         except OSError as exc:
             log_event(logging.WARNING, "config_save_failed", file=str(self.config_file), error=str(exc))
     
+    def _load_validation_profiles(self):
+        profile_path = self.script_dir / "profiles.json"
+        if not profile_path.exists():
+            self.tracker.set_validation_profiles({})
+            return
+        try:
+            with open(profile_path, "r") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                self.tracker.set_validation_profiles(data)
+            else:
+                self.tracker.set_validation_profiles({})
+        except (OSError, json.JSONDecodeError, ValueError):
+            self.tracker.set_validation_profiles({})
+
+    def _update_sync_meta_labels(self):
+        self.sync_status_label.configure(text=f"Sync: {self._last_sync_status}")
+        self.retry_status_label.configure(text=f"Retries: {self._retry_count}")
+        error_text = self._last_api_error if self._last_api_error else "None"
+        self.api_error_label.configure(text=f"Last API Error: {error_text[:90]}")
+
     def _load_sent_events(self) -> set[str]:
         if not self.sent_events_file.exists():
             return set()
@@ -1685,12 +1805,15 @@ class PokeAchieveGUI:
             "game": self.tracker.game_name,
             "api_status": self._api_status_state,
             "sync_status": self._last_sync_status,
+            "retry_count": self._retry_count,
+            "last_api_error": self._last_api_error,
             "queue": {
                 "api_pending": self.tracker._api_queue.qsize(),
                 "collection_pending": self.tracker._collection_queue.qsize(),
                 "unlock_pending": self.tracker._unlock_queue.qsize(),
             },
             "validation_profile": self.tracker._get_validation_profile() if self.tracker.game_name else None,
+            "recent_anomalies": self.tracker.recent_anomalies[-25:],
         }
         default = self.data_dir / f"diagnostics_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
         path = filedialog.asksaveasfilename(title="Export Diagnostics", defaultextension=".json", initialfile=default.name, initialdir=str(self.data_dir), filetypes=[("JSON", "*.json")])
@@ -1750,6 +1873,12 @@ class PokeAchieveGUI:
 
         self.sync_status_label = ttk.Label(conn_frame, text="Sync: Idle")
         self.sync_status_label.pack(anchor=tk.W, pady=1)
+
+        self.retry_status_label = ttk.Label(conn_frame, text="Retries: 0")
+        self.retry_status_label.pack(anchor=tk.W, pady=1)
+
+        self.api_error_label = ttk.Label(conn_frame, text="Last API Error: None")
+        self.api_error_label.pack(anchor=tk.W, pady=1)
 
         self.game_label = ttk.Label(conn_frame, text="Game: None")
         self.game_label.pack(anchor=tk.W, pady=1)
@@ -1916,7 +2045,7 @@ class PokeAchieveGUI:
                     self._set_api_status("Configured")
             else:
                 self._set_api_status("Not configured")
-            self.sync_status_label.configure(text=f"Sync: {self._last_sync_status}")
+            self._update_sync_meta_labels()
         finally:
             self._status_check_in_flight = False
             self.root.after(self.status_check_interval, self._check_status)
@@ -2087,7 +2216,7 @@ class PokeAchieveGUI:
 
         if not (self.api and self.config.get("api_sync", True)):
             self._last_sync_status = "Disabled"
-            self.root.after(0, lambda: self.sync_status_label.configure(text=f"Sync: {self._last_sync_status}"))
+            self.root.after(0, self._update_sync_meta_labels)
             return
 
         if self._api_worker_thread and self._api_worker_thread.is_alive():
@@ -2103,19 +2232,24 @@ class PokeAchieveGUI:
                     continue
 
                 self._last_sync_status = "Syncing"
-                self.root.after(0, lambda: self.sync_status_label.configure(text=f"Sync: {self._last_sync_status}"))
+                self.root.after(0, self._update_sync_meta_labels)
                 success = self._process_api_item(item)
                 if not success and not self._api_worker_stop.is_set():
                     retries = item.get("retries", 0)
                     if retries < 3:
                         item["retries"] = retries + 1
+                        self._retry_count = item["retries"]
+                        self.root.after(0, self._update_sync_meta_labels)
                         backoff_seconds = 2 ** retries
                         time.sleep(backoff_seconds)
                         self.tracker._api_queue.put(item)
 
                 self.tracker._api_queue.task_done()
                 self._last_sync_status = "Idle"
-                self.root.after(0, lambda: self.sync_status_label.configure(text=f"Sync: {self._last_sync_status}"))
+                if success:
+                    self._retry_count = 0
+                    self._last_api_error = ""
+                self.root.after(0, self._update_sync_meta_labels)
 
         self._api_worker_thread = threading.Thread(target=worker, daemon=True)
         self._api_worker_thread.start()
@@ -2148,7 +2282,8 @@ class PokeAchieveGUI:
                     self._save_sent_events()
                 self._threadsafe_log(f"Posted unlock to platform: {ach.name}", "api")
                 return True
-            self._threadsafe_log(f"Failed to post unlock: {data.get('error', 'Unknown error')}", "error")
+            self._last_api_error = data.get('error', 'Unknown error')
+            self._threadsafe_log(f"Failed to post unlock: {self._last_api_error}", "error")
             return False
 
         if item_type == "collection":
@@ -2156,6 +2291,8 @@ class PokeAchieveGUI:
             party = item.get("party", [])
             game = item.get("game", "")
             success = self._sync_collection_to_api(catches, party, game)
+            if not success:
+                self._last_api_error = "Collection sync failed"
             if success and event_id:
                 self._sent_event_ids.add(event_id)
                 self._save_sent_events()
@@ -2223,6 +2360,8 @@ class PokeAchieveGUI:
                 print(f"[COLLECTION SYNC] Success: {data}")
             else:
                 error_msg = data.get('error', 'Unknown error')
+                self._last_api_error = error_msg
+                self.root.after(0, self._update_sync_meta_labels)
                 self._threadsafe_log(f"Failed to sync collection: {error_msg}", "error")
                 print(f"[COLLECTION SYNC] Failed: {error_msg}")
                 return False
@@ -2239,6 +2378,8 @@ class PokeAchieveGUI:
                 self._threadsafe_log(f"Updated party: {member['id']} in slot {member.get('slot')}", "api")
             else:
                 error_msg = data.get('error', 'Unknown error')
+                self._last_api_error = error_msg
+                self.root.after(0, self._update_sync_meta_labels)
                 self._threadsafe_log(f"Failed to update party: {error_msg}", "error")
                 return False
     

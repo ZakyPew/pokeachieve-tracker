@@ -1,0 +1,46 @@
+{
+  "default_by_gen": {
+    "1": {
+      "max_unlocks_per_poll": 3,
+      "max_new_catches_per_poll": 5,
+      "max_major_unlocks_per_poll": 2
+    },
+    "2": {
+      "max_unlocks_per_poll": 3,
+      "max_new_catches_per_poll": 5,
+      "max_major_unlocks_per_poll": 2
+    },
+    "3": {
+      "max_unlocks_per_poll": 4,
+      "max_new_catches_per_poll": 6,
+      "max_major_unlocks_per_poll": 1
+    }
+  },
+  "per_game": {
+    "pokemon_emerald": {
+      "max_unlocks_per_poll": 3,
+      "max_new_catches_per_poll": 5,
+      "max_major_unlocks_per_poll": 1
+    },
+    "pokemon_ruby": {
+      "max_unlocks_per_poll": 3,
+      "max_new_catches_per_poll": 5,
+      "max_major_unlocks_per_poll": 1
+    },
+    "pokemon_sapphire": {
+      "max_unlocks_per_poll": 3,
+      "max_new_catches_per_poll": 5,
+      "max_major_unlocks_per_poll": 1
+    },
+    "pokemon_firered": {
+      "max_unlocks_per_poll": 3,
+      "max_new_catches_per_poll": 5,
+      "max_major_unlocks_per_poll": 1
+    },
+    "pokemon_leafgreen": {
+      "max_unlocks_per_poll": 3,
+      "max_new_catches_per_poll": 5,
+      "max_major_unlocks_per_poll": 1
+    }
+  }
+}
