@@ -965,9 +965,6 @@ class AchievementTracker:
             "max_major_unlocks_per_poll": 2,
             "max_legendary_unlocks_per_poll": 1,
             "unlock_warmup_polls": 4,
-            "unlock_confirmations_default": 2,
-            "unlock_confirmations_legendary": 3,
-            "unlock_confirmations_gym_gen3": 4,
         }
 
         raw_default = default_by_gen.get(str(gen), {})
