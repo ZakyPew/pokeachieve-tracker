@@ -89,7 +89,9 @@ class PokeAchieveAPI:
 
         parsed = urlparse(raw)
         path = (parsed.path or "").rstrip("/")
-        if path.lower() == "/api":
+        lower_path = path.lower()
+        # Treat pasted API endpoint paths as base-domain input.
+        if lower_path == "/api" or lower_path.startswith("/api/"):
             path = ""
 
         return urlunparse((parsed.scheme or "https", parsed.netloc, path, "", "", "")).rstrip("/")
@@ -963,6 +965,9 @@ class AchievementTracker:
             "max_major_unlocks_per_poll": 2,
             "max_legendary_unlocks_per_poll": 1,
             "unlock_warmup_polls": 4,
+            "unlock_confirmations_default": 2,
+            "unlock_confirmations_legendary": 3,
+            "unlock_confirmations_gym_gen3": 4,
         }
 
         raw_default = default_by_gen.get(str(gen), {})
@@ -1002,6 +1007,18 @@ class AchievementTracker:
         """Badge byte should usually be a contiguous progression mask (0b000..0111..1)."""
         plausible = {0, 1, 3, 7, 15, 31, 63, 127, 255}
         return badge_byte in plausible
+
+    def _required_unlock_confirmations(self, achievement: Achievement, profile: Dict[str, int]) -> int:
+        """Return confirmation streak requirement for an unlock candidate."""
+        required = max(1, int(profile.get("unlock_confirmations_default", 2)))
+
+        if achievement.category == "legendary":
+            required = max(required, int(profile.get("unlock_confirmations_legendary", 3)))
+
+        if achievement.category == "gym" and self._current_generation() == 3:
+            required = max(required, int(profile.get("unlock_confirmations_gym_gen3", 4)))
+
+        return required
 
     def _safe_gen3_story_check(self, achievement: Achievement) -> Optional[bool]:
         """Extra guardrails for noisy Gen 3 story-memory reads."""
@@ -1213,8 +1230,9 @@ class AchievementTracker:
                         continue
 
                 self._unlock_streaks[achievement.id] = self._unlock_streaks.get(achievement.id, 0) + 1
-                # Require two consecutive positive polls to avoid transient memory-read false positives.
-                if self._unlock_streaks[achievement.id] >= 2:
+                required_confirmations = self._required_unlock_confirmations(achievement, profile)
+                # Require configurable consecutive positive polls to avoid transient memory-read false positives.
+                if self._unlock_streaks[achievement.id] >= required_confirmations:
                     achievement.unlocked = True
                     achievement.unlocked_at = datetime.now().isoformat()
                     newly_unlocked.append(achievement)
