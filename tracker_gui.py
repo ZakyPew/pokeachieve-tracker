@@ -15,6 +15,7 @@ import os
 import sys
 import urllib.request
 import urllib.error
+from urllib.parse import urlparse, urlunparse
 import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Callable, Tuple
@@ -76,9 +77,27 @@ class Pokemon:
 
 class PokeAchieveAPI:
     """Client for PokeAchieve platform API"""
+
+    @staticmethod
+    def normalize_base_url(base_url: str) -> str:
+        """Normalize platform URL and strip accidental trailing /api path."""
+        raw = (base_url or "https://pokeachieve.com").strip()
+        if not raw:
+            raw = "https://pokeachieve.com"
+        if "://" not in raw:
+            raw = f"https://{raw}"
+
+        parsed = urlparse(raw)
+        path = (parsed.path or "").rstrip("/")
+        lower_path = path.lower()
+        # Treat pasted API endpoint paths as base-domain input.
+        if lower_path == "/api" or lower_path.startswith("/api/"):
+            path = ""
+
+        return urlunparse((parsed.scheme or "https", parsed.netloc, path, "", "", "")).rstrip("/")
     
     def __init__(self, base_url: str = "https://pokeachieve.com", api_key: str = ""):
-        self.base_url = base_url.rstrip("/")
+        self.base_url = self.normalize_base_url(base_url)
         self.api_key = api_key.strip() if api_key else ""
         self.headers = {
             "Content-Type": "application/json",
@@ -218,6 +237,12 @@ class PokeAchieveAPI:
         success, data = self._request("POST", "/api/tracker/unlock", payload)
         if success:
             return True, data
+
+        # Only try legacy routes when the tracker endpoint is unavailable.
+        # Avoid masking actionable auth/validation errors behind legacy failures.
+        status = data.get("status") if isinstance(data, dict) else None
+        if status != 404:
+            return False, data
 
         # Backwards compatibility with legacy backend route
         legacy_payload = {
@@ -906,6 +931,10 @@ class AchievementTracker:
         self._collection_baseline_initialized = False
         self._unlock_streaks: Dict[str, int] = {}
         self._bad_read_streak = 0
+        self._achievement_poll_count = 0
+        self._warmup_logged = False
+        self._startup_baseline_captured = False
+        self._startup_lockout_ids: set[str] = set()
         self.validation_profiles: Dict[str, object] = {}
         self.recent_anomalies: List[Dict] = []
         self._derived_checker: Optional[DerivedAchievementChecker] = None
@@ -930,7 +959,16 @@ class AchievementTracker:
 
         config = self.validation_profiles if isinstance(self.validation_profiles, dict) else {}
         default_by_gen = config.get("default_by_gen", {}) if isinstance(config.get("default_by_gen", {}), dict) else {}
-        fallback_defaults = {"max_unlocks_per_poll": 3, "max_new_catches_per_poll": 5, "max_major_unlocks_per_poll": 2}
+        fallback_defaults = {
+            "max_unlocks_per_poll": 3,
+            "max_new_catches_per_poll": 5,
+            "max_major_unlocks_per_poll": 2,
+            "max_legendary_unlocks_per_poll": 1,
+            "unlock_warmup_polls": 4,
+            "unlock_confirmations_default": 2,
+            "unlock_confirmations_legendary": 3,
+            "unlock_confirmations_gym_gen3": 4,
+        }
 
         raw_default = default_by_gen.get(str(gen), {})
         profile = dict(raw_default) if isinstance(raw_default, dict) else dict(fallback_defaults)
@@ -969,6 +1007,18 @@ class AchievementTracker:
         """Badge byte should usually be a contiguous progression mask (0b000..0111..1)."""
         plausible = {0, 1, 3, 7, 15, 31, 63, 127, 255}
         return badge_byte in plausible
+
+    def _required_unlock_confirmations(self, achievement: Achievement, profile: Dict[str, int]) -> int:
+        """Return confirmation streak requirement for an unlock candidate."""
+        required = max(1, int(profile.get("unlock_confirmations_default", 2)))
+
+        if achievement.category == "legendary":
+            required = max(required, int(profile.get("unlock_confirmations_legendary", 3)))
+
+        if achievement.category == "gym" and self._current_generation() == 3:
+            required = max(required, int(profile.get("unlock_confirmations_gym_gen3", 4)))
+
+        return required
 
     def _safe_gen3_story_check(self, achievement: Achievement) -> Optional[bool]:
         """Extra guardrails for noisy Gen 3 story-memory reads."""
@@ -1034,6 +1084,10 @@ class AchievementTracker:
             self._collection_baseline_initialized = False
             self._unlock_streaks = {}
             self._bad_read_streak = 0
+            self._achievement_poll_count = 0
+            self._warmup_logged = False
+            self._startup_baseline_captured = False
+            self._startup_lockout_ids = set()
 
             validation = self.pokemon_reader.validate_memory_profile(game_name)
             log_event(logging.INFO, "memory_profile_validation", game=game_name, ok=validation.get("ok"), failures=validation.get("failures", []))
@@ -1103,8 +1157,21 @@ class AchievementTracker:
         """Check all achievements, return newly unlocked ones"""
         newly_unlocked = []
         profile = self._get_validation_profile()
+        self._achievement_poll_count += 1
+        warmup_polls = max(0, int(profile.get("unlock_warmup_polls", 4)))
+        if self._achievement_poll_count <= warmup_polls:
+            if not self._warmup_logged:
+                log_event(logging.INFO, "unlock_warmup_active", game=self.game_name, polls=warmup_polls)
+                self._warmup_logged = True
+            return []
+
+        baseline_mode = not self._startup_baseline_captured
+        if baseline_mode:
+            self._startup_lockout_ids = set()
+
         candidates_this_poll = 0
         major_candidates_this_poll = 0
+        legendary_candidates_this_poll = 0
 
         for achievement in self.achievements:
             if achievement.unlocked:
@@ -1127,6 +1194,16 @@ class AchievementTracker:
             else:
                 unlocked = self._check_derived_achievement(achievement)
             
+            if baseline_mode:
+                if unlocked:
+                    self._startup_lockout_ids.add(achievement.id)
+                continue
+
+            if achievement.id in self._startup_lockout_ids:
+                if not unlocked:
+                    self._startup_lockout_ids.discard(achievement.id)
+                continue
+
             if unlocked:
                 candidates_this_poll += 1
                 if candidates_this_poll > profile["max_unlocks_per_poll"]:
@@ -1143,9 +1220,19 @@ class AchievementTracker:
                         self._unlock_streaks[achievement.id] = 0
                         continue
 
+                if achievement.category == "legendary":
+                    legendary_candidates_this_poll += 1
+                    max_legendary = profile.get("max_legendary_unlocks_per_poll", 1)
+                    if legendary_candidates_this_poll > max_legendary:
+                        self._record_anomaly("legendary_unlock_spike_ignored", game=self.game_name, count=legendary_candidates_this_poll, threshold=max_legendary)
+                        log_event(logging.WARNING, "legendary_unlock_spike_ignored", game=self.game_name, count=legendary_candidates_this_poll, threshold=max_legendary)
+                        self._unlock_streaks[achievement.id] = 0
+                        continue
+
                 self._unlock_streaks[achievement.id] = self._unlock_streaks.get(achievement.id, 0) + 1
-                # Require two consecutive positive polls to avoid transient memory-read false positives.
-                if self._unlock_streaks[achievement.id] >= 2:
+                required_confirmations = self._required_unlock_confirmations(achievement, profile)
+                # Require configurable consecutive positive polls to avoid transient memory-read false positives.
+                if self._unlock_streaks[achievement.id] >= required_confirmations:
                     achievement.unlocked = True
                     achievement.unlocked_at = datetime.now().isoformat()
                     newly_unlocked.append(achievement)
@@ -1154,6 +1241,12 @@ class AchievementTracker:
             else:
                 self._unlock_streaks[achievement.id] = 0
         
+        if baseline_mode:
+            self._startup_baseline_captured = True
+            if self._startup_lockout_ids:
+                log_event(logging.INFO, "unlock_startup_lockout", game=self.game_name, count=len(self._startup_lockout_ids))
+            return []
+
         return newly_unlocked
     
     def _check_derived_achievement(self, achievement: Achievement) -> bool:
@@ -2207,6 +2300,31 @@ class PokeAchieveGUI:
         """Schedule log writes from worker threads safely onto Tk main loop."""
         self.root.after(0, lambda: self._log(message, level))
 
+    def _is_retryable_api_error(self, data: object) -> bool:
+        """Return True when API errors are likely transient and worth retrying."""
+        if not isinstance(data, dict):
+            return True
+
+        status = data.get("status")
+        if isinstance(status, int):
+            if status >= 500:
+                return True
+            # Retry transient client statuses only.
+            if status in {408, 409, 425, 429}:
+                return True
+            return False
+
+        error_text = str(data.get("error", "")).lower()
+        transient_markers = (
+            "timed out",
+            "timeout",
+            "temporarily unavailable",
+            "connection reset",
+            "connection refused",
+            "network is unreachable",
+        )
+        return any(marker in error_text for marker in transient_markers)
+
     def _start_api_worker(self):
         """Start a single API worker to process queued sync jobs sequentially."""
         if not hasattr(self, "_api_worker_thread"):
@@ -2234,7 +2352,8 @@ class PokeAchieveGUI:
                 self._last_sync_status = "Syncing"
                 self.root.after(0, self._update_sync_meta_labels)
                 success = self._process_api_item(item)
-                if not success and not self._api_worker_stop.is_set():
+                retryable = item.get("retryable", True)
+                if not success and retryable and not self._api_worker_stop.is_set():
                     retries = item.get("retries", 0)
                     if retries < 3:
                         item["retries"] = retries + 1
@@ -2283,6 +2402,7 @@ class PokeAchieveGUI:
                 self._threadsafe_log(f"Posted unlock to platform: {ach.name}", "api")
                 return True
             self._last_api_error = data.get('error', 'Unknown error')
+            item["retryable"] = self._is_retryable_api_error(data)
             self._threadsafe_log(f"Failed to post unlock: {self._last_api_error}", "error")
             return False
 
@@ -2293,6 +2413,7 @@ class PokeAchieveGUI:
             success = self._sync_collection_to_api(catches, party, game)
             if not success:
                 self._last_api_error = "Collection sync failed"
+                item["retryable"] = False
             if success and event_id:
                 self._sent_event_ids.add(event_id)
                 self._save_sent_events()
@@ -2482,6 +2603,10 @@ class PokeAchieveGUI:
                 self.tracker._last_pokedex = []
                 self.tracker._collection_baseline_initialized = False
                 self.tracker._unlock_streaks = {}
+                self.tracker._achievement_poll_count = 0
+                self.tracker._warmup_logged = False
+                self.tracker._startup_baseline_captured = False
+                self.tracker._startup_lockout_ids = set()
                 self._sent_event_ids = set()
                 self._save_sent_events()
                 self._set_api_status("Not configured" if not self.api else "Configured")
@@ -2570,7 +2695,8 @@ class PokeAchieveGUI:
         ttk.Button(api_frame, text="Test Connection", command=test_api).grid(row=2, column=0, columnspan=2, pady=10)
         
         def save():
-            self.config["api_url"] = url_entry.get()
+            normalized_url = PokeAchieveAPI.normalize_base_url(url_entry.get())
+            self.config["api_url"] = normalized_url
             self.config["api_key"] = key_entry.get()
             self.config["retroarch_host"] = host_entry.get().strip() or "127.0.0.1"
             try:
@@ -2591,6 +2717,8 @@ class PokeAchieveGUI:
                 self._stop_api_worker()
 
             self._save_config()
+            if normalized_url != (url_entry.get() or "").strip():
+                self._log(f"Normalized API URL to {normalized_url}", "info")
             self._log("Settings saved")
             dialog.destroy()
             self._test_api_connection()
