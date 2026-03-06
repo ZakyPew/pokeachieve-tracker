@@ -914,6 +914,8 @@ class AchievementTracker:
         self._bad_read_streak = 0
         self._achievement_poll_count = 0
         self._warmup_logged = False
+        self._startup_baseline_captured = False
+        self._startup_lockout_ids: set[str] = set()
         self.validation_profiles: Dict[str, object] = {}
         self.recent_anomalies: List[Dict] = []
         self._derived_checker: Optional[DerivedAchievementChecker] = None
@@ -1050,6 +1052,8 @@ class AchievementTracker:
             self._bad_read_streak = 0
             self._achievement_poll_count = 0
             self._warmup_logged = False
+            self._startup_baseline_captured = False
+            self._startup_lockout_ids = set()
 
             validation = self.pokemon_reader.validate_memory_profile(game_name)
             log_event(logging.INFO, "memory_profile_validation", game=game_name, ok=validation.get("ok"), failures=validation.get("failures", []))
@@ -1127,6 +1131,10 @@ class AchievementTracker:
                 self._warmup_logged = True
             return []
 
+        baseline_mode = not self._startup_baseline_captured
+        if baseline_mode:
+            self._startup_lockout_ids = set()
+
         candidates_this_poll = 0
         major_candidates_this_poll = 0
         legendary_candidates_this_poll = 0
@@ -1152,6 +1160,16 @@ class AchievementTracker:
             else:
                 unlocked = self._check_derived_achievement(achievement)
             
+            if baseline_mode:
+                if unlocked:
+                    self._startup_lockout_ids.add(achievement.id)
+                continue
+
+            if achievement.id in self._startup_lockout_ids:
+                if not unlocked:
+                    self._startup_lockout_ids.discard(achievement.id)
+                continue
+
             if unlocked:
                 candidates_this_poll += 1
                 if candidates_this_poll > profile["max_unlocks_per_poll"]:
@@ -1188,6 +1206,12 @@ class AchievementTracker:
             else:
                 self._unlock_streaks[achievement.id] = 0
         
+        if baseline_mode:
+            self._startup_baseline_captured = True
+            if self._startup_lockout_ids:
+                log_event(logging.INFO, "unlock_startup_lockout", game=self.game_name, count=len(self._startup_lockout_ids))
+            return []
+
         return newly_unlocked
     
     def _check_derived_achievement(self, achievement: Achievement) -> bool:
@@ -2518,6 +2542,8 @@ class PokeAchieveGUI:
                 self.tracker._unlock_streaks = {}
                 self.tracker._achievement_poll_count = 0
                 self.tracker._warmup_logged = False
+                self.tracker._startup_baseline_captured = False
+                self.tracker._startup_lockout_ids = set()
                 self._sent_event_ids = set()
                 self._save_sent_events()
                 self._set_api_status("Not configured" if not self.api else "Configured")
