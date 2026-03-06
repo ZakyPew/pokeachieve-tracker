@@ -15,6 +15,7 @@ import os
 import sys
 import urllib.request
 import urllib.error
+from urllib.parse import urlparse, urlunparse
 import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Callable, Tuple
@@ -76,9 +77,25 @@ class Pokemon:
 
 class PokeAchieveAPI:
     """Client for PokeAchieve platform API"""
+
+    @staticmethod
+    def normalize_base_url(base_url: str) -> str:
+        """Normalize platform URL and strip accidental trailing /api path."""
+        raw = (base_url or "https://pokeachieve.com").strip()
+        if not raw:
+            raw = "https://pokeachieve.com"
+        if "://" not in raw:
+            raw = f"https://{raw}"
+
+        parsed = urlparse(raw)
+        path = (parsed.path or "").rstrip("/")
+        if path.lower() == "/api":
+            path = ""
+
+        return urlunparse((parsed.scheme or "https", parsed.netloc, path, "", "", "")).rstrip("/")
     
     def __init__(self, base_url: str = "https://pokeachieve.com", api_key: str = ""):
-        self.base_url = base_url.rstrip("/")
+        self.base_url = self.normalize_base_url(base_url)
         self.api_key = api_key.strip() if api_key else ""
         self.headers = {
             "Content-Type": "application/json",
@@ -2660,7 +2677,8 @@ class PokeAchieveGUI:
         ttk.Button(api_frame, text="Test Connection", command=test_api).grid(row=2, column=0, columnspan=2, pady=10)
         
         def save():
-            self.config["api_url"] = url_entry.get()
+            normalized_url = PokeAchieveAPI.normalize_base_url(url_entry.get())
+            self.config["api_url"] = normalized_url
             self.config["api_key"] = key_entry.get()
             self.config["retroarch_host"] = host_entry.get().strip() or "127.0.0.1"
             try:
@@ -2681,6 +2699,8 @@ class PokeAchieveGUI:
                 self._stop_api_worker()
 
             self._save_config()
+            if normalized_url != (url_entry.get() or "").strip():
+                self._log(f"Normalized API URL to {normalized_url}", "info")
             self._log("Settings saved")
             dialog.destroy()
             self._test_api_connection()

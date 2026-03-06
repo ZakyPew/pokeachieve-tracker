@@ -144,8 +144,9 @@ Get user's full collection.
 ### Pokemon Red/Blue (Gen 1)
 
 **Pokedex Flags:**
-- Address: `0xD2F7` - `0xD31C` (386 bits = 151 Pokemon)
-- Each bit represents caught status
+- Caught flags: `0xD30A` onward (151 Pokemon)
+- Seen flags: `0xD2F7` onward
+- Each bit represents Pokedex status
 - Bit 0 = Pokemon #1 (Bulbasaur), Bit 1 = Pokemon #2, etc.
 
 **Current Party:**
@@ -167,7 +168,8 @@ Get user's full collection.
 ### Pokemon Gold/Silver (Gen 2)
 
 **Pokedex Flags:**
-- Address: `0xDDA4` - `0xDDDF` (251 Pokemon)
+- Caught flags: `0xDC44` onward (251 Pokemon)
+- Seen flags: `0xDDA4` onward
 
 **Current Party:**
 - Party count: `0xDA22`
@@ -176,11 +178,12 @@ Get user's full collection.
 ### Pokemon Emerald (Gen 3)
 
 **Pokedex Flags:**
-- Address: `0x202F900` - `0x202F9C` (386 Pokemon)
+- Caught flags: `0x02024D0C` onward (386 Pokemon)
+- Seen flags: `0x02024C0C` onward
 
 **Current Party:**
-- Party count: `0x20244E0`
-- Pokemon 1: `0x20244E8`
+- Party count: `0x02024284`
+- Party data start: `0x02024284`
 
 ---
 
@@ -193,7 +196,7 @@ def is_pokemon_caught(memory, pokemon_id):
     """Check if Pokemon is caught using Pokedex flags"""
     byte_index = (pokemon_id - 1) // 8
     bit_index = (pokemon_id - 1) % 8
-    byte_value = memory[0xD2F7 + byte_index]
+    byte_value = memory[0xD30A + byte_index]
     return (byte_value >> bit_index) & 1
 ```
 
@@ -242,7 +245,7 @@ def sync_collection(api_key, caught_pokemon, party):
     
     # Send to API
     response = requests.post(
-        'http://66.175.239.154:8000/api/collection/batch-update',
+        'https://pokeachieve.com/api/collection/batch-update',
         headers=headers,
         json=batch
     )
@@ -250,7 +253,7 @@ def sync_collection(api_key, caught_pokemon, party):
     # Update party
     for member in party:
         requests.post(
-            'http://66.175.239.154:8000/api/collection/party',
+            'https://pokeachieve.com/api/collection/party',
             headers=headers,
             json={
                 'pokemon_id': member['species_id'],
@@ -266,21 +269,23 @@ def sync_collection(api_key, caught_pokemon, party):
 
 ## RetroArch Network Commands
 
-Connect to RetroArch on port 55355:
+Connect to RetroArch network command UDP port 55355:
 
 ```python
 import socket
 
 class RetroArchClient:
     def __init__(self, host='127.0.0.1', port=55355):
-        self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.socket.connect((host, port))
+        self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.host = host
+        self.port = port
     
     def read_memory(self, address, length=1):
         """Read memory from RetroArch"""
         command = f'READ_CORE_MEMORY {address} {length}\n'
-        self.socket.send(command.encode())
-        response = self.socket.recv(4096).decode()
+        self.socket.sendto(command.encode(), (self.host, self.port))
+        response, _ = self.socket.recvfrom(4096)
+        response = response.decode()
         # Parse response: "READ_CORE_MEMORY address length values..."
         parts = response.split()
         if len(parts) >= 3:
@@ -290,8 +295,9 @@ class RetroArchClient:
     
     def get_current_game(self):
         """Get loaded ROM name"""
-        self.socket.send(b'GET_CURRENT_GAME\n')
-        return self.socket.recv(256).decode().strip()
+        self.socket.sendto(b'GET_STATUS\n', (self.host, self.port))
+        response, _ = self.socket.recvfrom(512)
+        return response.decode().strip()
 ```
 
 ---
