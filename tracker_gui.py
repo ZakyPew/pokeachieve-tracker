@@ -89,9 +89,7 @@ class PokeAchieveAPI:
 
         parsed = urlparse(raw)
         path = (parsed.path or "").rstrip("/")
-        lower_path = path.lower()
-        # Treat pasted API endpoint paths as base-domain input.
-        if lower_path == "/api" or lower_path.startswith("/api/"):
+        if path.lower() == "/api":
             path = ""
 
         return urlunparse((parsed.scheme or "https", parsed.netloc, path, "", "", "")).rstrip("/")
