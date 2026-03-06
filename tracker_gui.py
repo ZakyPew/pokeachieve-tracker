@@ -222,7 +222,7 @@ class PokeAchieveAPI:
         # Only try legacy routes when the tracker endpoint is unavailable.
         # Avoid masking actionable auth/validation errors behind legacy failures.
         status = data.get("status") if isinstance(data, dict) else None
-        if status not in {404, 405}:
+        if status != 404:
             return False, data
 
         # Backwards compatibility with legacy backend route
@@ -912,6 +912,8 @@ class AchievementTracker:
         self._collection_baseline_initialized = False
         self._unlock_streaks: Dict[str, int] = {}
         self._bad_read_streak = 0
+        self._achievement_poll_count = 0
+        self._warmup_logged = False
         self.validation_profiles: Dict[str, object] = {}
         self.recent_anomalies: List[Dict] = []
         self._derived_checker: Optional[DerivedAchievementChecker] = None
@@ -941,6 +943,7 @@ class AchievementTracker:
             "max_new_catches_per_poll": 5,
             "max_major_unlocks_per_poll": 2,
             "max_legendary_unlocks_per_poll": 1,
+            "unlock_warmup_polls": 4,
         }
 
         raw_default = default_by_gen.get(str(gen), {})
@@ -1045,6 +1048,8 @@ class AchievementTracker:
             self._collection_baseline_initialized = False
             self._unlock_streaks = {}
             self._bad_read_streak = 0
+            self._achievement_poll_count = 0
+            self._warmup_logged = False
 
             validation = self.pokemon_reader.validate_memory_profile(game_name)
             log_event(logging.INFO, "memory_profile_validation", game=game_name, ok=validation.get("ok"), failures=validation.get("failures", []))
@@ -1114,6 +1119,14 @@ class AchievementTracker:
         """Check all achievements, return newly unlocked ones"""
         newly_unlocked = []
         profile = self._get_validation_profile()
+        self._achievement_poll_count += 1
+        warmup_polls = max(0, int(profile.get("unlock_warmup_polls", 4)))
+        if self._achievement_poll_count <= warmup_polls:
+            if not self._warmup_logged:
+                log_event(logging.INFO, "unlock_warmup_active", game=self.game_name, polls=warmup_polls)
+                self._warmup_logged = True
+            return []
+
         candidates_this_poll = 0
         major_candidates_this_poll = 0
         legendary_candidates_this_poll = 0
@@ -2503,6 +2516,8 @@ class PokeAchieveGUI:
                 self.tracker._last_pokedex = []
                 self.tracker._collection_baseline_initialized = False
                 self.tracker._unlock_streaks = {}
+                self.tracker._achievement_poll_count = 0
+                self.tracker._warmup_logged = False
                 self._sent_event_ids = set()
                 self._save_sent_events()
                 self._set_api_status("Not configured" if not self.api else "Configured")
