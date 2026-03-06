@@ -219,6 +219,12 @@ class PokeAchieveAPI:
         if success:
             return True, data
 
+        # Only try legacy routes when the tracker endpoint is unavailable.
+        # Avoid masking actionable auth/validation errors behind legacy failures.
+        status = data.get("status") if isinstance(data, dict) else None
+        if status != 404:
+            return False, data
+
         # Backwards compatibility with legacy backend route
         legacy_payload = {
             "game_id": game_id,
@@ -906,6 +912,8 @@ class AchievementTracker:
         self._collection_baseline_initialized = False
         self._unlock_streaks: Dict[str, int] = {}
         self._bad_read_streak = 0
+        self._achievement_poll_count = 0
+        self._warmup_logged = False
         self.validation_profiles: Dict[str, object] = {}
         self.recent_anomalies: List[Dict] = []
         self._derived_checker: Optional[DerivedAchievementChecker] = None
@@ -930,7 +938,13 @@ class AchievementTracker:
 
         config = self.validation_profiles if isinstance(self.validation_profiles, dict) else {}
         default_by_gen = config.get("default_by_gen", {}) if isinstance(config.get("default_by_gen", {}), dict) else {}
-        fallback_defaults = {"max_unlocks_per_poll": 3, "max_new_catches_per_poll": 5, "max_major_unlocks_per_poll": 2}
+        fallback_defaults = {
+            "max_unlocks_per_poll": 3,
+            "max_new_catches_per_poll": 5,
+            "max_major_unlocks_per_poll": 2,
+            "max_legendary_unlocks_per_poll": 1,
+            "unlock_warmup_polls": 4,
+        }
 
         raw_default = default_by_gen.get(str(gen), {})
         profile = dict(raw_default) if isinstance(raw_default, dict) else dict(fallback_defaults)
@@ -1034,6 +1048,8 @@ class AchievementTracker:
             self._collection_baseline_initialized = False
             self._unlock_streaks = {}
             self._bad_read_streak = 0
+            self._achievement_poll_count = 0
+            self._warmup_logged = False
 
             validation = self.pokemon_reader.validate_memory_profile(game_name)
             log_event(logging.INFO, "memory_profile_validation", game=game_name, ok=validation.get("ok"), failures=validation.get("failures", []))
@@ -1103,8 +1119,17 @@ class AchievementTracker:
         """Check all achievements, return newly unlocked ones"""
         newly_unlocked = []
         profile = self._get_validation_profile()
+        self._achievement_poll_count += 1
+        warmup_polls = max(0, int(profile.get("unlock_warmup_polls", 4)))
+        if self._achievement_poll_count <= warmup_polls:
+            if not self._warmup_logged:
+                log_event(logging.INFO, "unlock_warmup_active", game=self.game_name, polls=warmup_polls)
+                self._warmup_logged = True
+            return []
+
         candidates_this_poll = 0
         major_candidates_this_poll = 0
+        legendary_candidates_this_poll = 0
 
         for achievement in self.achievements:
             if achievement.unlocked:
@@ -1140,6 +1165,15 @@ class AchievementTracker:
                     if major_candidates_this_poll > profile.get("max_major_unlocks_per_poll", 2):
                         self._record_anomaly("major_unlock_spike_ignored", game=self.game_name, category=achievement.category, count=major_candidates_this_poll, threshold=profile.get("max_major_unlocks_per_poll", 2))
                         log_event(logging.WARNING, "major_unlock_spike_ignored", game=self.game_name, category=achievement.category, count=major_candidates_this_poll, threshold=profile.get("max_major_unlocks_per_poll", 2))
+                        self._unlock_streaks[achievement.id] = 0
+                        continue
+
+                if achievement.category == "legendary":
+                    legendary_candidates_this_poll += 1
+                    max_legendary = profile.get("max_legendary_unlocks_per_poll", 1)
+                    if legendary_candidates_this_poll > max_legendary:
+                        self._record_anomaly("legendary_unlock_spike_ignored", game=self.game_name, count=legendary_candidates_this_poll, threshold=max_legendary)
+                        log_event(logging.WARNING, "legendary_unlock_spike_ignored", game=self.game_name, count=legendary_candidates_this_poll, threshold=max_legendary)
                         self._unlock_streaks[achievement.id] = 0
                         continue
 
@@ -2482,6 +2516,8 @@ class PokeAchieveGUI:
                 self.tracker._last_pokedex = []
                 self.tracker._collection_baseline_initialized = False
                 self.tracker._unlock_streaks = {}
+                self.tracker._achievement_poll_count = 0
+                self.tracker._warmup_logged = False
                 self._sent_event_ids = set()
                 self._save_sent_events()
                 self._set_api_status("Not configured" if not self.api else "Configured")
