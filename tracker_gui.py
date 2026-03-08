@@ -61,6 +61,7 @@ class Achievement:
     points: int
     memory_address: str
     memory_condition: str
+    target_value: Optional[int] = None
     unlocked: bool = False
     unlocked_at: Optional[str] = None
 
@@ -105,6 +106,9 @@ class PokeAchieveAPI:
         }
         if self.api_key:
             self.headers["Authorization"] = f"Bearer {self.api_key}"
+        self._tracker_user_achievements_forbidden = False
+        self._public_games_catalog_unsupported = False
+        self._achievement_catalog_cache: Dict[int, List[dict]] = {}
 
     def _make_url(self, endpoint: str) -> str:
         if endpoint.startswith("http://") or endpoint.startswith("https://"):
@@ -129,10 +133,18 @@ class PokeAchieveAPI:
                 status = response.getcode()
                 body = response.read().decode()
                 log_event(logging.INFO, "api_success", method=method, endpoint=endpoint, status=status)
-                return True, json.loads(body)
+                try:
+                    return True, json.loads(body)
+                except json.JSONDecodeError as exc:
+                    if endpoint.startswith("/games/") and endpoint.endswith("/achievements"):
+                        self._public_games_catalog_unsupported = True
+                    log_event(logging.ERROR, "api_exception", method=method, endpoint=endpoint, error_type=type(exc).__name__, error=str(exc))
+                    return False, {"error": str(exc), "status": status}
         except urllib.error.HTTPError as e:
             status = e.getcode()
             error_body = e.read().decode()
+            if endpoint == "/api/users/me/achievements" and status in {401, 403}:
+                self._tracker_user_achievements_forbidden = True
             log_event(logging.ERROR, "api_http_error", method=method, endpoint=endpoint, status=status, body_preview=error_body[:200])
             try:
                 error_data = json.loads(error_body)
@@ -145,62 +157,108 @@ class PokeAchieveAPI:
     
     def _extract_unlocked_ids(self, data: object, game_id: int) -> List[str]:
         """Normalize different progress response shapes into comparable unlock keys."""
+        unlocked: List[str] = []
+
+        def add_item(item: dict):
+            if not isinstance(item, dict):
+                return
+            if item.get("game_id") not in (None, game_id):
+                return
+
+            nested = item.get("achievement") if isinstance(item.get("achievement"), dict) else {}
+            ach_id = (
+                item.get("id")
+                or item.get("achievement_id")
+                or nested.get("id")
+            )
+            ach_name = (
+                nested.get("name")
+                or item.get("achievement_name")
+                or item.get("name")
+            )
+
+            if ach_id is not None:
+                unlocked.append(str(ach_id))
+            if isinstance(ach_name, str) and ach_name.strip():
+                unlocked.append(f"name:{ach_name.strip().lower()}")
+
         if isinstance(data, dict):
             if isinstance(data.get("unlocked_achievement_ids"), list):
-                return [str(x) for x in data.get("unlocked_achievement_ids", [])]
+                unlocked.extend(str(x) for x in data.get("unlocked_achievement_ids", []))
 
             achievements = data.get("achievements")
             if isinstance(achievements, list):
-                return [
-                    str(a.get("id") or a.get("achievement_id"))
-                    for a in achievements
-                    if isinstance(a, dict) and a.get("unlocked") and (a.get("id") or a.get("achievement_id"))
-                ]
+                for item in achievements:
+                    if not isinstance(item, dict):
+                        continue
+                    marked_unlocked = bool(
+                        item.get("unlocked")
+                        or item.get("is_unlocked")
+                        or item.get("status") == "unlocked"
+                    )
+                    if marked_unlocked:
+                        add_item(item)
 
-        if isinstance(data, list):
-            unlocked: List[str] = []
+        elif isinstance(data, list):
             for item in data:
                 if not isinstance(item, dict):
-                    continue
-                if item.get("game_id") not in (None, game_id):
                     continue
                 if item.get("unlocked") or item.get("is_unlocked") or item.get("status") == "unlocked":
-                    ach_id = item.get("id") or item.get("achievement_id")
-                    if ach_id is not None:
-                        unlocked.append(str(ach_id))
+                    add_item(item)
 
-                    nested = item.get("achievement") if isinstance(item.get("achievement"), dict) else {}
-                    ach_name = nested.get("name") or item.get("achievement_name")
-                    if isinstance(ach_name, str) and ach_name.strip():
-                        unlocked.append(f"name:{ach_name.strip().lower()}")
-            return unlocked
+        if not unlocked:
+            return []
 
+        # Preserve order while removing duplicates.
+        return list(dict.fromkeys(unlocked))
+
+    def _get_achievement_catalog(self, game_id: int, force_refresh: bool = False) -> List[dict]:
+        """Load and cache game achievement catalog from tracker API."""
+        if not force_refresh and game_id in self._achievement_catalog_cache:
+            return self._achievement_catalog_cache.get(game_id, [])
+
+        success, data = self._request("GET", f"/api/games/{game_id}/achievements")
+        if success and isinstance(data, list):
+            self._achievement_catalog_cache[game_id] = data
+            return data
         return []
 
-    def _resolve_achievement_id(self, game_id: int, achievement_name: Optional[str]) -> Optional[int]:
-        """Resolve numeric achievement ID required by live API using the user's achievement list."""
-        if not achievement_name:
-            return None
+    def _resolve_achievement_id(self, game_id: int, achievement_name: Optional[str], achievement_string_id: Optional[str] = None) -> Optional[str]:
+        """Resolve an achievement identifier string accepted by /api/tracker/unlock."""
+        target_name = achievement_name.strip().lower() if isinstance(achievement_name, str) and achievement_name.strip() else None
+        target_string_id = str(achievement_string_id).strip().lower() if achievement_string_id else None
 
-        endpoints = ("/api/users/me/achievements", "/users/me/achievements")
-        target = achievement_name.strip().lower()
-        for endpoint in endpoints:
-            success, data = self._request("GET", endpoint)
-            if not success or not isinstance(data, list):
+        catalog = self._get_achievement_catalog(game_id)
+        for item in catalog:
+            if not isinstance(item, dict):
                 continue
-            for item in data:
-                if not isinstance(item, dict):
-                    continue
-                if item.get("game_id") not in (None, game_id):
-                    continue
-                nested = item.get("achievement") if isinstance(item.get("achievement"), dict) else {}
-                ach_name = nested.get("name") or item.get("achievement_name")
-                ach_id = nested.get("id") or item.get("achievement_id") or item.get("id")
-                if isinstance(ach_name, str) and ach_name.strip().lower() == target and ach_id is not None:
-                    try:
-                        return int(ach_id)
-                    except (TypeError, ValueError):
+            string_id = str(item.get("string_id") or item.get("achievement_string_id") or "").strip()
+            name = str(item.get("name") or item.get("achievement_name") or "").strip().lower()
+            ach_id = item.get("id") or item.get("achievement_id")
+            if target_string_id and string_id and target_string_id == string_id.lower():
+                if ach_id is not None:
+                    return str(ach_id)
+                return string_id
+            if target_name and name and target_name == name:
+                if ach_id is not None:
+                    return str(ach_id)
+                if string_id:
+                    return string_id
+
+        # Fallback: some deployments still expose user-achievement listing to API keys.
+        if target_name and not self._tracker_user_achievements_forbidden:
+            success, data = self._request("GET", "/api/users/me/achievements")
+            if success and isinstance(data, list):
+                for item in data:
+                    if not isinstance(item, dict):
                         continue
+                    if item.get("game_id") not in (None, game_id):
+                        continue
+                    nested = item.get("achievement") if isinstance(item.get("achievement"), dict) else {}
+                    ach_name = nested.get("name") or item.get("achievement_name")
+                    ach_id = nested.get("id") or item.get("achievement_id") or item.get("id")
+                    if isinstance(ach_name, str) and ach_name.strip().lower() == target_name and ach_id is not None:
+                        return str(ach_id)
         return None
 
     def test_auth(self) -> tuple[bool, str]:
@@ -218,7 +276,14 @@ class PokeAchieveAPI:
         """Get user's progress for a game."""
         success, data = self._request("GET", f"/api/tracker/progress/{game_id}")
         if success:
-            return True, self._extract_unlocked_ids(data, game_id)
+            unlocked = self._extract_unlocked_ids(data, game_id)
+
+            # Some tracker/progress responses only include IDs; augment with names for local matching.
+            more_success, more_data = self._request("GET", "/api/users/me/achievements")
+            if more_success:
+                unlocked.extend(self._extract_unlocked_ids(more_data, game_id))
+                unlocked = list(dict.fromkeys(unlocked))
+            return True, unlocked
 
         # Backwards compatibility with legacy backend route
         legacy_success, legacy_data = self._request("GET", "/users/me/achievements")
@@ -229,25 +294,75 @@ class PokeAchieveAPI:
     
     def post_unlock(self, game_id: int, achievement_id: str, achievement_name: Optional[str] = None) -> tuple[bool, dict]:
         """Post achievement unlock to platform."""
-        payload = {
-            "game_id": game_id,
-            "achievement_id": str(achievement_id),
-            "unlocked_at": datetime.now().isoformat(),
-        }
-        success, data = self._request("POST", "/api/tracker/unlock", payload)
+        resolved_initial = None
+        if achievement_name:
+            resolved_initial = self._resolve_achievement_id(game_id, achievement_name, achievement_id)
+
+        catalog_known = bool(self._achievement_catalog_cache.get(game_id))
+        if achievement_name and resolved_initial is None and catalog_known:
+            return True, {
+                "skipped": True,
+                "reason": "achievement_not_mapped",
+                "status": 404,
+                "error": "Achievement not mapped to platform catalog",
+            }
+
+        primary_id = str(resolved_initial) if resolved_initial is not None else str(achievement_id)
+        attempted_ids = set()
+
+        def _post_with_id(candidate_id: str) -> tuple[bool, dict]:
+            payload = {
+                "game_id": game_id,
+                "achievement_id": str(candidate_id),
+                "unlocked_at": datetime.now().isoformat(),
+            }
+            return self._request("POST", "/api/tracker/unlock", payload)
+
+        success, data = _post_with_id(primary_id)
+        attempted_ids.add(str(primary_id))
         if success:
             return True, data
 
-        # Only try legacy routes when the tracker endpoint is unavailable.
-        # Avoid masking actionable auth/validation errors behind legacy failures.
         status = data.get("status") if isinstance(data, dict) else None
+        error_text = str(data.get("error", "")).lower() if isinstance(data, dict) else ""
+
+        # Some API deployments require different achievement identifiers.
+        if status in {400, 404, 422} and achievement_name:
+            resolved_id = self._resolve_achievement_id(game_id, achievement_name, achievement_id)
+            if resolved_id is not None and str(resolved_id) not in attempted_ids:
+                resolved_success, resolved_data = _post_with_id(str(resolved_id))
+                attempted_ids.add(str(resolved_id))
+                if resolved_success:
+                    return True, resolved_data
+                data = resolved_data
+                status = data.get("status") if isinstance(data, dict) else status
+                error_text = str(data.get("error", "")).lower() if isinstance(data, dict) else error_text
+
+            if str(achievement_id) not in attempted_ids:
+                original_success, original_data = _post_with_id(str(achievement_id))
+                attempted_ids.add(str(achievement_id))
+                if original_success:
+                    return True, original_data
+                data = original_data
+                status = data.get("status") if isinstance(data, dict) else status
+                error_text = str(data.get("error", "")).lower() if isinstance(data, dict) else error_text
+
+        # The local tracker may include custom achievements not present on the platform.
+        if status == 404 and "achievement not found" in error_text:
+            return True, {
+                "skipped": True,
+                "reason": "achievement_not_found",
+                "status": status,
+                "error": "Achievement not found on platform",
+            }
+
+        # Only try legacy routes when the tracker endpoint itself is unavailable.
         if status != 404:
             return False, data
 
-        # Backwards compatibility with legacy backend route
         legacy_payload = {
             "game_id": game_id,
-            "achievement_id": achievement_id,
+            "achievement_id": str(achievement_id),
             "achievement_name": achievement_name,
             "unlocked_at": datetime.now().isoformat()
         }
@@ -321,17 +436,27 @@ class RetroArchClient:
         self.socket: Optional[socket.socket] = None
         self.connected = False
         self.lock = threading.Lock()
+        self.command_timeout_seconds = 1.0
+        self._command_timeout_count = 0
+        self._socket_reset_counts: Dict[str, int] = {}
+        self._io_error_streak = 0
+        self._last_io_error_ts = 0.0
     
     def connect(self) -> bool:
         """Connect to RetroArch"""
         try:
             with self.lock:
                 self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                self.socket.settimeout(5)
-                # UDP does not need connect
+                # Keep a short timeout so transient packet loss does not stall polling for seconds.
+                self.socket.settimeout(self.command_timeout_seconds)
+                # UDP does not need connect.
                 self.connected = True
+                self._command_timeout_count = 0
+                self._socket_reset_counts = {}
+                self._io_error_streak = 0
+                self._last_io_error_ts = 0.0
             return True
-        except Exception as e:
+        except Exception:
             self.connected = False
             return False
     
@@ -346,21 +471,164 @@ class RetroArchClient:
                     pass
                 self.socket = None
     
+    def _drain_stale_packets(self, max_packets: int = 8) -> int:
+        """Drain stale UDP packets so delayed responses do not pollute new commands."""
+        if not self.socket or max_packets <= 0:
+            return 0
+
+        drained = 0
+        previous_timeout = self.socket.gettimeout()
+        try:
+            self.socket.settimeout(0.0)
+            while drained < int(max_packets):
+                try:
+                    self.socket.recvfrom(4096)
+                    drained += 1
+                except (BlockingIOError, socket.timeout):
+                    break
+                except OSError:
+                    break
+        finally:
+            try:
+                self.socket.settimeout(previous_timeout)
+            except OSError:
+                pass
+        return drained
+
     def send_command(self, command: str) -> Optional[str]:
-        """Send a command to RetroArch and get response"""
+        """Send a command to RetroArch and get response."""
         with self.lock:
             if not self.connected or not self.socket:
                 return None
-            
+
             try:
-                # UDP uses sendto and recvfrom
+                dropped = self._drain_stale_packets(max_packets=8)
+                if dropped:
+                    log_event(
+                        logging.DEBUG,
+                        "retroarch_stale_packets_dropped",
+                        command=command,
+                        dropped=int(dropped),
+                    )
+
+                # UDP uses sendto and recvfrom.
                 self.socket.sendto(f"{command}\n".encode(), (self.host, self.port))
-                response, addr = self.socket.recvfrom(4096)
-                return response.decode().strip()
-            except Exception as e:
-                self.connected = False
+                expected_prefix = command.split()[0]
+                response_text: Optional[str] = None
+                mismatched = 0
+                self.socket.settimeout(self.command_timeout_seconds)
+
+                response, _addr = self.socket.recvfrom(4096)
+                candidate = response.decode(errors="replace").strip()
+                if candidate.startswith(expected_prefix):
+                    response_text = candidate
+                else:
+                    mismatched = 1
+                    short_timeout = max(0.01, min(0.05, float(self.command_timeout_seconds) / 20.0))
+                    self.socket.settimeout(short_timeout)
+                    for _ in range(5):
+                        try:
+                            response, _addr = self.socket.recvfrom(4096)
+                        except socket.timeout:
+                            break
+                        candidate = response.decode(errors="replace").strip()
+                        if candidate.startswith(expected_prefix):
+                            response_text = candidate
+                            break
+                        mismatched += 1
+
+                self.socket.settimeout(self.command_timeout_seconds)
+                if response_text is None:
+                    self._command_timeout_count += 1
+                    self._io_error_streak += 1
+                    self._last_io_error_ts = time.time()
+                    log_event(
+                        logging.WARNING,
+                        "retroarch_response_mismatch",
+                        command=command,
+                        expected=expected_prefix,
+                        mismatched=mismatched,
+                    )
+                    return None
+                if mismatched:
+                    log_event(
+                        logging.INFO,
+                        "retroarch_response_recovered",
+                        command=command,
+                        expected=expected_prefix,
+                        dropped=mismatched,
+                    )
+                self._command_timeout_count = 0
+                self._socket_reset_counts[command] = 0
+                self._io_error_streak = 0
+                self._last_io_error_ts = 0.0
+                return response_text
+            except ConnectionResetError as exc:
+                # On Windows UDP sockets, transient ICMP port-unreachable can surface as WSAECONNRESET.
+                # Keep the socket/session alive and retry on the next poll.
+                self._io_error_streak += 1
+                self._last_io_error_ts = time.time()
+                count = int(self._socket_reset_counts.get(command, 0)) + 1
+                self._socket_reset_counts[command] = count
+                if count == 1 or count % 25 == 0:
+                    log_event(
+                        logging.WARNING,
+                        "retroarch_socket_reset",
+                        command=command,
+                        count=count,
+                        error_type=type(exc).__name__,
+                        error=str(exc),
+                        host=self.host,
+                        port=self.port,
+                    )
                 return None
-    
+            except socket.timeout:
+                # Timeouts are expected occasionally on UDP; keep session alive.
+                self._command_timeout_count += 1
+                self._io_error_streak += 1
+                self._last_io_error_ts = time.time()
+                if self._command_timeout_count == 1 or self._command_timeout_count % 10 == 0:
+                    log_event(
+                        logging.WARNING,
+                        "retroarch_command_timeout",
+                        command=command,
+                        count=self._command_timeout_count,
+                        host=self.host,
+                        port=self.port,
+                    )
+                return None
+            except OSError as exc:
+                self._io_error_streak += 1
+                self._last_io_error_ts = time.time()
+                self.connected = False
+                log_event(
+                    logging.ERROR,
+                    "retroarch_socket_error",
+                    command=command,
+                    error_type=type(exc).__name__,
+                    error=str(exc),
+                )
+                return None
+            except Exception as exc:
+                self._io_error_streak += 1
+                self._last_io_error_ts = time.time()
+                self.connected = False
+                log_event(
+                    logging.ERROR,
+                    "retroarch_command_error",
+                    command=command,
+                    error_type=type(exc).__name__,
+                    error=str(exc),
+                )
+                return None
+
+    def is_unstable_io(self, max_age_seconds: float = 8.0, threshold: int = 3) -> bool:
+        """Return True when recent RetroArch command transport is unstable."""
+        if int(self._io_error_streak) < int(threshold):
+            return False
+        if float(self._last_io_error_ts) <= 0:
+            return False
+        return (time.time() - float(self._last_io_error_ts)) <= float(max_age_seconds)
     def _normalize_game_name(self, raw_text: str) -> Optional[str]:
         normalized = re.sub(r"[^a-z0-9]+", " ", raw_text.lower()).strip()
         for alias, canonical in self.GAME_ALIASES.items():
@@ -371,11 +639,9 @@ class RetroArchClient:
     def get_current_game(self) -> Optional[str]:
         """Get name of currently loaded game from GET_STATUS"""
         response = self.send_command("GET_STATUS")
-        print(f"[DEBUG] RetroArch GET_STATUS response: {response}")
         if response:
             normalized = self._normalize_game_name(response)
             if normalized:
-                print(f"[DEBUG] Normalized game from status: {normalized}")
                 return normalized
 
         if response and response.startswith("GET_STATUS"):
@@ -400,9 +666,7 @@ class RetroArchClient:
                     game_name = game_name.strip()
                     normalized = self._normalize_game_name(game_name)
                     if normalized:
-                        print(f"[DEBUG] Detected game: {normalized}")
                         return normalized
-                    print(f"[DEBUG] Detected game (raw): {game_name}")
                     return game_name
             except Exception as e:
                 log_event(logging.WARNING, "game_parse_error", error=str(e))
@@ -500,46 +764,76 @@ class PokemonMemoryReader:
         "pokemon_ruby": {
             "gen": 3,
             "max_pokemon": 386,
+            "layout_id": "gen3_ruby",
             "pokedex_seen": "0x02024C0C",
             "pokedex_caught": "0x02024D0C",
             "party_count": "0x02024284",
-            "party_start": "0x02024284",
+            "party_start": "0x02024288",
             "party_slot_size": 100,
         },
         "pokemon_sapphire": {
             "gen": 3,
             "max_pokemon": 386,
+            "layout_id": "gen3_sapphire",
             "pokedex_seen": "0x02024C0C",
             "pokedex_caught": "0x02024D0C",
             "party_count": "0x02024284",
-            "party_start": "0x02024284",
+            "party_start": "0x02024288",
             "party_slot_size": 100,
         },
         "pokemon_emerald": {
             "gen": 3,
             "max_pokemon": 386,
+            "layout_id": "gen3_emerald",
             "pokedex_seen": "0x02024C0C",
             "pokedex_caught": "0x02024D0C",
-            "party_count": "0x02024284",
-            "party_start": "0x02024284",
+            # Emerald uses a different live party block than Ruby/Sapphire.
+            "party_count": "0x020244E9",
+            "party_start": "0x02024550",
             "party_slot_size": 100,
+            "party_force_byte_reads": 0,
+            "party_allow_byte_fallback": 0,
+            "party_ignore_count": 0,
+            "party_max_pairs": 2,
+            "party_enable_offset_scan": 0,
+            "party_allow_double_stride": 0,
+            "party_try_double_bulk": 0,
+            "party_decode_budget_ms": 700,
+            # Keep alternate candidates for core/ROM variants.
+            "party_count_candidates": ["0x020244E9", "0x02024284"],
+            "party_start_candidates": ["0x02024550", "0x020244EC"],
+            "party_stride_candidates": [200, 100],
+            "pokedex_allow_byte_fallback": 0,
+            # Emerald-specific saveblock pointers + offsets.
+            "saveblock1_ptr": "0x03005D8C",
+            "saveblock2_ptr": "0x03005D90",
+            "party_count_offset": 0x234,
+            "party_start_offset": 0x238,
+            "pokedex_caught_offset": 0x28,
+            "pokedex_seen_offset": 0x5C,
+            "saveblock1_flags_offset": 0x1270,
+            "adventure_started_flag": 0x74,
+            "gym_progression_flags": [0xA5, 0xA6, 0xA7, 0xA8, 0xA9, 0xAA, 0xAB, 0xAC],
+            "party_use_pointer_layout": 0,
         },
         "pokemon_firered": {
             "gen": 3,
             "max_pokemon": 386,
+            "layout_id": "gen3_firered",
             "pokedex_seen": "0x02024C0C",
             "pokedex_caught": "0x02024D0C",
             "party_count": "0x02024284",
-            "party_start": "0x02024284",
+            "party_start": "0x02024288",
             "party_slot_size": 100,
         },
         "pokemon_leafgreen": {
             "gen": 3,
             "max_pokemon": 386,
+            "layout_id": "gen3_leafgreen",
             "pokedex_seen": "0x02024C0C",
             "pokedex_caught": "0x02024D0C",
             "party_count": "0x02024284",
-            "party_start": "0x02024284",
+            "party_start": "0x02024288",
             "party_slot_size": 100,
         },
     }
@@ -759,10 +1053,20 @@ class PokemonMemoryReader:
         382: "Kyogre", 383: "Groudon", 384: "Rayquaza",
         385: "Jirachi", 386: "Deoxys",
     }
-    
+
+    # Gen 3 encrypted party substructure orders by personality % 24.
+    GEN3_PARTY_SUBSTRUCT_ORDERS = [
+        (0, 1, 2, 3), (0, 1, 3, 2), (0, 2, 1, 3), (0, 3, 1, 2), (0, 2, 3, 1), (0, 3, 2, 1),
+        (1, 0, 2, 3), (1, 0, 3, 2), (2, 0, 1, 3), (3, 0, 1, 2), (2, 0, 3, 1), (3, 0, 2, 1),
+        (1, 2, 0, 3), (1, 3, 0, 2), (2, 1, 0, 3), (3, 1, 0, 2), (2, 3, 0, 1), (3, 2, 0, 1),
+        (1, 2, 3, 0), (1, 3, 2, 0), (2, 1, 3, 0), (3, 1, 2, 0), (2, 3, 1, 0), (3, 2, 1, 0),
+    ]
     def __init__(self, retroarch: RetroArchClient):
         self.retroarch = retroarch
-    
+        self._saveblock_ptr_backoff_until: Dict[str, float] = {}
+        self._saveblock_ptr_fail_count: Dict[str, int] = {}
+        self._pointer_unreadable_last_log: Dict[str, float] = {}
+        self._last_gen3_party_selection: Dict[str, Dict[str, object]] = {}    
     def get_pokemon_name(self, pokemon_id: int) -> str:
         """Get Pokemon name from ID"""
         return self.POKEMON_NAMES.get(pokemon_id, f"Pokemon #{pokemon_id}")
@@ -773,11 +1077,14 @@ class PokemonMemoryReader:
         clean_name = re.sub(r'\([^)]*\)', '', game_name).strip()
         game_key = clean_name.lower().replace(" ", "_").replace("'", "").strip()
         
-        # Try new game_configs system first
+        # Legacy table may carry game-specific runtime layout metadata.
+        legacy = self.GAME_ADDRESSES.get(game_key) or {}
+
+        # Try new game_configs system first, then overlay game-specific legacy extras.
         if GAME_CONFIGS_AVAILABLE:
             config = get_game_config(clean_name)
             if config:
-                return {
+                resolved = {
                     "gen": config.generation,
                     "max_pokemon": config.max_pokemon,
                     "pokedex_caught": config.pokedex_caught_start,
@@ -789,9 +1096,12 @@ class PokemonMemoryReader:
                     "champion_address": config.champion_address,
                     "hall_of_fame_address": config.hall_of_fame_address,
                 }
-        
-        # Fallback to legacy hardcoded addresses
-        return self.GAME_ADDRESSES.get(game_key)
+                # Legacy table contains game-specific hotfixes; allow it to override.
+                resolved.update(legacy)
+                return resolved
+
+        # Fallback to legacy hardcoded addresses.
+        return legacy if legacy else None
     
     def validate_memory_profile(self, game_name: str) -> Dict[str, object]:
         """Validate key memory addresses for the selected game."""
@@ -805,8 +1115,13 @@ class PokemonMemoryReader:
             "badge_address": config.get("badge_address"),
         }
         if int(config.get("gen", 1)) == 3:
-            checks["hall_of_fame_address"] = config.get("hall_of_fame_address")
-            checks["champion_address"] = config.get("champion_address")
+            hall_of_fame_addr = config.get("hall_of_fame_address")
+            champion_addr = config.get("champion_address")
+            if hall_of_fame_addr:
+                checks["hall_of_fame_address"] = hall_of_fame_addr
+            if champion_addr:
+                checks["champion_address"] = champion_addr
+
         failures = []
         for key, addr in checks.items():
             if not addr:
@@ -816,85 +1131,725 @@ class PokemonMemoryReader:
             if value is None:
                 failures.append(f"{key}:unreadable")
 
-        return {"ok": len(failures) == 0, "failures": failures, "checks": checks}
+        # Gen 3 pointer checks are advisory; some cores hide IWRAM pointer globals.
+        warnings: List[str] = []
+        if int(config.get("gen", 1)) == 3:
+            for ptr_key in ("saveblock1_ptr", "saveblock2_ptr"):
+                ptr_addr = config.get(ptr_key)
+                if not ptr_addr:
+                    continue
+                checks[ptr_key] = ptr_addr
+                if self._resolve_gen3_saveblock_ptr(ptr_addr, game_name=game_name) is None:
+                    warnings.append(f"{ptr_key}:unreadable")
 
-    def read_pokedex(self, game_name: str) -> List[int]:
-        """Read Pokedex CAUGHT flags - returns list of CAUGHT Pokemon IDs (not seen!)"""
+        return {"ok": len(failures) == 0, "failures": failures, "warnings": warnings, "checks": checks}
+
+    def _read_u32_le(self, address: str) -> Optional[int]:
+        """Read a 32-bit little-endian value from memory."""
+        values = self.retroarch.read_memory(address, 4)
+        if isinstance(values, list) and len(values) >= 4:
+            return int(values[0]) | (int(values[1]) << 8) | (int(values[2]) << 16) | (int(values[3]) << 24)
+
+        # Fallback to single-byte reads for cores that only return one byte per command.
+        bytes_out: List[int] = []
+        try:
+            base = int(address, 16)
+        except (TypeError, ValueError):
+            return None
+
+        for offset in range(4):
+            val = self.retroarch.read_memory(hex(base + offset))
+            if not isinstance(val, int):
+                return None
+            bytes_out.append(val)
+
+        return int(bytes_out[0]) | (int(bytes_out[1]) << 8) | (int(bytes_out[2]) << 16) | (int(bytes_out[3]) << 24)
+    def _resolve_gen3_saveblock_ptr(self, pointer_addr: str, game_name: Optional[str] = None) -> Optional[int]:
+        """Resolve a Gen 3 save block pointer and validate EWRAM range."""
+        key = f"{(game_name or '').lower()}:{str(pointer_addr).lower()}"
+        now = time.time()
+        if float(self._saveblock_ptr_backoff_until.get(key, 0.0)) > now:
+            return None
+
+        ptr = self._read_u32_le(pointer_addr)
+        if ptr is None:
+            failures = int(self._saveblock_ptr_fail_count.get(key, 0)) + 1
+            self._saveblock_ptr_fail_count[key] = failures
+            self._saveblock_ptr_backoff_until[key] = now + min(20.0, 1.5 * failures)
+            return None
+
+        # Gen 3 working RAM range (EWRAM); reject null/garbage pointers.
+        if 0x02000000 <= int(ptr) < 0x02040000:
+            self._saveblock_ptr_fail_count[key] = 0
+            self._saveblock_ptr_backoff_until[key] = 0.0
+            return int(ptr)
+
+        failures = int(self._saveblock_ptr_fail_count.get(key, 0)) + 1
+        self._saveblock_ptr_fail_count[key] = failures
+        self._saveblock_ptr_backoff_until[key] = now + min(20.0, 1.5 * failures)
+        return None
+    def _resolve_gen3_saveblock1_base(self, config: Dict, game_name: Optional[str] = None) -> Optional[int]:
+        """Resolve SaveBlock1 base from pointer or static fallback math."""
+        ptr_addr = config.get("saveblock1_ptr")
+        if ptr_addr:
+            ptr = self._resolve_gen3_saveblock_ptr(ptr_addr, game_name=game_name)
+            if ptr is not None:
+                return ptr
+
+        party_count_addr = config.get("party_count")
+        party_count_offset = config.get("party_count_offset")
+        if party_count_addr and party_count_offset is not None:
+            try:
+                return int(party_count_addr, 16) - int(party_count_offset)
+            except (TypeError, ValueError):
+                return None
+        return None
+
+    def read_gen3_event_flag(self, game_name: str, flag_id: int) -> Optional[bool]:
+        """Read a Gen 3 event flag from SaveBlock1 flags array."""
         config = self.get_game_config(game_name)
-        if not config:
+        if not config or int(config.get("gen", 1)) != 3:
+            return None
+
+        flags_offset = config.get("saveblock1_flags_offset")
+        if flags_offset is None:
+            return None
+
+        base = self._resolve_gen3_saveblock1_base(config, game_name=game_name)
+        if base is None:
+            return None
+
+        try:
+            flag = int(flag_id)
+        except (TypeError, ValueError):
+            return None
+
+        byte_addr = hex(base + int(flags_offset) + (flag // 8))
+        byte_val = self.retroarch.read_memory(byte_addr)
+        if not isinstance(byte_val, int):
+            return None
+
+        return bool((int(byte_val) >> (flag & 7)) & 1)
+
+    def _log_pointer_unreadable_throttled(self, game_name: str, pointer: str, layout: Optional[str] = None):
+        """Throttle noisy pointer-unreadable logs during transient UDP instability."""
+        key = f"{game_name}:{pointer}"
+        now = time.time()
+        last = float(self._pointer_unreadable_last_log.get(key, 0.0))
+        if now - last < 20.0:
+            return
+        self._pointer_unreadable_last_log[key] = now
+        log_event(
+            logging.WARNING,
+            "gen3_saveblock_pointer_unreadable",
+            game=game_name,
+            pointer=pointer,
+            layout=layout,
+        )
+
+    def _decode_gen3_party_species(self, slot_bytes: List[int], max_species_id: int) -> Optional[int]:
+        """Decode species from encrypted Gen 3 party data slot."""
+        if not isinstance(slot_bytes, list) or len(slot_bytes) < 80:
+            return None
+
+        def read_u32(offset: int) -> int:
+            return (
+                int(slot_bytes[offset])
+                | (int(slot_bytes[offset + 1]) << 8)
+                | (int(slot_bytes[offset + 2]) << 16)
+                | (int(slot_bytes[offset + 3]) << 24)
+            )
+
+        personality = read_u32(0)
+        ot_id = read_u32(4)
+        key = personality ^ ot_id
+
+        encrypted = slot_bytes[32:80]
+        if len(encrypted) < 48:
+            return None
+
+        decrypted = [0] * 48
+        for offset in range(0, 48, 4):
+            word = (
+                int(encrypted[offset])
+                | (int(encrypted[offset + 1]) << 8)
+                | (int(encrypted[offset + 2]) << 16)
+                | (int(encrypted[offset + 3]) << 24)
+            )
+            word ^= key
+            decrypted[offset] = word & 0xFF
+            decrypted[offset + 1] = (word >> 8) & 0xFF
+            decrypted[offset + 2] = (word >> 16) & 0xFF
+            decrypted[offset + 3] = (word >> 24) & 0xFF
+
+        # Validate checksum to reject misaligned/noisy slot reads.
+        stored_checksum = int(slot_bytes[28]) | (int(slot_bytes[29]) << 8)
+        calc_checksum = 0
+        for off in range(0, 48, 2):
+            word = int(decrypted[off]) | (int(decrypted[off + 1]) << 8)
+            calc_checksum = (calc_checksum + word) & 0xFFFF
+        if calc_checksum != stored_checksum:
+            return None
+
+        order = self.GEN3_PARTY_SUBSTRUCT_ORDERS[personality % 24]
+        growth_index = order.index(0)
+        growth_offset = growth_index * 12
+        species = int(decrypted[growth_offset]) | (int(decrypted[growth_offset + 1]) << 8)
+
+        if species <= 0 or species > max_species_id:
+            return None
+        return species
+
+    def _read_pokedex_flags(self, start_addr: str, max_pokemon: int, allow_byte_fallback: bool = True) -> List[int]:
+        """Read Pokedex bitflags from a start address."""
+        if not start_addr:
             return []
-        
-        caught = []
-        # Use pokedex_caught address (0xD30A for Gen 1) not pokedex_seen (0xD2F7)!
-        # pokedex_seen = every Pokemon you encountered
-        # pokedex_caught = only Pokemon you actually caught
-        pokedex_addr = config.get("pokedex_caught", config.get("pokedex_flags", "0xD2F7"))
-        
-        # Read bytes - each byte contains 8 Pokemon flags
-        # Gen 1: 151 Pokemon = 19 bytes
-        # Gen 2: 251 Pokemon = 32 bytes  
-        # Gen 3: 386 Pokemon = 49 bytes
-        
-        max_pokemon = 151 if config["gen"] == 1 else (251 if config["gen"] == 2 else 386)
+
+        found: List[int] = []
         num_bytes = (max_pokemon + 7) // 8
-        
+
+        # Fast path: read whole bitfield in one command to avoid dozens of round-trips.
+        bulk_values = self.retroarch.read_memory(start_addr, num_bytes)
+        if isinstance(bulk_values, list) and len(bulk_values) >= num_bytes:
+            if all(isinstance(v, int) and 0 <= int(v) <= 0xFF for v in bulk_values[:num_bytes]):
+                for byte_idx, raw_val in enumerate(bulk_values[:num_bytes]):
+                    byte_val = int(raw_val) & 0xFF
+                    for bit_idx in range(8):
+                        pokemon_id = byte_idx * 8 + bit_idx + 1
+                        if pokemon_id > max_pokemon:
+                            break
+                        if (byte_val >> bit_idx) & 1:
+                            found.append(pokemon_id)
+                return found
+
+        if not allow_byte_fallback:
+            return found
+
+        # Compatibility fallback: byte-by-byte reads for cores that do not support bulk memory responses.
         for byte_idx in range(num_bytes):
-            addr = hex(int(pokedex_addr, 16) + byte_idx)
+            addr = hex(int(start_addr, 16) + byte_idx)
             byte_val = self.retroarch.read_memory(addr)
-            
-            if byte_val is None:
+            if not isinstance(byte_val, int):
                 continue
-            
-            # Check each bit in the byte
+
+            value = int(byte_val) & 0xFF
             for bit_idx in range(8):
                 pokemon_id = byte_idx * 8 + bit_idx + 1
                 if pokemon_id > max_pokemon:
                     break
-                
-                if (byte_val >> bit_idx) & 1:
-                    caught.append(pokemon_id)
-        
-        return caught
+                if (value >> bit_idx) & 1:
+                    found.append(pokemon_id)
+
+        return found
+
+    def read_pokedex(self, game_name: str, count_hint: Optional[int] = None) -> List[int]:
+        """Read Pokedex caught flags with optional count-based sanity selection."""
+        config = self.get_game_config(game_name)
+        if not config:
+            return []
+
+        gen = int(config.get("gen", 1))
+        max_pokemon = int(config.get("max_pokemon") or (151 if gen == 1 else (251 if gen == 2 else 386)))
+        static_caught_addr = config.get("pokedex_caught", config.get("pokedex_flags", "0xD2F7"))
+        static_seen_addr = config.get("pokedex_seen")
+        caught_addr = static_caught_addr
+        seen_addr = static_seen_addr
+        used_pointer_layout = False
+        allow_byte_fallback = bool(config.get("pokedex_allow_byte_fallback", 1))
+        if bool(getattr(self.retroarch, "is_unstable_io", lambda: False)()):
+            allow_byte_fallback = False
+
+        def _safe_read_pokedex_flags(addr: str) -> List[int]:
+            """Compatibility wrapper for tests that monkeypatch _read_pokedex_flags."""
+            try:
+                return self._read_pokedex_flags(addr, max_pokemon, allow_byte_fallback=allow_byte_fallback)
+            except TypeError:
+                return self._read_pokedex_flags(addr, max_pokemon)
+        # Emerald-specific pointer-based reads prevent cross-title address bleed in Gen 3.
+        if gen == 3 and str(config.get("layout_id", "")).lower() == "gen3_emerald" and config.get("saveblock2_ptr") and config.get("pokedex_caught_offset") is not None:
+            saveblock2_ptr = self._resolve_gen3_saveblock_ptr(config.get("saveblock2_ptr"), game_name=game_name)
+            if saveblock2_ptr is not None:
+                used_pointer_layout = True
+                caught_addr = hex(saveblock2_ptr + int(config.get("pokedex_caught_offset")))
+                seen_offset = config.get("pokedex_seen_offset")
+                seen_addr = hex(saveblock2_ptr + int(seen_offset)) if seen_offset is not None else seen_addr
+            else:
+                self._log_pointer_unreadable_throttled(
+                    game_name=game_name,
+                    pointer=str(config.get("saveblock2_ptr")),
+                    layout=config.get("layout_id"),
+                )
+
+        caught = _safe_read_pokedex_flags(caught_addr)
+
+        if gen == 3 and used_pointer_layout and not caught and static_caught_addr and static_caught_addr != caught_addr:
+            fallback_caught = _safe_read_pokedex_flags(static_caught_addr)
+            if fallback_caught:
+                log_event(
+                    logging.INFO,
+                    "gen3_pointer_fallback_static",
+                    game=game_name,
+                    kind="pokedex",
+                    pointer_addr=caught_addr,
+                    static_addr=static_caught_addr,
+                    count=len(fallback_caught),
+                )
+                caught = fallback_caught
+                seen_addr = static_seen_addr
+
+        # For Gen 3, always trust the caught bitset for unlock checks.
+        # Count hints in achievement JSON can represent seen counts and cause false unlocks.
+        if gen == 3:
+            if seen_addr:
+                seen = _safe_read_pokedex_flags(seen_addr)
+                if seen and len(caught) > len(seen):
+                    log_event(
+                        logging.WARNING,
+                        "pokedex_seen_less_than_caught",
+                        game=game_name,
+                        layout=config.get("layout_id"),
+                        caught_count=len(caught),
+                        seen_count=len(seen),
+                    )
+            return caught
+
+        if count_hint is None or not seen_addr or seen_addr == caught_addr:
+            return caught
+
+        seen = _safe_read_pokedex_flags(seen_addr)
+        candidates = [("caught", caught)]
+        if seen:
+            candidates.append(("seen", seen))
+
+        best_name, best_list = min(
+            candidates,
+            key=lambda item: (abs(len(item[1]) - int(count_hint)), 0 if item[0] == "caught" else 1),
+        )
+
+        if best_name != "caught":
+            log_event(
+                logging.INFO,
+                "pokedex_source_adjusted",
+                game=game_name,
+                selected=best_name,
+                count_hint=count_hint,
+                caught_count=len(caught),
+                seen_count=len(seen),
+            )
+
+        return best_list
     
     def read_party(self, game_name: str) -> List[Dict]:
         """Read current party Pokemon"""
         config = self.get_game_config(game_name)
         if not config:
             return []
-        
+
+        gen = int(config.get("gen", 1))
         party = []
-        party_count_addr = config["party_count"]
-        party_start_addr = config["party_start"]
-        slot_size = config["party_slot_size"]
-        
-        # Read party count
+        static_party_count_addr = config["party_count"]
+        static_party_start_addr = config["party_start"]
+        party_count_addr = static_party_count_addr
+        party_start_addr = static_party_start_addr
+        slot_size = int(config["party_slot_size"])
+        used_pointer_layout = False
+
+        # Emerald-specific pointer-based party addresses.
+        if gen == 3 and str(config.get("layout_id", "")).lower() == "gen3_emerald" and bool(config.get("party_use_pointer_layout", 0)) and config.get("saveblock1_ptr") and config.get("party_count_offset") is not None and config.get("party_start_offset") is not None:
+            saveblock1_ptr = self._resolve_gen3_saveblock_ptr(config.get("saveblock1_ptr"), game_name=game_name)
+            if saveblock1_ptr is not None:
+                used_pointer_layout = True
+                party_count_addr = hex(saveblock1_ptr + int(config.get("party_count_offset")))
+                party_start_addr = hex(saveblock1_ptr + int(config.get("party_start_offset")))
+            else:
+                self._log_pointer_unreadable_throttled(
+                    game_name=game_name,
+                    pointer=str(config.get("saveblock1_ptr")),
+                    layout=config.get("layout_id"),
+                )
+
+        # Read party count from selected layout.
         count = self.retroarch.read_memory(party_count_addr)
-        if count is None or count > 6:
+        if (not isinstance(count, int) or count < 0 or count > 6) and used_pointer_layout:
+            fallback_count = self.retroarch.read_memory(static_party_count_addr)
+            if isinstance(fallback_count, int) and 0 <= fallback_count <= 6:
+                log_event(
+                    logging.INFO,
+                    "gen3_pointer_fallback_static",
+                    game=game_name,
+                    kind="party",
+                    pointer_addr=party_count_addr,
+                    static_addr=static_party_count_addr,
+                    count=fallback_count,
+                )
+                count = fallback_count
+                party_count_addr = static_party_count_addr
+                party_start_addr = static_party_start_addr
+
+        count_valid = isinstance(count, int) and 0 <= int(count) <= 6
+        max_species_id = max(self.POKEMON_NAMES.keys())
+
+        if gen == 3:
+            force_gen3_party_byte_reads = bool(config.get("party_force_byte_reads", 0))
+            allow_party_byte_fallback = bool(config.get("party_allow_byte_fallback", 1))
+            ignore_party_count = bool(config.get("party_ignore_count", 0))
+            enable_offset_scan = bool(config.get("party_enable_offset_scan", 1))
+            allow_double_stride = bool(config.get("party_allow_double_stride", 1))
+            try_double_bulk = bool(config.get("party_try_double_bulk", 1))
+            try:
+                party_decode_budget_ms = max(200, int(config.get("party_decode_budget_ms", 1200)))
+            except (TypeError, ValueError):
+                party_decode_budget_ms = 1200
+            decode_deadline = time.perf_counter() + (float(party_decode_budget_ms) / 1000.0)
+            budget_exceeded = False
+            gen3_required_slot_bytes = list(range(0, 8)) + [28, 29] + list(range(32, 80)) + [84]
+
+            try:
+                primary_count_addr = hex(int(str(party_count_addr), 16))
+                primary_start_addr = hex(int(str(party_start_addr), 16))
+            except (TypeError, ValueError):
+                return []
+
+            def _decode_budget_exceeded() -> bool:
+                return time.perf_counter() >= decode_deadline
+
+            address_pairs: List[Tuple[str, str]] = [(primary_count_addr, primary_start_addr)]
+            if not used_pointer_layout:
+                count_candidates = config.get("party_count_candidates")
+                start_candidates = config.get("party_start_candidates")
+                if isinstance(start_candidates, list):
+                    for idx, start_candidate in enumerate(start_candidates):
+                        if not isinstance(start_candidate, str):
+                            continue
+                        count_candidate = primary_count_addr
+                        if isinstance(count_candidates, list) and idx < len(count_candidates) and isinstance(count_candidates[idx], str):
+                            count_candidate = count_candidates[idx]
+                        address_pairs.append((count_candidate, start_candidate))
+
+            seen_pairs = set()
+            ordered_pairs: List[Tuple[str, str]] = []
+            for count_candidate, start_candidate in address_pairs:
+                try:
+                    normalized_count = hex(int(str(count_candidate), 16))
+                    normalized_start = hex(int(str(start_candidate), 16))
+                except (TypeError, ValueError):
+                    continue
+                pair_key = (normalized_count, normalized_start)
+                if pair_key in seen_pairs:
+                    continue
+                seen_pairs.add(pair_key)
+                ordered_pairs.append(pair_key)
+
+            if not ordered_pairs:
+                return []
+
+            try:
+                max_pairs = max(1, int(config.get("party_max_pairs", len(ordered_pairs))))
+            except (TypeError, ValueError):
+                max_pairs = len(ordered_pairs)
+            ordered_pairs = ordered_pairs[:max_pairs]
+
+            best_party: List[Dict] = []
+            best_raw_party_len = 0
+            best_raw_slots: List[int] = []
+            best_base = int(ordered_pairs[0][1], 16)
+            best_count_addr = ordered_pairs[0][0]
+            best_start_addr = ordered_pairs[0][1]
+            best_stride = int(slot_size)
+            best_expected_count = int(count) if count_valid else None
+            best_score: Tuple[int, int, int, int, int, int, int, int, int, int, int, int] = (
+                -1, -1, -1, -1, -1, -10**9, -10**9, -10**9, -10**9, -10**9, -10**9, -10**9
+            )
+
+            def _decode_party_candidate(base_addr: int, slot_stride: int, slot_count: int) -> Tuple[List[Dict], int]:
+                decoded_party: List[Dict] = []
+                decode_failures = 0
+                for slot_idx in range(slot_count):
+                    if _decode_budget_exceeded():
+                        return decoded_party, decode_failures
+
+                    slot_addr = hex(base_addr + (slot_idx * slot_stride))
+                    slot_data_variants: List[List[int]] = []
+
+                    if not force_gen3_party_byte_reads:
+                        bulk_slot_data = self.retroarch.read_memory(slot_addr, slot_size)
+                        if isinstance(bulk_slot_data, list) and len(bulk_slot_data) >= slot_size:
+                            if all(isinstance(v, int) and 0 <= int(v) <= 0xFF for v in bulk_slot_data[:slot_size]):
+                                slot_data_variants.append([int(v) & 0xFF for v in bulk_slot_data[:slot_size]])
+
+                        if try_double_bulk:
+                            # Some cores expose 16-bit-oriented reads; try de-interleaving a 2x block.
+                            bulk_double = self.retroarch.read_memory(slot_addr, slot_size * 2)
+                            if isinstance(bulk_double, list) and len(bulk_double) >= slot_size * 2:
+                                if all(isinstance(v, int) and 0 <= int(v) <= 0xFF for v in bulk_double[:slot_size * 2]):
+                                    even_bytes = [int(v) & 0xFF for v in bulk_double[:slot_size * 2:2]]
+                                    odd_bytes = [int(v) & 0xFF for v in bulk_double[1:slot_size * 2:2]]
+                                    slot_data_variants.append(even_bytes)
+                                    slot_data_variants.append(odd_bytes)
+                    selected_slot_data: Optional[List[int]] = None
+                    selected_species: Optional[int] = None
+                    for variant in slot_data_variants:
+                        species_id = self._decode_gen3_party_species(variant, max_species_id=max_species_id)
+                        if species_id is not None:
+                            selected_slot_data = variant
+                            selected_species = int(species_id)
+                            break
+
+                    # If bulk reads are present but fail checksum/decode, retry with direct byte reads.
+                    if (selected_slot_data is None or selected_species is None) and allow_party_byte_fallback:
+                        slot_data = [0] * 85
+                        for byte_idx in gen3_required_slot_bytes:
+                            if _decode_budget_exceeded():
+                                return decoded_party, decode_failures
+                            byte_val = self.retroarch.read_memory(hex(base_addr + (slot_idx * slot_stride) + int(byte_idx)))
+                            if not isinstance(byte_val, int):
+                                slot_data = []
+                                break
+                            slot_data[int(byte_idx)] = int(byte_val) & 0xFF
+                        if slot_data:
+                            species_id = self._decode_gen3_party_species(slot_data, max_species_id=max_species_id)
+                            if species_id is not None:
+                                selected_slot_data = slot_data
+                                selected_species = int(species_id)
+
+                    if selected_slot_data is None or selected_species is None:
+                        decode_failures += 1
+                        continue
+
+                    level = selected_slot_data[84] if len(selected_slot_data) > 84 and int(selected_slot_data[84]) > 0 else None
+                    decoded_party.append({
+                        "id": selected_species,
+                        "level": int(level) if level is not None else None,
+                        "slot": slot_idx + 1,
+                    })
+                return decoded_party, decode_failures
+
+            for count_candidate, start_candidate in ordered_pairs:
+                if _decode_budget_exceeded():
+                    budget_exceeded = True
+                    break
+
+                local_count = count if (count_candidate == primary_count_addr and count_valid) else self.retroarch.read_memory(count_candidate)
+                local_count_valid = isinstance(local_count, int) and 0 <= int(local_count) <= 6
+
+                if ignore_party_count:
+                    if local_count_valid and int(local_count) == 0:
+                        slots_to_scan = 0
+                    else:
+                        slots_to_scan = 6
+                else:
+                    slots_to_scan = int(local_count) if (local_count_valid and int(local_count) > 0) else 6
+
+                if int(slots_to_scan) <= 0:
+                    continue
+
+                try:
+                    start_base = int(start_candidate, 16)
+                except (TypeError, ValueError):
+                    continue
+
+                base_candidates: List[int] = [start_base]
+                if not used_pointer_layout and enable_offset_scan:
+                    for off in (4, -4, 8, -8, slot_size, -slot_size):
+                        cand = start_base + off
+                        if cand > 0:
+                            base_candidates.append(cand)
+
+                seen_bases = set()
+                ordered_bases: List[int] = []
+                for base in base_candidates:
+                    if base in seen_bases:
+                        continue
+                    seen_bases.add(base)
+                    ordered_bases.append(base)
+
+                stride_candidates: List[int] = []
+                configured_stride_candidates = config.get("party_stride_candidates")
+                if isinstance(configured_stride_candidates, list):
+                    for candidate in configured_stride_candidates:
+                        try:
+                            stride_candidates.append(int(candidate))
+                        except (TypeError, ValueError):
+                            continue
+                if not stride_candidates:
+                    stride_candidates = [int(slot_size)]
+                    if not used_pointer_layout and allow_double_stride and int(slot_size) > 0:
+                        stride_candidates.append(int(slot_size) * 2)
+
+                seen_strides = set()
+                ordered_strides: List[int] = []
+                for stride in stride_candidates:
+                    if int(stride) <= 0 or int(stride) in seen_strides:
+                        continue
+                    seen_strides.add(int(stride))
+                    ordered_strides.append(int(stride))
+
+                for base in ordered_bases:
+                    if _decode_budget_exceeded():
+                        budget_exceeded = True
+                        break
+                    for slot_stride in ordered_strides:
+                        if _decode_budget_exceeded():
+                            budget_exceeded = True
+                            break
+
+                        candidate_party, failures = _decode_party_candidate(base, slot_stride, int(slots_to_scan))
+
+                        slot_numbers = [
+                            int(member.get("slot", 0))
+                            for member in candidate_party
+                            if int(member.get("slot", 0)) > 0
+                        ]
+                        contiguous_prefix_len = 0
+                        for slot_number in slot_numbers:
+                            if slot_number == contiguous_prefix_len + 1:
+                                contiguous_prefix_len += 1
+                            else:
+                                break
+
+                        normalized_party = candidate_party[:contiguous_prefix_len]
+                        non_prefix_slots = max(0, len(slot_numbers) - contiguous_prefix_len)
+                        starts_at_one = 1 if slot_numbers and slot_numbers[0] == 1 else 0
+                        contiguous_only = 1 if slot_numbers and non_prefix_slots == 0 else 0
+
+                        gap_penalty = 0
+                        first_slot = 99
+                        if slot_numbers:
+                            first_slot = slot_numbers[0]
+                            expected = list(range(first_slot, first_slot + len(slot_numbers)))
+                            gap_penalty = sum(1 for actual, exp in zip(slot_numbers, expected) if actual != exp)
+
+                        count_bonus = 0
+                        count_exact = 0
+                        count_mismatch = 0
+                        if local_count_valid and int(local_count) > 0:
+                            count_bonus = 1
+                            count_mismatch = abs(contiguous_prefix_len - int(local_count))
+                            if contiguous_prefix_len == int(local_count):
+                                count_exact = 1
+
+                        base_penalty = abs(int(base) - int(start_base))
+                        stride_penalty = abs(int(slot_stride) - int(slot_size))
+
+                        # Prefer a contiguous 1..N prefix, then count agreement and minimal fallback deviation.
+                        score = (
+                            count_exact,
+                            contiguous_prefix_len,
+                            contiguous_only,
+                            starts_at_one,
+                            count_bonus,
+                            -count_mismatch,
+                            -non_prefix_slots,
+                            -failures,
+                            -gap_penalty,
+                            -base_penalty,
+                            -stride_penalty,
+                            len(candidate_party),
+                        )
+
+                        if score > best_score:
+                            best_score = score
+                            best_base = base
+                            best_stride = int(slot_stride)
+                            best_party = normalized_party
+                            best_raw_party_len = len(candidate_party)
+                            best_raw_slots = slot_numbers
+                            best_count_addr = count_candidate
+                            best_start_addr = start_candidate
+                            best_expected_count = int(local_count) if local_count_valid else None
+
+                    if budget_exceeded:
+                        break
+                if budget_exceeded:
+                    break
+
+            if budget_exceeded:
+                log_event(
+                    logging.INFO,
+                    "gen3_party_decode_budget_hit",
+                    game=game_name,
+                    budget_ms=party_decode_budget_ms,
+                    decoded=len(best_party),
+                    expected=best_expected_count,
+                    start_addr=best_start_addr,
+                    count_addr=best_count_addr,
+                )
+
+            selection = {
+                "count_addr": str(best_count_addr),
+                "start_addr": str(best_start_addr),
+                "base": int(best_base),
+                "stride": int(best_stride),
+            }
+            previous_selection = self._last_gen3_party_selection.get(game_name)
+            selection_changed = previous_selection != selection
+            self._last_gen3_party_selection[game_name] = selection
+
+            if best_expected_count == 0 and best_party and selection_changed:
+                log_event(
+                    logging.INFO,
+                    "gen3_party_count_fallback",
+                    game=game_name,
+                    count_addr=best_count_addr,
+                    decoded=len(best_party),
+                )
+
+            if selection_changed and (best_start_addr != primary_start_addr or best_base != int(best_start_addr, 16) or best_count_addr != primary_count_addr):
+                log_event(
+                    logging.INFO,
+                    "gen3_party_base_adjusted",
+                    game=game_name,
+                    original=primary_start_addr,
+                    selected=hex(best_base),
+                    decoded=len(best_party),
+                    expected=best_expected_count,
+                    count_addr=best_count_addr,
+                    start_addr=best_start_addr,
+                )
+
+            if selection_changed and int(best_stride) != int(slot_size):
+                log_event(
+                    logging.INFO,
+                    "gen3_party_stride_adjusted",
+                    game=game_name,
+                    selected_stride=best_stride,
+                    default_stride=int(slot_size),
+                    start_addr=best_start_addr,
+                )
+
+            if selection_changed and best_raw_party_len > len(best_party):
+                log_event(
+                    logging.INFO,
+                    "gen3_party_sparse_filtered",
+                    game=game_name,
+                    decoded=best_raw_party_len,
+                    kept=len(best_party),
+                    slots=best_raw_slots,
+                )
+
+            return best_party
+
+        if not count_valid:
             return []
-        
-        # Read each party member
-        for i in range(count):
+
+        # Gen 1/2: species is first byte of slot structure.
+        for i in range(int(count)):
             slot_addr = hex(int(party_start_addr, 16) + (i * slot_size))
-            
-            # Read species ID (first byte of structure)
             species_id = self.retroarch.read_memory(slot_addr)
             if species_id is None or species_id == 0:
                 continue
-            
-            # Read level (offset depends on generation)
-            level_offset = 3 if config["gen"] in [1, 2] else 4
+
+            level_offset = 3
             level_addr = hex(int(slot_addr, 16) + level_offset)
             level = self.retroarch.read_memory(level_addr)
-            
+
             party.append({
                 "id": species_id,
                 "level": level if level else None,
-                "slot": i + 1
+                "slot": i + 1,
             })
-        
+
         return party
-
-
 class AchievementTracker:
     """Tracks achievements and reports unlocks"""
     
@@ -929,9 +1884,16 @@ class AchievementTracker:
         self._last_party: List[Dict] = []
         self._last_pokedex: List[int] = []
         self._collection_baseline_initialized = False
+        self._collection_baseline_candidate: List[int] = []
+        self._collection_baseline_candidate_streak = 0
         self._unlock_streaks: Dict[str, int] = {}
         self._bad_read_streak = 0
         self._achievement_poll_count = 0
+        self._collection_wait_streak = 0
+        self._poll_heartbeat_count = 0
+        self._poll_disconnected_streak = 0
+        self._party_skip_streak = 0
+        self._cached_pokedex_for_poll: Optional[List[int]] = None
         self._warmup_logged = False
         self._startup_baseline_captured = False
         self._startup_lockout_ids: set[str] = set()
@@ -967,13 +1929,21 @@ class AchievementTracker:
             "unlock_warmup_polls": 4,
             "unlock_confirmations_default": 2,
             "unlock_confirmations_legendary": 3,
-            "unlock_confirmations_gym_gen3": 4,
+            "unlock_confirmations_gym_gen3": 2,
+            "collection_baseline_confirmations": 2,
+            "startup_lockout_enabled": 0,
+            "startup_snapshot_window_polls": 30,
+            "startup_max_unlocks_per_poll": 12,
+            "startup_max_major_unlocks_per_poll": 10,
+            "startup_unlock_confirmations_default": 1,
+            "startup_unlock_confirmations_legendary": 2,
+            "startup_unlock_confirmations_gym_gen3": 1,
         }
 
         raw_default = default_by_gen.get(str(gen), {})
-        profile = dict(raw_default) if isinstance(raw_default, dict) else dict(fallback_defaults)
-        if not profile:
-            profile = dict(fallback_defaults)
+        profile = dict(fallback_defaults)
+        if isinstance(raw_default, dict):
+            profile.update({k: int(v) for k, v in raw_default.items() if isinstance(v, (int, float))})
 
         per_game = config.get("per_game", {}) if isinstance(config.get("per_game", {}), dict) else {}
         if self.game_name:
@@ -1003,20 +1973,79 @@ class AchievementTracker:
                 return int(cfg.get("gen", 1))
         return 1
 
-    def _is_plausible_badge_byte(self, badge_byte: int) -> bool:
-        """Badge byte should usually be a contiguous progression mask (0b000..0111..1)."""
-        plausible = {0, 1, 3, 7, 15, 31, 63, 127, 255}
-        return badge_byte in plausible
+    def _is_plausible_badge_byte(self, badge_byte: int, generation: Optional[int] = None) -> bool:
+        """Badge byte sanity check. Gen 3 does not follow strict contiguous progression bits."""
+        gen = generation if generation is not None else self._current_generation()
+        try:
+            byte_value = int(badge_byte)
+        except (TypeError, ValueError):
+            return False
 
-    def _required_unlock_confirmations(self, achievement: Achievement, profile: Dict[str, int]) -> int:
+        if gen >= 3:
+            return 0 <= byte_value <= 0xFF
+
+        plausible = {0, 1, 3, 7, 15, 31, 63, 127, 255}
+        return byte_value in plausible
+
+    def _gen3_contiguous_badge_count(self, badge_byte: int) -> int:
+        """Return count of badges in strict progression order (1->8)."""
+        count = 0
+        value = int(badge_byte)
+        for bit in range(8):
+            if value & (1 << bit):
+                count += 1
+            else:
+                break
+        return count
+
+    def _read_gen3_gym_progress_count(self) -> Optional[int]:
+        """Read contiguous Gen 3 gym progression count using save flags when available."""
+        if self._current_generation() != 3 or not self.game_name or not self.pokemon_reader:
+            return None
+
+        config = self.pokemon_reader.get_game_config(self.game_name)
+        if not config:
+            return None
+
+        progression_flags = config.get("gym_progression_flags")
+        if isinstance(progression_flags, list) and progression_flags:
+            states: List[bool] = []
+            for flag_id in progression_flags:
+                state = self.pokemon_reader.read_gen3_event_flag(self.game_name, int(flag_id))
+                if state is None:
+                    states = []
+                    break
+                states.append(bool(state))
+
+            if states:
+                count = 0
+                for state in states:
+                    if state:
+                        count += 1
+                    else:
+                        break
+                return count
+
+        badge_addr = config.get("badge_address")
+        badge_byte = self.retroarch.read_memory(badge_addr) if badge_addr else None
+        if isinstance(badge_byte, int) and self._is_plausible_badge_byte(badge_byte, generation=3):
+            return self._gen3_contiguous_badge_count(badge_byte)
+
+        return None
+
+    def _required_unlock_confirmations(self, achievement: Achievement, profile: Dict[str, int], startup_window: bool = False) -> int:
         """Return confirmation streak requirement for an unlock candidate."""
-        required = max(1, int(profile.get("unlock_confirmations_default", 2)))
+        default_key = "startup_unlock_confirmations_default" if startup_window else "unlock_confirmations_default"
+        legendary_key = "startup_unlock_confirmations_legendary" if startup_window else "unlock_confirmations_legendary"
+        gym_key = "startup_unlock_confirmations_gym_gen3" if startup_window else "unlock_confirmations_gym_gen3"
+
+        required = max(1, int(profile.get(default_key, profile.get("unlock_confirmations_default", 2))))
 
         if achievement.category == "legendary":
-            required = max(required, int(profile.get("unlock_confirmations_legendary", 3)))
+            required = max(required, int(profile.get(legendary_key, profile.get("unlock_confirmations_legendary", 3))))
 
         if achievement.category == "gym" and self._current_generation() == 3:
-            required = max(required, int(profile.get("unlock_confirmations_gym_gen3", 4)))
+            required = max(required, int(profile.get(gym_key, profile.get("unlock_confirmations_gym_gen3", 2))))
 
         return required
 
@@ -1040,12 +2069,43 @@ class AchievementTracker:
         if badge_byte is None:
             return False
 
-        if not self._is_plausible_badge_byte(badge_byte):
+        if not self._is_plausible_badge_byte(badge_byte, generation=3):
             self._record_anomaly("badge_state_implausible", game=self.game_name, badge_byte=badge_byte)
             log_event(logging.WARNING, "badge_state_implausible", game=self.game_name, badge_byte=badge_byte)
             return False
 
         if achievement.category == "gym":
+            # Gen 3 gym progression is linear; gate unlocks by contiguous badge progression
+            # so noisy/non-contiguous badge bytes do not unlock wrong badges.
+            condition = (achievement.memory_condition or "").strip().lower()
+            if condition.startswith("&"):
+                try:
+                    mask_text = condition[1:].strip()
+                    mask_value = int(mask_text, 16) if "x" in mask_text else int(mask_text)
+                except ValueError:
+                    mask_value = 0
+
+                if mask_value > 0 and (mask_value & (mask_value - 1)) == 0:
+                    required_badges = int(mask_value).bit_length()
+                    contiguous_count = self._gen3_contiguous_badge_count(badge_byte)
+                    if self.evaluate_condition(badge_byte, achievement.memory_condition) and contiguous_count < required_badges:
+                        self._record_anomaly(
+                            "badge_state_noncontiguous",
+                            game=self.game_name,
+                            badge_byte=int(badge_byte),
+                            contiguous_count=contiguous_count,
+                            required_badges=required_badges,
+                        )
+                        log_event(
+                            logging.WARNING,
+                            "badge_state_noncontiguous",
+                            game=self.game_name,
+                            badge_byte=int(badge_byte),
+                            contiguous_count=contiguous_count,
+                            required_badges=required_badges,
+                        )
+                    return contiguous_count >= required_badges
+
             return self.evaluate_condition(badge_byte, achievement.memory_condition)
 
         # Elite Four/Champion should not unlock without all badges.
@@ -1058,6 +2118,168 @@ class AchievementTracker:
             return False
         return self.evaluate_condition(value, achievement.memory_condition)
 
+    def _should_use_derived_check(self, achievement: Achievement) -> bool:
+        """Select derived checks for categories/IDs that are safer than raw address checks."""
+        ach_id = achievement.id.lower()
+        if achievement.category in {"pokedex", "legendary"}:
+            return True
+        if achievement.category == "gym" and self._current_generation() == 3:
+            return True
+        if ach_id.endswith("_gym_all") or ach_id.endswith("_elite_four_all") or ach_id.endswith("_pokemon_master"):
+            return True
+        if any(token in ach_id for token in ("first_steps", "starter_chosen", "journey_begins")) or "_story_hm_" in ach_id:
+            return True
+        return not (achievement.memory_address and achievement.memory_condition)
+
+    def _read_pokedex_count_hint(self) -> Optional[int]:
+        """Read a count hint from dedicated count memory when trustworthy."""
+        if not self.game_name:
+            return None
+
+        config = self.pokemon_reader.get_game_config(self.game_name) if self.pokemon_reader else None
+        if not config:
+            return None
+
+        gen = int(config.get("gen", 1))
+        max_pokemon = int(config.get("max_pokemon") or (151 if gen == 1 else (251 if gen == 2 else 386)))
+
+        # Prefer explicit per-game count address when available.
+        count_addr = config.get("pokedex_count")
+        if count_addr:
+            value = self.retroarch.read_memory(count_addr)
+            if isinstance(value, int) and 0 <= value <= max_pokemon:
+                return int(value)
+
+        # Gen 3 achievement memory fields are often seen-count/proxy values,
+        # so avoid inferring caught-count hints from them.
+        if gen >= 3:
+            return None
+
+        candidates = [
+            ach for ach in self.achievements
+            if ach.category == "pokedex" and ach.memory_address and ach.memory_condition.startswith(">=")
+        ]
+        candidates.sort(key=lambda ach: int(ach.target_value or 0))
+
+        for ach in candidates:
+            value = self.retroarch.read_memory(ach.memory_address)
+            if isinstance(value, int) and 0 <= value <= max_pokemon:
+                return int(value)
+
+        return None
+
+    def _read_current_pokedex_caught(self) -> List[int]:
+        """Read current caught list with count-hint sanity guard and per-poll caching."""
+        if not self.game_name or not self.pokemon_reader:
+            return []
+
+        if isinstance(self._cached_pokedex_for_poll, list):
+            return list(self._cached_pokedex_for_poll)
+
+        count_hint = self._read_pokedex_count_hint()
+        current = self.pokemon_reader.read_pokedex(self.game_name, count_hint=count_hint)
+
+        if count_hint is None:
+            self._cached_pokedex_for_poll = list(current)
+            return current
+
+        tolerance = max(5, int(count_hint) // 2)
+        if abs(len(current) - int(count_hint)) > tolerance:
+            self._record_anomaly(
+                "pokedex_count_mismatch",
+                game=self.game_name,
+                count_hint=count_hint,
+                bitset_count=len(current),
+                tolerance=tolerance,
+            )
+            log_event(
+                logging.WARNING,
+                "pokedex_count_mismatch",
+                game=self.game_name,
+                count_hint=count_hint,
+                bitset_count=len(current),
+                tolerance=tolerance,
+            )
+            if self._last_pokedex:
+                cached = list(self._last_pokedex)
+                self._cached_pokedex_for_poll = cached
+                return cached
+
+        self._cached_pokedex_for_poll = list(current)
+        return current
+
+    def _read_current_party(self) -> List[Dict]:
+        """Read current party without letting party decode errors stall other trackers."""
+        if not self.game_name or not self.pokemon_reader:
+            return []
+
+        try:
+            party = self.pokemon_reader.read_party(self.game_name)
+        except Exception as exc:
+            self._record_anomaly(
+                "party_read_exception",
+                game=self.game_name,
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
+            log_event(
+                logging.WARNING,
+                "party_read_exception",
+                game=self.game_name,
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
+            return list(self._last_party)
+
+        if not isinstance(party, list):
+            self._record_anomaly(
+                "party_read_invalid",
+                game=self.game_name,
+                reason="non_list",
+                value_type=type(party).__name__,
+            )
+            log_event(
+                logging.WARNING,
+                "party_read_invalid",
+                game=self.game_name,
+                reason="non_list",
+                value_type=type(party).__name__,
+            )
+            return list(self._last_party)
+
+        normalized_party: List[Dict] = []
+        for member in party:
+            if not isinstance(member, dict):
+                continue
+            try:
+                pokemon_id = int(member.get("id", 0))
+                slot = int(member.get("slot", 0))
+            except (TypeError, ValueError):
+                continue
+            if pokemon_id <= 0 or slot < 1 or slot > 6:
+                continue
+
+            level: Optional[int] = None
+            raw_level = member.get("level")
+            if isinstance(raw_level, (int, float)):
+                level_candidate = int(raw_level)
+                if 1 <= level_candidate <= 100:
+                    level = level_candidate
+
+            normalized_party.append({
+                "id": pokemon_id,
+                "level": level,
+                "slot": slot,
+            })
+
+        if party and not normalized_party:
+            self._record_anomaly("party_read_invalid", game=self.game_name, reason="no_valid_slots")
+            log_event(logging.WARNING, "party_read_invalid", game=self.game_name, reason="no_valid_slots")
+            return list(self._last_party)
+
+        normalized_party.sort(key=lambda member: int(member.get("slot", 0)))
+        return normalized_party
+
     def load_game(self, game_name: str, achievements_file: Path) -> bool:
         """Load achievements for a specific game"""
         try:
@@ -1068,13 +2290,14 @@ class AchievementTracker:
             for ach_data in data.get("achievements", []):
                 self.achievements.append(Achievement(
                     id=ach_data["id"],
-                    name=ach_data["name"],
+                    name=str(ach_data.get("name", "")).strip(),
                     description=ach_data["description"],
                     category=ach_data.get("category", "misc"),
                     rarity=ach_data.get("rarity", "common"),
                     points=ach_data.get("points", 10),
                     memory_address=ach_data.get("memory_address", ""),
                     memory_condition=ach_data.get("memory_condition", ""),
+                    target_value=ach_data.get("target_value"),
                 ))
             
             self.game_name = game_name
@@ -1082,15 +2305,22 @@ class AchievementTracker:
             self._last_party = []
             self._last_pokedex = []
             self._collection_baseline_initialized = False
+            self._collection_baseline_candidate = []
+            self._collection_baseline_candidate_streak = 0
             self._unlock_streaks = {}
             self._bad_read_streak = 0
             self._achievement_poll_count = 0
+            self._collection_wait_streak = 0
+            self._poll_heartbeat_count = 0
+            self._poll_disconnected_streak = 0
+            self._party_skip_streak = 0
+            self._cached_pokedex_for_poll = None
             self._warmup_logged = False
             self._startup_baseline_captured = False
             self._startup_lockout_ids = set()
 
             validation = self.pokemon_reader.validate_memory_profile(game_name)
-            log_event(logging.INFO, "memory_profile_validation", game=game_name, ok=validation.get("ok"), failures=validation.get("failures", []))
+            log_event(logging.INFO, "memory_profile_validation", game=game_name, ok=validation.get("ok"), failures=validation.get("failures", []), warnings=validation.get("warnings", []))
 
             # Initialize derived achievement checker
             if GAME_CONFIGS_AVAILABLE and self.game_name:
@@ -1103,6 +2333,36 @@ class AchievementTracker:
         except Exception as e:
             return False
     
+    def reconcile_local_unlocks(self) -> int:
+        """Reconcile obviously invalid local unlocks against stable in-game state."""
+        corrected = 0
+
+        if self._current_generation() == 3:
+            badge_count = self._read_gen3_gym_progress_count()
+            if badge_count is not None:
+                for ach in self.achievements:
+                    ach_id = ach.id.lower()
+                    if ach_id.endswith("_gym_all") and ach.unlocked and badge_count < 8:
+                        ach.unlocked = False
+                        ach.unlocked_at = None
+                        corrected += 1
+                        continue
+                    gym_match = re.search(r"_gym_(\d+)$", ach_id)
+                    if ach.category == "gym" and gym_match and ach.unlocked:
+                        try:
+                            required = int(gym_match.group(1))
+                        except (TypeError, ValueError):
+                            continue
+                        if required > badge_count:
+                            ach.unlocked = False
+                            ach.unlocked_at = None
+                            corrected += 1
+
+        if corrected:
+            log_event(logging.INFO, "local_unlocks_reconciled", game=self.game_name, corrected=corrected)
+
+        return corrected
+
     def load_progress(self, progress_file: Path):
         """Load previously unlocked achievements"""
         if not progress_file.exists():
@@ -1113,9 +2373,12 @@ class AchievementTracker:
                 data = json.load(f)
 
             unlocked_ids = set(data.get("unlocked", []))
+            loaded_count = 0
             for ach in self.achievements:
                 if ach.id in unlocked_ids:
                     ach.unlocked = True
+                    loaded_count += 1
+            log_event(logging.INFO, "progress_load_applied", game=self.game_name, unlocked=loaded_count)
         except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
             log_event(logging.WARNING, "progress_load_failed", file=str(progress_file), error=str(exc))
 
@@ -1165,9 +2428,22 @@ class AchievementTracker:
                 self._warmup_logged = True
             return []
 
-        baseline_mode = not self._startup_baseline_captured
+        startup_lockout_enabled = bool(profile.get("startup_lockout_enabled", 0))
+        baseline_mode = (not self._startup_baseline_captured) and startup_lockout_enabled
         if baseline_mode:
             self._startup_lockout_ids = set()
+        elif not self._startup_baseline_captured:
+            self._startup_baseline_captured = True
+
+        startup_window_polls = max(1, int(profile.get("startup_snapshot_window_polls", 30)))
+        max_unlocks_per_poll = int(profile.get("max_unlocks_per_poll", 3))
+        max_major_unlocks_per_poll = int(profile.get("max_major_unlocks_per_poll", 2))
+        in_startup_window = self._achievement_poll_count <= startup_window_polls
+        if in_startup_window:
+            startup_unlock_cap = int(profile.get("startup_max_unlocks_per_poll", 12))
+            startup_major_cap = int(profile.get("startup_max_major_unlocks_per_poll", 10))
+            max_unlocks_per_poll = max(max_unlocks_per_poll, startup_unlock_cap)
+            max_major_unlocks_per_poll = max(max_major_unlocks_per_poll, startup_major_cap)
 
         candidates_this_poll = 0
         major_candidates_this_poll = 0
@@ -1179,20 +2455,17 @@ class AchievementTracker:
             
             unlocked = False
             
-            # Direct memory check (achievements with memory_address)
-            if achievement.memory_address and achievement.memory_condition:
+            if self._should_use_derived_check(achievement):
+                unlocked = self._check_derived_achievement(achievement)
+            else:
+                # Direct memory check (achievements with memory_address)
                 safe_result = self._safe_gen3_story_check(achievement)
                 if safe_result is not None:
                     unlocked = safe_result
                 else:
                     value = self.retroarch.read_memory(achievement.memory_address)
-                    if value is not None:
-                        if self.evaluate_condition(value, achievement.memory_condition):
-                            unlocked = True
-            
-            # Derived achievement checks (achievements without direct memory addresses)
-            else:
-                unlocked = self._check_derived_achievement(achievement)
+                    if value is not None and self.evaluate_condition(value, achievement.memory_condition):
+                        unlocked = True
             
             if baseline_mode:
                 if unlocked:
@@ -1206,17 +2479,17 @@ class AchievementTracker:
 
             if unlocked:
                 candidates_this_poll += 1
-                if candidates_this_poll > profile["max_unlocks_per_poll"]:
-                    self._record_anomaly("unlock_spike_ignored", game=self.game_name, candidates=candidates_this_poll, threshold=profile["max_unlocks_per_poll"])
-                    log_event(logging.WARNING, "unlock_spike_ignored", game=self.game_name, candidates=candidates_this_poll, threshold=profile["max_unlocks_per_poll"])
+                if candidates_this_poll > max_unlocks_per_poll:
+                    self._record_anomaly("unlock_spike_ignored", game=self.game_name, candidates=candidates_this_poll, threshold=max_unlocks_per_poll)
+                    log_event(logging.WARNING, "unlock_spike_ignored", game=self.game_name, candidates=candidates_this_poll, threshold=max_unlocks_per_poll)
                     self._unlock_streaks[achievement.id] = 0
                     continue
 
                 if achievement.category in {"gym", "elite_four", "champion", "legendary"}:
                     major_candidates_this_poll += 1
-                    if major_candidates_this_poll > profile.get("max_major_unlocks_per_poll", 2):
-                        self._record_anomaly("major_unlock_spike_ignored", game=self.game_name, category=achievement.category, count=major_candidates_this_poll, threshold=profile.get("max_major_unlocks_per_poll", 2))
-                        log_event(logging.WARNING, "major_unlock_spike_ignored", game=self.game_name, category=achievement.category, count=major_candidates_this_poll, threshold=profile.get("max_major_unlocks_per_poll", 2))
+                    if major_candidates_this_poll > max_major_unlocks_per_poll:
+                        self._record_anomaly("major_unlock_spike_ignored", game=self.game_name, category=achievement.category, count=major_candidates_this_poll, threshold=max_major_unlocks_per_poll)
+                        log_event(logging.WARNING, "major_unlock_spike_ignored", game=self.game_name, category=achievement.category, count=major_candidates_this_poll, threshold=max_major_unlocks_per_poll)
                         self._unlock_streaks[achievement.id] = 0
                         continue
 
@@ -1230,7 +2503,7 @@ class AchievementTracker:
                         continue
 
                 self._unlock_streaks[achievement.id] = self._unlock_streaks.get(achievement.id, 0) + 1
-                required_confirmations = self._required_unlock_confirmations(achievement, profile)
+                required_confirmations = self._required_unlock_confirmations(achievement, profile, startup_window=in_startup_window)
                 # Require configurable consecutive positive polls to avoid transient memory-read false positives.
                 if self._unlock_streaks[achievement.id] >= required_confirmations:
                     achievement.unlocked = True
@@ -1265,26 +2538,41 @@ class AchievementTracker:
         
         ach_id = achievement.id.lower()
         
-        # Pokedex count achievements
-        if "pokedex" in ach_id and not ach_id.endswith("_complete") and not ach_id.endswith("_master"):
-            caught_count = self._derived_checker.get_caught_count()
+        # Pokedex count achievements (including complete) prioritize JSON target values.
+        if "pokedex" in ach_id and not ach_id.endswith("_master"):
+            current_pokedex = self._read_current_pokedex_caught()
+            caught_count = len(current_pokedex)
+            if achievement.target_value is not None:
+                return caught_count >= int(achievement.target_value)
             if "_pokedex_10" in ach_id:
                 return caught_count >= 10
-            elif "_pokedex_25" in ach_id:
+            if "_pokedex_25" in ach_id:
                 return caught_count >= 25
-            elif "_pokedex_50" in ach_id:
+            if "_pokedex_50" in ach_id:
                 return caught_count >= 50
-            elif "_pokedex_100" in ach_id:
+            if "_pokedex_100" in ach_id:
                 return caught_count >= 100
-            elif "_pokedex_150" in ach_id or "_pokedex_200" in ach_id:
+            if "_pokedex_150" in ach_id or "_pokedex_200" in ach_id:
                 config = get_game_config(self.game_name) if GAME_CONFIGS_AVAILABLE else None
                 max_pokemon = config.max_pokemon if config else 150
                 return caught_count >= max_pokemon
-            elif "_pokedex_151" in ach_id or "_pokedex_251" in ach_id or "_pokedex_386" in ach_id:
+            if "_pokedex_151" in ach_id or "_pokedex_251" in ach_id or "_pokedex_386" in ach_id:
                 config = get_game_config(self.game_name) if GAME_CONFIGS_AVAILABLE else None
                 max_pokemon = config.max_pokemon if config else 151
                 return caught_count >= max_pokemon
-        
+        # Gen 3 gym achievements rely on save flags for stable progression checks.
+        if achievement.category == "gym" and self._current_generation() == 3:
+            badge_count = self._read_gen3_gym_progress_count()
+            if badge_count is not None:
+                if ach_id.endswith("_gym_all"):
+                    return badge_count >= 8
+                gym_match = re.search(r"_gym_(\d+)$", ach_id)
+                if gym_match:
+                    try:
+                        return badge_count >= int(gym_match.group(1))
+                    except (TypeError, ValueError):
+                        pass
+
         # All gyms
         if ach_id.endswith("_gym_all"):
             return self._derived_checker.check_all_badges()
@@ -1302,26 +2590,85 @@ class AchievementTracker:
         if ach_id.endswith("_elite_four_all"):
             return self._derived_checker.check_all_elite_four()
         
-        # Legendary individual
+        # Legendary achievements derived from current Pokedex set.
         if "legendary" in ach_id:
-            for legendary in ["mewtwo", "moltres", "zapdos", "articuno", "mew",
-                             "raikou", "entei", "suicune", "lugia", "ho-oh", "celebi",
-                             "regirock", "regice", "registeel", "latias", "latios",
-                             "kyogre", "groudon", "rayquaza", "jirachi", "deoxys"]:
-                if legendary in ach_id:
-                    return self._derived_checker.check_legendary_caught(legendary)
-        
-        # All legendary birds (Gen 1 only)
-        if ach_id.endswith("_legendary_birds"):
-            return self._derived_checker.check_all_legendary_birds()
-        
-        # All legendaries
-        if ach_id.endswith("_legendary_all"):
-            return self._derived_checker.check_all_legendaries()
+            current_pokedex = set(self._read_current_pokedex_caught())
+            legendary_ids = {
+                "articuno": 144,
+                "zapdos": 145,
+                "moltres": 146,
+                "mewtwo": 150,
+                "mew": 151,
+                "raikou": 243,
+                "entei": 244,
+                "suicune": 245,
+                "lugia": 249,
+                "ho-oh": 250,
+                "celebi": 251,
+                "regirock": 377,
+                "regice": 378,
+                "registeel": 379,
+                "latias": 380,
+                "latios": 381,
+                "kyogre": 382,
+                "groudon": 383,
+                "rayquaza": 384,
+                "jirachi": 385,
+                "deoxys": 386,
+            }
+
+            if ach_id.endswith("_legendary_all_weather"):
+                return all(x in current_pokedex for x in [382, 383, 384])
+            if ach_id.endswith("_legendary_regi_trio"):
+                return all(x in current_pokedex for x in [377, 378, 379])
+            if ach_id.endswith("_legendary_latias_latios"):
+                return all(x in current_pokedex for x in [380, 381])
+            if ach_id.endswith("_legendary_birds"):
+                return all(x in current_pokedex for x in [144, 145, 146])
+            if ach_id.endswith("_legendary_all"):
+                gen = self._current_generation()
+                if gen == 1:
+                    required = [144, 145, 146, 150]
+                elif gen == 2:
+                    required = [243, 244, 245, 249, 250]
+                else:
+                    required = [377, 378, 379, 380, 381, 382, 383, 384]
+                return all(x in current_pokedex for x in required)
+
+            for legendary, pokemon_id in legendary_ids.items():
+                if ach_id.endswith(f"_legendary_{legendary}"):
+                    return pokemon_id in current_pokedex
         
         # First steps
-        if "first_steps" in ach_id:
-            return self._derived_checker.check_first_steps()
+        if any(token in ach_id for token in ("first_steps", "starter_chosen", "journey_begins")):
+            # Keep first-steps independent from live party decoding; rely on Pokedex/event flags first.
+            if self.pokemon_reader and self.game_name:
+                if self._read_current_pokedex_caught():
+                    return True
+                if self._current_generation() == 3:
+                    config = self.pokemon_reader.get_game_config(self.game_name)
+                    adventure_flag = config.get("adventure_started_flag") if config else None
+                    if adventure_flag is not None:
+                        started = self.pokemon_reader.read_gen3_event_flag(self.game_name, int(adventure_flag))
+                        if started is True:
+                            return True
+            try:
+                return bool(self._derived_checker.check_first_steps())
+            except Exception as exc:
+                self._record_anomaly(
+                    "derived_first_steps_error",
+                    game=self.game_name,
+                    error_type=type(exc).__name__,
+                    error=str(exc),
+                )
+                log_event(
+                    logging.WARNING,
+                    "derived_first_steps_error",
+                    game=self.game_name,
+                    error_type=type(exc).__name__,
+                    error=str(exc),
+                )
+                return False
         
         # Story achievements - HM detection
         if "_story_hm_" in ach_id:
@@ -1338,15 +2685,12 @@ class AchievementTracker:
         
         # Pokemon Master
         if ach_id.endswith("_pokemon_master"):
-            return self._derived_checker.check_pokemon_master()
-        
-        # Complete Pokedex
-        if ach_id.endswith("_pokedex_complete"):
-            config = get_game_config(self.game_name) if GAME_CONFIGS_AVAILABLE else None
-            caught_count = self._derived_checker.get_caught_count()
-            max_pokemon = config.max_pokemon if config else 150
-            return caught_count >= max_pokemon
-        
+            if not self._derived_checker.check_all_badges():
+                return False
+            if not self._derived_checker.check_champion_defeated():
+                return False
+            caught_count = len(self._read_current_pokedex_caught())
+            return caught_count >= self._get_pokedex_completion_target()
         return False
     
     def _check_derived_legacy(self, achievement: Achievement) -> bool:
@@ -1383,7 +2727,7 @@ class AchievementTracker:
                 return self._check_all_legendaries_legacy()
         
         # First Steps
-        if "first_steps" in ach_id:
+        if any(token in ach_id for token in ("first_steps", "starter_chosen", "journey_begins")):
             return self._check_first_steps_legacy()
         
         # Pokemon Master
@@ -1397,8 +2741,10 @@ class AchievementTracker:
         if not self.pokemon_reader:
             return False
         
-        current_pokedex = self.pokemon_reader.read_pokedex(self.game_name)
+        current_pokedex = self._read_current_pokedex_caught()
         caught_count = len(current_pokedex)
+        if achievement.target_value is not None:
+            return caught_count >= int(achievement.target_value)
         
         ach_id = achievement.id
         if "_pokedex_10" in ach_id:
@@ -1456,7 +2802,7 @@ class AchievementTracker:
         if not self.pokemon_reader:
             return False
         
-        current_pokedex = self.pokemon_reader.read_pokedex(self.game_name)
+        current_pokedex = self._read_current_pokedex_caught()
         ach_id = achievement.id.lower()
         
         legendary_ids = {"mewtwo": 150, "moltres": 146, "zapdos": 145, "articuno": 144}
@@ -1471,7 +2817,7 @@ class AchievementTracker:
         if not self.pokemon_reader:
             return False
         
-        current_pokedex = self.pokemon_reader.read_pokedex(self.game_name)
+        current_pokedex = self._read_current_pokedex_caught()
         birds = [144, 145, 146]
         return all(bird in current_pokedex for bird in birds)
     
@@ -1480,7 +2826,7 @@ class AchievementTracker:
         if not self.pokemon_reader:
             return False
         
-        current_pokedex = self.pokemon_reader.read_pokedex(self.game_name)
+        current_pokedex = self._read_current_pokedex_caught()
         legendaries = [144, 145, 146, 150]
         return all(leg in current_pokedex for leg in legendaries)
     
@@ -1488,13 +2834,17 @@ class AchievementTracker:
         """Legacy first steps check"""
         if not self.pokemon_reader:
             return False
-        
-        party = self.pokemon_reader.read_party(self.game_name)
-        starter_ids = {1, 4, 7}  # Bulbasaur, Charmander, Squirtle
-        
-        for member in party:
-            if member.get("id") in starter_ids:
-                return True
+
+        if self._read_current_pokedex_caught():
+            return True
+
+        if self._current_generation() == 3:
+            config = self.pokemon_reader.get_game_config(self.game_name)
+            adventure_flag = config.get("adventure_started_flag") if config else None
+            if adventure_flag is not None:
+                started = self.pokemon_reader.read_gen3_event_flag(self.game_name, int(adventure_flag))
+                if started is True:
+                    return True
         return False
     
     def _check_pokemon_master_legacy(self) -> bool:
@@ -1513,18 +2863,8 @@ class AchievementTracker:
             return False
         
         # Check complete pokedex
-        current_pokedex = self.pokemon_reader.read_pokedex(self.game_name)
-        return len(current_pokedex) >= 151
-        
-        party = self.pokemon_reader.read_party(self.game_name)
-        # Starters are Bulbasaur (1), Charmander (4), Squirtle (7)
-        starter_ids = {1, 4, 7}
-        
-        for member in party:
-            if member.get("id") in starter_ids:
-                return True
-        
-        return False
+        current_pokedex = self._read_current_pokedex_caught()
+        return len(current_pokedex) >= self._get_pokedex_completion_target()
     
     def _check_pokemon_master(self) -> bool:
         """Check Pokemon Master: All badges, Champion, and Complete Pokedex"""
@@ -1542,42 +2882,168 @@ class AchievementTracker:
             return False
         
         # Check complete pokedex (151)
-        current_pokedex = self.pokemon_reader.read_pokedex(self.game_name)
-        if len(current_pokedex) < 151:
+        current_pokedex = self._read_current_pokedex_caught()
+        if len(current_pokedex) < self._get_pokedex_completion_target():
             return False
         
         return True
     
+    def _get_pokedex_completion_target(self) -> int:
+        """Resolve completion target from loaded achievements, with safe fallbacks."""
+        for ach in self.achievements:
+            if ach.id.lower().endswith("_pokedex_complete") and ach.target_value is not None:
+                try:
+                    return max(1, int(ach.target_value))
+                except (TypeError, ValueError):
+                    continue
+        if GAME_CONFIGS_AVAILABLE and self.game_name:
+            config = get_game_config(self.game_name)
+            if config and config.max_pokemon:
+                return int(config.max_pokemon)
+        if self.game_name and any(x in self.game_name.lower() for x in ["gold", "silver", "crystal"]):
+            return 251
+        return 151
+
     def check_collection(self):
         """Check Pokemon collection and queue updates"""
         if not self.game_name or not self.pokemon_reader:
             return
-        
-        # Read current Pokedex
-        current_pokedex = self.pokemon_reader.read_pokedex(self.game_name)
-        
-        # Read current party
-        current_party = self.pokemon_reader.read_party(self.game_name)
-        
-        # First read after game load/start establishes baseline only
+
+        # Read current Pokedex.
+        current_pokedex = self._read_current_pokedex_caught()
+
+        # Keep party reads separate from catch/achievement responsiveness.
+        current_party = list(self._last_party)
+        retroarch_unstable = bool(getattr(self.retroarch, "is_unstable_io", lambda: False)())
+        allow_live_party = self._collection_baseline_initialized and bool(current_pokedex) and not retroarch_unstable
+        if allow_live_party:
+            live_party = self._read_current_party()
+            if live_party or not self._last_party:
+                current_party = live_party
+                self._party_skip_streak = 0
+            else:
+                current_party = list(self._last_party)
+                self._party_skip_streak += 1
+                if self._party_skip_streak == 1 or self._party_skip_streak % 20 == 0:
+                    log_event(
+                        logging.INFO,
+                        "party_read_skipped",
+                        game=self.game_name,
+                        reason="empty_party_read",
+                        streak=self._party_skip_streak,
+                        io_error_streak=getattr(self.retroarch, "_io_error_streak", 0),
+                    )
+        elif current_pokedex:
+            self._party_skip_streak += 1
+            skip_reason = "baseline_pending" if not self._collection_baseline_initialized else "unstable_io"
+            if self._party_skip_streak == 1 or self._party_skip_streak % 20 == 0:
+                log_event(
+                    logging.INFO,
+                    "party_read_skipped",
+                    game=self.game_name,
+                    reason=skip_reason,
+                    streak=self._party_skip_streak,
+                    io_error_streak=getattr(self.retroarch, "_io_error_streak", 0),
+                )
+
+        # First read(s) after game load/start establish a stable baseline.
         if not self._collection_baseline_initialized:
-            self._last_pokedex = current_pokedex
-            self._last_party = current_party
+            baseline_confirmations = max(1, int(self._get_validation_profile().get("collection_baseline_confirmations", 2)))
+
+            if not current_pokedex:
+                self._collection_wait_streak += 1
+                if self._collection_wait_streak == 1 or self._collection_wait_streak % 10 == 0:
+                    log_event(
+                        logging.INFO,
+                        "collection_waiting_for_data",
+                        game=self.game_name,
+                        streak=self._collection_wait_streak,
+                        baseline_confirmations=baseline_confirmations,
+                        last_known=len(self._last_pokedex),
+                    )
+                self._collection_baseline_candidate = []
+                self._collection_baseline_candidate_streak = 0
+                return
+
+            if self._collection_wait_streak:
+                log_event(
+                    logging.INFO,
+                    "collection_data_detected",
+                    game=self.game_name,
+                    streak=self._collection_wait_streak,
+                    catches=len(current_pokedex),
+                )
+                self._collection_wait_streak = 0
+
+            if len(current_pokedex) >= 10 and not self._last_pokedex:
+                baseline_confirmations = 1
+
+            if current_pokedex == self._collection_baseline_candidate:
+                self._collection_baseline_candidate_streak += 1
+            else:
+                self._collection_baseline_candidate = list(current_pokedex)
+                self._collection_baseline_candidate_streak = 1
+
+            if self._collection_baseline_candidate_streak < baseline_confirmations:
+                return
+
+            self._last_pokedex = list(current_pokedex)
+            self._last_party = list(current_party)
             self._collection_baseline_initialized = True
+            self._collection_baseline_candidate = []
+            self._collection_baseline_candidate_streak = 0
+
+            # Sync one stable startup snapshot so existing save data uploads reliably.
+            log_event(
+                logging.INFO,
+                "collection_baseline_established",
+                game=self.game_name,
+                catches=len(current_pokedex),
+                party=len(current_party),
+            )
+            self._collection_queue.put({
+                "catches": list(current_pokedex),
+                "party": current_party,
+                "previous_party": [],
+                "game": self.game_name,
+            })
             return
 
         profile = self._get_validation_profile()
+        effective_pokedex = list(current_pokedex)
 
         # Detect suspicious empty reads after we already had a populated baseline.
         if not current_pokedex and len(self._last_pokedex) >= 10:
             self._handle_bad_read("empty_pokedex_after_non_empty")
-            return
+            effective_pokedex = list(self._last_pokedex)
 
-        # Find new catches
-        new_catches = [p for p in current_pokedex if p not in self._last_pokedex]
+        # Find new catches.
+        new_catches = [p for p in effective_pokedex if p not in self._last_pokedex]
 
         # Guard against bad memory reads causing impossible bulk catch spikes.
         if len(new_catches) > profile["max_new_catches_per_poll"]:
+            startup_window_polls = max(1, int(profile.get("startup_snapshot_window_polls", 30)))
+            within_startup_window = self._achievement_poll_count <= startup_window_polls
+            likely_startup_snapshot = within_startup_window and len(effective_pokedex) >= max(20, len(self._last_pokedex) + (profile["max_new_catches_per_poll"] * 3))
+            if likely_startup_snapshot:
+                log_event(
+                    logging.INFO,
+                    "collection_baseline_reset",
+                    game=self.game_name,
+                    baseline=len(self._last_pokedex),
+                    observed=len(effective_pokedex),
+                )
+                self._collection_queue.put({
+                    "catches": list(effective_pokedex),
+                    "previous_party": list(self._last_party),
+                    "party": current_party,
+                    "game": self.game_name,
+                })
+                self._last_pokedex = list(effective_pokedex)
+                self._last_party = list(current_party)
+                self._bad_read_streak = 0
+                return
+
             log_event(
                 logging.WARNING,
                 "collection_spike_ignored",
@@ -1586,46 +3052,44 @@ class AchievementTracker:
                 threshold=profile["max_new_catches_per_poll"],
             )
             self._handle_bad_read("bulk_catch_spike")
-            self._last_pokedex = current_pokedex
-            self._last_party = current_party
-            return
-        self._bad_read_streak = 0
-        
-        # Find party changes
-        party_changes = []
-        for member in current_party:
-            old_member = next((p for p in self._last_party if p["id"] == member["id"]), None)
-            if not old_member:
-                party_changes.append(member)
-        
-        # Queue updates if there are changes
-        if new_catches or party_changes:
+            effective_pokedex = list(self._last_pokedex)
+            new_catches = []
+        else:
+            self._bad_read_streak = 0
+
+        # Find party changes (including slot/order changes and duplicate species).
+        party_changed = current_party != self._last_party
+
+        # Queue updates if there are changes.
+        if new_catches or party_changed:
             self._collection_queue.put({
+                "previous_party": list(self._last_party),
                 "catches": new_catches,
                 "party": current_party,
-                "game": self.game_name
+                "game": self.game_name,
             })
-        
-        # Update last known state
-        self._last_pokedex = current_pokedex
-        self._last_party = current_party
-    
+
+        # Update last known state.
+        self._last_pokedex = list(effective_pokedex)
+        self._last_party = list(current_party)
+
     def post_unlock_to_platform(self, achievement: Achievement):
         """Queue achievement unlock for API posting"""
         if self.api and self.game_id:
             event_id = f"unlock:{self.game_id}:{achievement.id}"
             self._api_queue.put({"type": "achievement", "achievement": achievement, "event_id": event_id, "confidence": "high"})
     
-    def post_collection_to_platform(self, catches: List[int], party: List[Dict], game: str):
+    def post_collection_to_platform(self, catches: List[int], party: List[Dict], game: str, previous_party: Optional[List[Dict]] = None):
         """Queue collection update for API posting"""
         if self.api:
-            payload_key = json.dumps({"catches": sorted(catches), "party": party, "game": game}, sort_keys=True, default=str)
+            payload_key = json.dumps({"catches": sorted(catches), "party": party, "previous_party": previous_party or [], "game": game}, sort_keys=True, default=str)
             event_id = "collection:" + sha256(payload_key.encode()).hexdigest()[:24]
             confidence = "high" if len(catches) <= 2 else "medium"
             self._api_queue.put({
                 "type": "collection",
                 "catches": catches,
                 "party": party,
+                "previous_party": previous_party or [],
                 "game": game,
                 "event_id": event_id,
                 "confidence": confidence,
@@ -1691,22 +3155,144 @@ class AchievementTracker:
     
     def start_polling(self, interval_ms: int = 500):
         """Start polling in background thread"""
+        if self._running and self._thread and self._thread.is_alive():
+            log_event(logging.INFO, "poll_thread_already_running", game=self.game_name)
+            return
+
         self._running = True
+        self._poll_heartbeat_count = 0
         self._thread = threading.Thread(target=self._poll_loop, args=(interval_ms,), daemon=True)
         self._thread.start()
-    
+        log_event(
+            logging.INFO,
+            "poll_thread_started",
+            game=self.game_name,
+            interval_ms=int(interval_ms),
+            thread_id=self._thread.ident,
+        )
+
     def stop_polling(self):
         """Stop polling"""
         self._running = False
-    
+        log_event(logging.INFO, "poll_thread_stop_requested", game=self.game_name)
+
     def _poll_loop(self, interval_ms: int):
         """Background polling loop"""
         while self._running:
             if self.retroarch.connected and self.achievements:
-                self.check_achievements()
-                self.check_collection()
+                self._poll_disconnected_streak = 0
+                self._poll_heartbeat_count += 1
+                self._cached_pokedex_for_poll = None
+
+                should_trace_poll = self._poll_heartbeat_count == 1 or self._poll_heartbeat_count % 20 == 0
+                if should_trace_poll:
+                    log_event(
+                        logging.INFO,
+                        "poll_heartbeat",
+                        game=self.game_name,
+                        poll=self._poll_heartbeat_count,
+                        achievements=len(self.achievements),
+                        baseline=self._collection_baseline_initialized,
+                        last_pokedex=len(self._last_pokedex),
+                        last_party=len(self._last_party),
+                    )
+                    log_event(
+                        logging.INFO,
+                        "poll_stage_start",
+                        game=self.game_name,
+                        poll=self._poll_heartbeat_count,
+                        stage="achievements",
+                    )
+
+                ach_started = time.perf_counter()
+                try:
+                    self.check_achievements()
+                except Exception as exc:
+                    self._record_anomaly(
+                        "poll_loop_exception",
+                        game=self.game_name,
+                        stage="achievements",
+                        error_type=type(exc).__name__,
+                        error=str(exc),
+                    )
+                    log_event(
+                        logging.ERROR,
+                        "poll_loop_exception",
+                        game=self.game_name,
+                        stage="achievements",
+                        error_type=type(exc).__name__,
+                        error=str(exc),
+                    )
+                finally:
+                    ach_ms = int((time.perf_counter() - ach_started) * 1000)
+                    if ach_ms >= 1500:
+                        log_event(
+                            logging.INFO,
+                            "poll_stage_duration",
+                            game=self.game_name,
+                            poll=self._poll_heartbeat_count,
+                            stage="achievements",
+                            duration_ms=ach_ms,
+                        )
+
+                if should_trace_poll:
+                    log_event(
+                        logging.INFO,
+                        "poll_stage_start",
+                        game=self.game_name,
+                        poll=self._poll_heartbeat_count,
+                        stage="collection",
+                    )
+
+                collection_started = time.perf_counter()
+                try:
+                    self.check_collection()
+                except Exception as exc:
+                    self._record_anomaly(
+                        "poll_loop_exception",
+                        game=self.game_name,
+                        stage="collection",
+                        error_type=type(exc).__name__,
+                        error=str(exc),
+                    )
+                    log_event(
+                        logging.ERROR,
+                        "poll_loop_exception",
+                        game=self.game_name,
+                        stage="collection",
+                        error_type=type(exc).__name__,
+                        error=str(exc),
+                    )
+                finally:
+                    collection_ms = int((time.perf_counter() - collection_started) * 1000)
+                    if collection_ms >= 1500:
+                        log_event(
+                            logging.INFO,
+                            "poll_stage_duration",
+                            game=self.game_name,
+                            poll=self._poll_heartbeat_count,
+                            stage="collection",
+                            duration_ms=collection_ms,
+                        )
+            else:
+                self._poll_disconnected_streak += 1
+                if self._poll_disconnected_streak == 1 or self._poll_disconnected_streak % 20 == 0:
+                    log_event(
+                        logging.INFO,
+                        "poll_waiting_connection",
+                        game=self.game_name,
+                        streak=self._poll_disconnected_streak,
+                        connected=bool(self.retroarch.connected),
+                        has_achievements=bool(self.achievements),
+                    )
             time.sleep(interval_ms / 1000)
 
+        log_event(
+            logging.INFO,
+            "poll_thread_exited",
+            game=self.game_name,
+            polls=self._poll_heartbeat_count,
+        )
 
 class PokeAchieveGUI:
     """Main GUI Application"""
@@ -1768,7 +3354,7 @@ class PokeAchieveGUI:
         # State
         self.is_running = False
         self.status_check_interval = 3000
-        self.poll_interval = self.config.get("poll_interval", 2000)
+        self.poll_interval = self.config.get("poll_interval", 1000)
         self.api_sync_enabled = self.config.get("api_sync", True)
         self._status_check_in_flight = False
         self._max_log_lines = 500
@@ -2208,6 +3794,11 @@ class PokeAchieveGUI:
             if self.tracker.load_game(display_name, achievement_file):
                 self.tracker.load_progress(self.progress_file)
                 
+                corrected = self.tracker.reconcile_local_unlocks()
+                if corrected > 0:
+                    self.tracker.save_progress(self.progress_file)
+                    self._log(f"Corrected {corrected} local unlocks from save data", "info")
+
                 # Merge with website data (fetch latest from server)
                 if self.api:
                     self._merge_with_website_data(display_name)
@@ -2227,14 +3818,44 @@ class PokeAchieveGUI:
             
             success, unlocked_ids = self.api.get_progress(game_id)
             if success:
-                server_unlocked = set(unlocked_ids or [])
+                server_unlocked = {str(item) for item in (unlocked_ids or [])}
+
+                # Expand server unlock tokens using live catalog IDs/names.
+                catalog = self.api._get_achievement_catalog(game_id) if self.api else []
+                if isinstance(catalog, list):
+                    for item in catalog:
+                        if not isinstance(item, dict):
+                            continue
+                        catalog_id_raw = item.get("id") or item.get("achievement_id")
+                        catalog_id = str(catalog_id_raw) if catalog_id_raw is not None else ""
+                        catalog_string = str(item.get("string_id") or item.get("achievement_string_id") or "").strip()
+                        catalog_name = str(item.get("name") or item.get("achievement_name") or "").strip().lower()
+                        name_token = f"name:{catalog_name}" if catalog_name else ""
+
+                        if catalog_id and catalog_id in server_unlocked:
+                            if catalog_string:
+                                server_unlocked.add(catalog_string)
+                            if name_token:
+                                server_unlocked.add(name_token)
+                        if catalog_string and catalog_string in server_unlocked:
+                            if catalog_id:
+                                server_unlocked.add(catalog_id)
+                            if name_token:
+                                server_unlocked.add(name_token)
+                        if name_token and name_token in server_unlocked:
+                            if catalog_id:
+                                server_unlocked.add(catalog_id)
+                            if catalog_string:
+                                server_unlocked.add(catalog_string)
 
                 # Update local achievements to include server ones
                 newly_added = 0
                 for ach in self.tracker.achievements:
                     by_id = ach.id in server_unlocked
                     by_name = f"name:{ach.name.strip().lower()}" in server_unlocked
-                    if (by_id or by_name) and not ach.unlocked:
+                    resolved = self.api._resolve_achievement_id(game_id, ach.name, ach.id) if self.api else None
+                    by_resolved = resolved is not None and str(resolved) in server_unlocked
+                    if (by_id or by_name or by_resolved) and not ach.unlocked:
                         ach.unlocked = True
                         ach.unlocked_at = datetime.now()
                         newly_added += 1
@@ -2242,6 +3863,29 @@ class PokeAchieveGUI:
                 if newly_added > 0:
                     self._log(f"Synced {newly_added} achievements from website", "info")
                     self.tracker.save_progress(self.progress_file)
+
+                # Backfill locally-unlocked achievements that the server does not yet show.
+                missing_on_server = []
+                for ach in self.tracker.achievements:
+                    if not ach.unlocked:
+                        continue
+                    by_id = ach.id in server_unlocked
+                    by_name = f"name:{ach.name.strip().lower()}" in server_unlocked
+                    resolved = self.api._resolve_achievement_id(game_id, ach.name, ach.id) if self.api else None
+                    by_resolved = resolved is not None and str(resolved) in server_unlocked
+                    if not (by_id or by_name or by_resolved):
+                        missing_on_server.append(ach)
+
+                for ach in missing_on_server:
+                    self.tracker.post_unlock_to_platform(ach)
+
+                if missing_on_server:
+                    log_event(
+                        logging.INFO,
+                        "unlock_backfill_queued",
+                        game=game_name,
+                        count=len(missing_on_server),
+                    )
         except Exception as e:
             self._log(f"Could not sync with website: {e}", "warning")
     
@@ -2294,7 +3938,7 @@ class PokeAchieveGUI:
         # Update progress
         self._update_progress()
         
-        self.root.after(2000, self._check_unlocks)
+        self.root.after(1000, self._check_unlocks)
     
     def _threadsafe_log(self, message: str, level: str = "info"):
         """Schedule log writes from worker threads safely onto Tk main loop."""
@@ -2394,12 +4038,15 @@ class PokeAchieveGUI:
             ach = item.get("achievement")
             if not ach or not self.tracker.game_id:
                 return True
-            success, data = self.api.post_unlock(self.tracker.game_id, ach.id)
+            success, data = self.api.post_unlock(self.tracker.game_id, ach.id, ach.name)
             if success:
                 if event_id:
                     self._sent_event_ids.add(event_id)
                     self._save_sent_events()
-                self._threadsafe_log(f"Posted unlock to platform: {ach.name}", "api")
+                if isinstance(data, dict) and data.get("skipped"):
+                    self._threadsafe_log(f"Skipped platform unlock (not mapped): {ach.name}", "warning")
+                else:
+                    self._threadsafe_log(f"Posted unlock to platform: {ach.name}", "api")
                 return True
             self._last_api_error = data.get('error', 'Unknown error')
             item["retryable"] = self._is_retryable_api_error(data)
@@ -2409,8 +4056,9 @@ class PokeAchieveGUI:
         if item_type == "collection":
             catches = item.get("catches", [])
             party = item.get("party", [])
+            previous_party = item.get("previous_party", [])
             game = item.get("game", "")
-            success = self._sync_collection_to_api(catches, party, game)
+            success = self._sync_collection_to_api(catches, party, game, previous_party)
             if not success:
                 self._last_api_error = "Collection sync failed"
                 item["retryable"] = False
@@ -2431,6 +4079,7 @@ class PokeAchieveGUI:
                 update = self.tracker._collection_queue.get_nowait()
                 catches = update["catches"]
                 party = update["party"]
+                previous_party = update.get("previous_party", [])
                 game = update["game"]
                 
                 # Log new catches
@@ -2444,18 +4093,18 @@ class PokeAchieveGUI:
                 
                 # Post to API
                 if self.api:
-                    self.tracker.post_collection_to_platform(catches, party, game)
+                    self.tracker.post_collection_to_platform(catches, party, game, previous_party=previous_party)
                 
             except queue.Empty:
                 break
         
-        self.root.after(2000, self._process_collection_updates)
+        self.root.after(1000, self._process_collection_updates)
     
-    def _sync_collection_to_api(self, catches: List[int], party: List[Dict], game: str) -> bool:
+    def _sync_collection_to_api(self, catches: List[int], party: List[Dict], game: str, previous_party: Optional[List[Dict]] = None) -> bool:
         """Sync collection data to PokeAchieve API"""
         log_event(logging.INFO, "collection_sync_start", catches=len(catches), party=len(party), game=game)
         
-        if not catches and not party:
+        if not catches and not party and not previous_party:
             print("[COLLECTION SYNC] Nothing to sync")
             return True
         
@@ -2468,7 +4117,7 @@ class PokeAchieveGUI:
                 "caught": True,
                 "shiny": False,
                 "game": game,
-                "game_id": self.tracker.GAME_IDS.get(game, 0)
+                "caught_at": datetime.now().isoformat()
             }
             batch.append(entry)
             log_event(logging.DEBUG, "collection_sync_batch_item", entry=entry)
@@ -2487,23 +4136,48 @@ class PokeAchieveGUI:
                 print(f"[COLLECTION SYNC] Failed: {error_msg}")
                 return False
         
-        # Update party
+        # Update party (additions, removals, and slot moves).
+        previous_party = previous_party or []
+        previous_by_slot = {}
+        for member in previous_party:
+            slot = member.get("slot")
+            pokemon_id = member.get("id")
+            if isinstance(slot, int) and 1 <= slot <= 6 and isinstance(pokemon_id, int) and pokemon_id > 0:
+                previous_by_slot[slot] = pokemon_id
+
+        current_by_slot = {}
         for member in party:
-            log_event(logging.DEBUG, "collection_sync_party_update", slot=member.get("slot"), pokemon_id=member["id"])
-            success, data = self.api.post_party_update(
-                member["id"],
-                True,
-                member.get("slot")
-            )
-            if success:
-                self._threadsafe_log(f"Updated party: {member['id']} in slot {member.get('slot')}", "api")
-            else:
-                error_msg = data.get('error', 'Unknown error')
-                self._last_api_error = error_msg
-                self.root.after(0, self._update_sync_meta_labels)
-                self._threadsafe_log(f"Failed to update party: {error_msg}", "error")
-                return False
-    
+            slot = member.get("slot")
+            pokemon_id = member.get("id")
+            if isinstance(slot, int) and 1 <= slot <= 6 and isinstance(pokemon_id, int) and pokemon_id > 0:
+                current_by_slot[slot] = pokemon_id
+
+        for slot in range(1, 7):
+            previous_id = previous_by_slot.get(slot)
+            current_id = current_by_slot.get(slot)
+
+            if previous_id and previous_id != current_id:
+                log_event(logging.DEBUG, "collection_sync_party_update", action="remove", slot=slot, pokemon_id=previous_id)
+                success, data = self.api.post_party_update(previous_id, False, slot)
+                if not success:
+                    error_msg = data.get("error", "Unknown error")
+                    self._last_api_error = error_msg
+                    self.root.after(0, self._update_sync_meta_labels)
+                    self._threadsafe_log(f"Failed to update party: {error_msg}", "error")
+                    return False
+                self._threadsafe_log(f"Removed party: {previous_id} from slot {slot}", "api")
+
+            if current_id and current_id != previous_id:
+                log_event(logging.DEBUG, "collection_sync_party_update", action="add", slot=slot, pokemon_id=current_id)
+                success, data = self.api.post_party_update(current_id, True, slot)
+                if not success:
+                    error_msg = data.get("error", "Unknown error")
+                    self._last_api_error = error_msg
+                    self.root.after(0, self._update_sync_meta_labels)
+                    self._threadsafe_log(f"Failed to update party: {error_msg}", "error")
+                    return False
+                self._threadsafe_log(f"Updated party: {current_id} in slot {slot}", "api")
+
         return True
 
     def _get_pokemon_name(self, pokemon_id: int) -> str:
@@ -2518,7 +4192,8 @@ class PokeAchieveGUI:
         self.catches_list.configure(state='normal')
         timestamp = datetime.now().strftime("%H:%M:%S")
         game_info = f" [{game}]" if game else ""
-        self.catches_list.insert('1.0', f"[{timestamp}] ✓ Caught {pokemon_name} (#{pokemon_id}){game_info}!\n")
+        mobile_icon = "\U0001F4F1"
+        self.catches_list.insert('1.0', f"[{timestamp}] {mobile_icon} NEW CATCH: {pokemon_name} (#{pokemon_id}){game_info}\n")
         self._trim_scrolled_text(self.catches_list, self._max_catch_lines)
         self.catches_list.configure(state='disabled')
     
@@ -2754,3 +4429,36 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
