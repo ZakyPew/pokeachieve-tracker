@@ -1314,6 +1314,7 @@ class PokemonMemoryReader:
         self._saveblock_ptr_backoff_until: Dict[str, float] = {}
         self._saveblock_ptr_fail_count: Dict[str, int] = {}
         self._pointer_unreadable_last_log: Dict[str, float] = {}
+        self._pointer_fallback_last_log: Dict[str, float] = {}
         self._pointer_unreadable_streak: Dict[str, int] = {}
         self._pointer_unreadable_last_attempt: Dict[str, float] = {}
         self._last_gen3_party_selection: Dict[str, Dict[str, object]] = {}
@@ -1701,6 +1702,9 @@ class PokemonMemoryReader:
         """Throttle noisy pointer-fallback-skipped info logs while pointers jitter."""
         if bool(getattr(self.retroarch, "is_waiting_for_launch", lambda: False)()):
             return
+
+        if not hasattr(self, "_pointer_fallback_last_log"):
+            self._pointer_fallback_last_log = {}
 
         key = f"{game_name}:{kind}:fallback_skipped"
         now = time.time()
@@ -2298,10 +2302,8 @@ class PokemonMemoryReader:
                     caught = fallback_caught
                     seen_addr = static_seen_addr
             else:
-                log_event(
-                    logging.INFO,
-                    "gen3_pointer_fallback_skipped",
-                    game=game_name,
+                self._log_pointer_fallback_skipped_throttled(
+                    game_name=game_name,
                     kind="pokedex",
                     pointer_addr=caught_addr,
                     static_addr=static_caught_addr,
@@ -4627,6 +4629,7 @@ class AchievementTracker:
                 "party": current_party,
                 "previous_party": [],
                 "game": self.game_name,
+                "catch_event_type": "caught",
             })
             return
 
@@ -4643,6 +4646,7 @@ class AchievementTracker:
                     "party": current_party,
                     "previous_party": [],
                     "game": self.game_name,
+                    "catch_event_type": "caught",
                 })
                 baseline_snapshot_queued = True
                 log_event(
@@ -4691,6 +4695,7 @@ class AchievementTracker:
                     "previous_party": list(self._last_party),
                     "party": current_party,
                     "game": self.game_name,
+                    "catch_event_type": "caught",
                 })
                 self._last_pokedex = list(effective_pokedex)
                 self._last_party = list(current_party)
@@ -4828,6 +4833,7 @@ class AchievementTracker:
                 "catches": new_catches,
                 "party": current_party,
                 "game": self.game_name,
+                "catch_event_type": "new_addition",
             })
 
         # Update last known state.
@@ -5969,13 +5975,15 @@ class PokeAchieveGUI:
                 party = update["party"]
                 previous_party = update.get("previous_party", [])
                 game = update["game"]
-                
-                # Log new catches
+                catch_event_type = str(update.get("catch_event_type", "new_addition")).strip().lower()
+                catch_action = "CAUGHT" if catch_event_type == "caught" else "NEW ADDITION"
+
+                # Log Pokedex entries
                 for pokemon_id in catches:
                     pokemon_name = self.tracker.pokemon_reader.get_pokemon_name(pokemon_id)
-                    self._log(f"NEW CATCH: {pokemon_name} (#{pokemon_id})", "collection")
-                    self._add_catch_to_list(pokemon_id, game)
-                
+                    self._log(f"[POKEDEX] {catch_action}: {pokemon_name} (#{pokemon_id})", "collection")
+                    self._add_catch_to_list(pokemon_id, game, event_action=catch_action)
+
                 # Update party display
                 self._update_party_display(party, game)
                 # Log party changes to tracker log (independent of API dedupe behavior).
@@ -6191,18 +6199,21 @@ class PokeAchieveGUI:
         if self.tracker and self.tracker.pokemon_reader:
             return self.tracker.pokemon_reader.get_pokemon_name(pokemon_id)
         return f"Pokemon #{pokemon_id}"
-    
-    def _add_catch_to_list(self, pokemon_id: int, game: str = ""):
-        """Add catch to recent catches list"""
+
+    def _add_catch_to_list(self, pokemon_id: int, game: str = "", event_action: str = "NEW ADDITION"):
+        """Add Pokedex entry to recent catches list"""
         pokemon_name = self.tracker.pokemon_reader.get_pokemon_name(pokemon_id)
         self.catches_list.configure(state='normal')
         timestamp = datetime.now().strftime("%H:%M:%S")
         game_info = f" [{game}]" if game else ""
-        mobile_icon = "[CATCH]"
-        self.catches_list.insert('1.0', f"[{timestamp}] {mobile_icon} NEW CATCH: {pokemon_name} (#{pokemon_id}){game_info}\n")
+        action = str(event_action).strip().upper()
+        if action not in {"CAUGHT", "NEW ADDITION"}:
+            action = "NEW ADDITION"
+        mobile_icon = "[POKEDEX]"
+        self.catches_list.insert('1.0', f"[{timestamp}] {mobile_icon} {action}: {pokemon_name} (#{pokemon_id}){game_info}\n")
         self._trim_scrolled_text(self.catches_list, self._max_catch_lines)
         self.catches_list.configure(state='disabled')
-    
+
     def _get_party_game_variant(self, game: str) -> str:
         if not isinstance(game, str):
             return "default"
@@ -7053,3 +7064,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
