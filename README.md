@@ -2,7 +2,7 @@
 
 A Pokemon achievement tracker for RetroArch that automatically detects in-game progress and syncs with your PokeAchieve.com profile.
 
-![Version](https://img.shields.io/badge/version-1.8.2-blue)
+![Version](https://img.shields.io/badge/version-1.9-blue)
 ![Platform](https://img.shields.io/badge/platform-Windows-green)
 ![License](https://img.shields.io/badge/license-MIT-yellow)
 
@@ -15,7 +15,13 @@ A Pokemon achievement tracker for RetroArch that automatically detects in-game p
 - **Beautiful Overlay**: Stream-ready overlay showing your current progress
 - **API Key Support**: Secure authentication with your PokeAchieve account
 
-## What's New in v1.8.11 🎉
+## What's New in v1.9 🎉
+
+### API Endpoint Updates
+- Updated to use Codex-recommended `/api/` prefixed endpoints
+- New auth test endpoint: `POST /api/tracker/test`
+- New collection endpoints: `GET /api/collection`, `POST /api/collection/update`
+- Improved API key authentication flow
 
 ### Directory Build Mode
 This release uses **directory mode** instead of a single-file executable:
@@ -33,7 +39,7 @@ This release uses **directory mode** instead of a single-file executable:
 
 Download the latest release from the [Releases page](../../releases).
 
-1. Download `PokeAchieveTracker-v1.8.11.zip`
+1. Download `PokeAchieveTracker-v1.9.zip`
 2. Extract to any folder
 3. Run `PokeAchieveTracker.exe`
 4. Log in with your PokeAchieve.com account
