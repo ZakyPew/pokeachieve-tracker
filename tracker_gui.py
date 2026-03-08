@@ -13,13 +13,13 @@ import queue
 import re
 import os
 import sys
-from collections import Counter
+from collections import Counter, deque
 import urllib.request
 import urllib.error
 from urllib.parse import urlparse, urlunparse
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Callable, Tuple, Set
+from typing import Any, Dict, List, Optional, Callable, Tuple, Set
 from datetime import datetime
 from hashlib import sha256
 from dataclasses import dataclass, asdict
@@ -1957,6 +1957,7 @@ class PokemonMemoryReader:
 
                 iv_ability_word = read_u32(decrypted, misc_offset + 4)
                 ability_slot = (iv_ability_word >> 31) & 0x1
+                is_egg = ((iv_ability_word >> 30) & 0x1) == 1
                 ability_name = self._resolve_gen3_ability_name(int(normalized_species), int(ability_slot))
 
                 nature_name = self.GEN3_NATURE_NAMES[personality % len(self.GEN3_NATURE_NAMES)]
@@ -2001,6 +2002,7 @@ class PokemonMemoryReader:
                     "ability": ability_name,
                     "moves": move_names[:4],
                     "shiny": bool(is_shiny),
+                    "is_egg": bool(is_egg),
                     "_score": int(plausibility),
                     "_personality": int(personality),
                     "_ot_id": int(ot_id),
@@ -2609,6 +2611,7 @@ class PokemonMemoryReader:
                                 if isinstance(value, str) and value.strip():
                                     member[key] = value.strip()
                             member["shiny"] = bool(resolved_details.get("shiny", False))
+                            member["is_egg"] = bool(resolved_details.get("is_egg", False))
                             moves = resolved_details.get("moves")
                             if isinstance(moves, list):
                                 clean_moves = [
@@ -3403,6 +3406,96 @@ class PokemonMemoryReader:
             "reason": None,
         })
         return party
+
+    def read_wild_encounter(self, game_name: str) -> Optional[Dict[str, object]]:
+        """Read current enemy lead encounter when battle party memory is available."""
+        config = self.get_game_config(game_name)
+        if not config:
+            return None
+
+        try:
+            gen = int(config.get("gen", 1))
+        except (TypeError, ValueError):
+            gen = 1
+        if gen != 3:
+            return None
+
+        party_count_addr = config.get("party_count")
+        party_start_addr = config.get("party_start")
+        try:
+            slot_size = int(config.get("party_slot_size", 100) or 100)
+        except (TypeError, ValueError):
+            slot_size = 100
+
+        if not party_count_addr or not party_start_addr or slot_size <= 0:
+            return None
+
+        if (
+            str(config.get("layout_id", "")).lower() == "gen3_emerald"
+            and bool(config.get("party_use_pointer_layout", 0))
+            and config.get("saveblock1_ptr")
+            and config.get("party_count_offset") is not None
+            and config.get("party_start_offset") is not None
+        ):
+            saveblock1_ptr = self._resolve_gen3_saveblock_ptr(config.get("saveblock1_ptr"), game_name=game_name)
+            if saveblock1_ptr is not None:
+                party_count_addr = hex(saveblock1_ptr + int(config.get("party_count_offset")))
+                party_start_addr = hex(saveblock1_ptr + int(config.get("party_start_offset")))
+
+        try:
+            player_count_addr_int = int(str(party_count_addr), 16)
+            player_start_addr_int = int(str(party_start_addr), 16)
+        except (TypeError, ValueError):
+            return None
+
+        enemy_count_addr = hex(player_count_addr_int + 1)
+        enemy_start_addr_int = player_start_addr_int + (slot_size * 6)
+
+        enemy_count = self.retroarch.read_memory(enemy_count_addr)
+        if not isinstance(enemy_count, int) or int(enemy_count) <= 0 or int(enemy_count) > 6:
+            return None
+
+        slot_bytes = self._read_gen3_slot_bytes_for_details(enemy_start_addr_int, int(slot_size))
+        if not isinstance(slot_bytes, list) or len(slot_bytes) < int(slot_size):
+            return None
+
+        details = self._decode_gen3_party_slot_details(
+            slot_bytes,
+            max_species_id=int(self.GEN3_INTERNAL_SPECIES_MAX),
+            allow_checksum_mismatch=True,
+            species_hint_ids=None,
+        )
+        if not isinstance(details, dict):
+            return None
+
+        try:
+            species_id = int(details.get("normalized_species", 0))
+        except (TypeError, ValueError):
+            species_id = 0
+        if species_id <= 0:
+            return None
+
+        try:
+            level_val = int(details.get("level", 0))
+        except (TypeError, ValueError):
+            level_val = 0
+
+        personality = details.get("_personality")
+        ot_id = details.get("_ot_id")
+        signature = f"{species_id}:{level_val}:{personality}:{ot_id}"
+
+        return {
+            "species_id": int(species_id),
+            "species_name": self.get_pokemon_name(int(species_id)),
+            "level": int(level_val) if int(level_val) > 0 else None,
+            "shiny": bool(details.get("shiny", False)),
+            "personality": int(personality) if isinstance(personality, int) else personality,
+            "ot_id": int(ot_id) if isinstance(ot_id, int) else ot_id,
+            "enemy_count": int(enemy_count),
+            "is_wild": int(enemy_count) == 1,
+            "signature": signature,
+        }
+
 class AchievementTracker:
     """Tracks achievements and reports unlocks"""
     
@@ -5168,6 +5261,48 @@ class PokeAchieveGUI:
         if not self._party_type_icon_assets_dir.exists():
             self._party_type_icon_assets_dir = self.script_dir / "assets" / "type_icons"
 
+        self._hunt_modes = [
+            "Soft Reset Hunt",
+            "Wild Encounter Hunt",
+            "Fishing Encounter Hunt",
+            "Hatching Egg Hunt",
+        ]
+        self._hunt_game_options = self._build_hunt_game_options()
+        self._hunt_encounter_catalog: Dict[str, Dict[str, Dict[str, Any]]] = self._build_hunt_encounter_catalog()
+        self._hunt_route_options: Dict[str, List[str]] = self._build_default_hunt_route_options()
+        self._hunt_fishing_options: Dict[str, List[str]] = self._build_default_hunt_fishing_options()
+        self.hunt_mode_var = tk.StringVar(value=self._hunt_modes[0])
+        self.hunt_game_var = tk.StringVar(value=self._hunt_game_options[0] if self._hunt_game_options else "")
+        self.hunt_route_var = tk.StringVar(value="Any Soft Reset")
+        self.hunt_target_var = tk.StringVar(value="")
+        self._hunt_active = False
+        self._hunt_counter = 0
+        self._hunt_last_enemy_signature: Optional[str] = None
+        self._hunt_recent_other_species: deque[int] = deque(maxlen=24)
+        self._hunt_last_waiting_state = bool(self.retroarch.is_waiting_for_launch())
+        self._hunt_alerted_signatures: Set[str] = set()
+        self._hunt_last_party_snapshot: Dict[int, Dict[str, object]] = {}
+        self._hunt_initialized = False
+        self._hunt_target_sprite_label: Optional[ttk.Label] = None
+        self._hunt_target_name_label: Optional[ttk.Label] = None
+        self._hunt_target_type_frame: Optional[ttk.Frame] = None
+        self._hunt_target_type_labels: List[ttk.Label] = []
+        self._hunt_target_meta_label: Optional[ttk.Label] = None
+        self._hunt_counter_label: Optional[ttk.Label] = None
+        self._hunt_mode_hint_label: Optional[ttk.Label] = None
+        self._hunt_other_sprites_frame: Optional[ttk.Frame] = None
+        self._hunt_other_sprite_labels: List[ttk.Label] = []
+        self._hunt_available_canvas: Optional[tk.Canvas] = None
+        self._hunt_available_scrollbar: Optional[ttk.Scrollbar] = None
+        self._hunt_available_window_id: Optional[int] = None
+        self._hunt_route_label: Optional[ttk.Label] = None
+        self._hunt_route_combo: Optional[ttk.Combobox] = None
+        self._hunt_target_combo: Optional[ttk.Combobox] = None
+        self._hunt_game_combo: Optional[ttk.Combobox] = None
+        self._hunt_mode_combo: Optional[ttk.Combobox] = None
+        self._hunt_start_btn: Optional[ttk.Button] = None
+        self._hunt_pause_btn: Optional[ttk.Button] = None
+
         self._build_ui()
         self._start_status_check()
         self.root.after(250, self._maybe_run_setup_wizard)
@@ -5316,10 +5451,15 @@ class PokeAchieveGUI:
         self.notebook.add(self.achievements_frame, text="Achievements")
         self._build_achievements_tab()
         
-        # Collection Tab (NEW!)
+        # Collection Tab
         self.collection_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.collection_frame, text="Collection")
         self._build_collection_tab()
+
+        # Shiny Hunt Tab
+        self.hunt_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.hunt_frame, text="Shiny Hunt")
+        self._build_hunt_tab()
         
         # Log Tab
         self.log_frame = ttk.Frame(self.notebook)
@@ -5536,6 +5676,1291 @@ class PokeAchieveGUI:
         )
         self.catches_list.pack(fill=tk.BOTH, expand=True)
 
+    def _build_hunt_game_options(self) -> List[str]:
+        """Gen 1 games are excluded (no shiny), and order follows gen/release."""
+        preferred_order = [
+            "Pokemon Gold",
+            "Pokemon Silver",
+            "Pokemon Crystal",
+            "Pokemon Ruby",
+            "Pokemon Sapphire",
+            "Pokemon FireRed",
+            "Pokemon LeafGreen",
+            "Pokemon Emerald",
+        ]
+
+        options: List[str] = []
+        reader = self.tracker.pokemon_reader if self.tracker else None
+        for game_name in preferred_order:
+            if game_name not in self.tracker.GAME_IDS:
+                continue
+            config = reader.get_game_config(game_name) if reader else None
+            try:
+                gen = int(config.get("gen", 1)) if isinstance(config, dict) else 1
+            except (TypeError, ValueError):
+                gen = 1
+            if gen <= 1:
+                continue
+            options.append(game_name)
+
+        # Include any additional supported non-Gen1 games not in preferred ordering.
+        extras = [name for name in self.tracker.GAME_IDS.keys() if name not in options]
+        for game_name in sorted(extras, key=lambda g: int(self.tracker.GAME_IDS.get(g, 9999))):
+            config = reader.get_game_config(game_name) if reader else None
+            try:
+                gen = int(config.get("gen", 1)) if isinstance(config, dict) else 1
+            except (TypeError, ValueError):
+                gen = 1
+            if gen <= 1:
+                continue
+            options.append(game_name)
+
+        return options
+
+    def _build_hunt_encounter_catalog(self) -> Dict[str, Dict[str, Dict[str, Any]]]:
+        """Load generated per-game wild/fishing pools and merge soft-reset metadata."""
+        catalog: Dict[str, Dict[str, Dict[str, Any]]] = {}
+
+        catalog_path = self.script_dir / "hunt_encounter_catalog.json"
+        if catalog_path.exists():
+            try:
+                with open(catalog_path, "r", encoding="utf-8") as handle:
+                    loaded = json.load(handle)
+                if isinstance(loaded, dict):
+                    catalog = loaded
+            except (OSError, json.JSONDecodeError, ValueError):
+                catalog = {}
+
+        soft_reset_metadata = self._build_hunt_soft_reset_metadata()
+        default_soft_reset = self._default_hunt_soft_reset_categories()
+
+        for game_name in self._hunt_game_options:
+            game_block = catalog.get(game_name)
+            if not isinstance(game_block, dict):
+                game_block = {}
+
+            random_entries = game_block.get("random") if isinstance(game_block.get("random"), dict) else {}
+            fishing_entries = game_block.get("fishing") if isinstance(game_block.get("fishing"), dict) else {}
+
+            normalized_random: Dict[str, List[int]] = {}
+            for key, value in random_entries.items():
+                if not isinstance(key, str):
+                    continue
+                ids = value if isinstance(value, list) else []
+                normalized_random[key] = self._normalize_hunt_species_ids_for_game(game_name, ids)
+
+            normalized_fishing: Dict[str, List[int]] = {}
+            for key, value in fishing_entries.items():
+                if not isinstance(key, str):
+                    continue
+                ids = value if isinstance(value, list) else []
+                normalized_fishing[key] = self._normalize_hunt_species_ids_for_game(game_name, ids)
+
+            all_random_ids: Set[int] = set()
+            for key, ids in normalized_random.items():
+                if key != "Any Route / Area":
+                    all_random_ids.update(ids)
+            if "Any Route / Area" in normalized_random and normalized_random["Any Route / Area"]:
+                all_random_ids.update(normalized_random["Any Route / Area"])
+            normalized_random["Any Route / Area"] = sorted(all_random_ids)
+
+            all_fishing_ids: Set[int] = set()
+            for key, ids in normalized_fishing.items():
+                if key != "Any Fishing Spot":
+                    all_fishing_ids.update(ids)
+            if "Any Fishing Spot" in normalized_fishing and normalized_fishing["Any Fishing Spot"]:
+                all_fishing_ids.update(normalized_fishing["Any Fishing Spot"])
+            normalized_fishing["Any Fishing Spot"] = sorted(all_fishing_ids)
+
+            soft_reset_for_game = soft_reset_metadata.get(game_name)
+            if not isinstance(soft_reset_for_game, dict):
+                soft_reset_for_game = dict(default_soft_reset)
+
+            game_block["random"] = normalized_random
+            game_block["fishing"] = normalized_fishing
+            game_block["soft_reset"] = soft_reset_for_game
+            catalog[game_name] = game_block
+
+        return catalog
+
+    def _default_hunt_soft_reset_categories(self) -> Dict[str, List[Dict[str, Any]]]:
+        return {
+            "Any Soft Reset": [],
+            "Starters": [],
+            "Trades": [],
+            "Gift": [],
+            "Stationary": [],
+        }
+
+    def _build_hunt_soft_reset_metadata(self) -> Dict[str, Dict[str, List[Dict[str, Any]]]]:
+        def entry(species_id: int, *, location: str = "", level: Optional[int] = None, npc: str = "") -> Dict[str, Any]:
+            payload: Dict[str, Any] = {"id": int(species_id)}
+            if location:
+                payload["location"] = location
+            if level is not None:
+                payload["level"] = int(level)
+            if npc:
+                payload["npc"] = npc
+            return payload
+
+        data: Dict[str, Dict[str, List[Dict[str, Any]]]] = {
+            "Pokemon Gold": {
+                "Starters": [
+                    entry(152, location="New Bark Town", level=5, npc="Professor Elm"),
+                    entry(155, location="New Bark Town", level=5, npc="Professor Elm"),
+                    entry(158, location="New Bark Town", level=5, npc="Professor Elm"),
+                ],
+                "Trades": [
+                    entry(95, location="Violet City", level=3, npc="Youngster in Pokemon Center"),
+                    entry(66, location="Goldenrod City", level=10, npc="Department Store NPC"),
+                    entry(100, location="Olivine City", level=20, npc="Pokemon Center NPC"),
+                    entry(122, location="Route 2", level=10, npc="Gatehouse NPC"),
+                ],
+                "Gift": [
+                    entry(175, location="Violet City", level=5, npc="Professor Elm's Aide"),
+                    entry(133, location="Goldenrod City", level=20, npc="Bill"),
+                    entry(213, location="Cianwood City", level=15, npc="Man in house"),
+                    entry(236, location="Mt. Mortar", level=10, npc="Kiyo"),
+                    entry(147, location="Dragon's Den", level=15, npc="Elder"),
+                ],
+                "Stationary": [
+                    entry(185, location="Route 36", level=20),
+                    entry(130, location="Lake of Rage", level=30),
+                    entry(143, location="Route 11", level=50),
+                    entry(243, location="Roaming Johto", level=40),
+                    entry(244, location="Roaming Johto", level=40),
+                    entry(245, location="Roaming Johto", level=40),
+                    entry(249, location="Whirl Islands", level=40),
+                    entry(250, location="Tin Tower", level=40),
+                ],
+            },
+            "Pokemon Silver": {
+                "Starters": [
+                    entry(152, location="New Bark Town", level=5, npc="Professor Elm"),
+                    entry(155, location="New Bark Town", level=5, npc="Professor Elm"),
+                    entry(158, location="New Bark Town", level=5, npc="Professor Elm"),
+                ],
+                "Trades": [
+                    entry(95, location="Violet City", level=3, npc="Youngster in Pokemon Center"),
+                    entry(66, location="Goldenrod City", level=10, npc="Department Store NPC"),
+                    entry(100, location="Olivine City", level=20, npc="Pokemon Center NPC"),
+                    entry(122, location="Route 2", level=10, npc="Gatehouse NPC"),
+                ],
+                "Gift": [
+                    entry(175, location="Violet City", level=5, npc="Professor Elm's Aide"),
+                    entry(133, location="Goldenrod City", level=20, npc="Bill"),
+                    entry(213, location="Cianwood City", level=15, npc="Man in house"),
+                    entry(236, location="Mt. Mortar", level=10, npc="Kiyo"),
+                    entry(147, location="Dragon's Den", level=15, npc="Elder"),
+                ],
+                "Stationary": [
+                    entry(185, location="Route 36", level=20),
+                    entry(130, location="Lake of Rage", level=30),
+                    entry(143, location="Route 11", level=50),
+                    entry(243, location="Roaming Johto", level=40),
+                    entry(244, location="Roaming Johto", level=40),
+                    entry(245, location="Roaming Johto", level=40),
+                    entry(249, location="Whirl Islands", level=70),
+                    entry(250, location="Tin Tower", level=40),
+                ],
+            },
+            "Pokemon Crystal": {
+                "Starters": [
+                    entry(152, location="New Bark Town", level=5, npc="Professor Elm"),
+                    entry(155, location="New Bark Town", level=5, npc="Professor Elm"),
+                    entry(158, location="New Bark Town", level=5, npc="Professor Elm"),
+                ],
+                "Trades": [
+                    entry(95, location="Violet City", level=3, npc="Youngster in Pokemon Center"),
+                    entry(66, location="Goldenrod City", level=10, npc="Department Store NPC"),
+                    entry(100, location="Olivine City", level=20, npc="Pokemon Center NPC"),
+                    entry(122, location="Route 2", level=10, npc="Gatehouse NPC"),
+                ],
+                "Gift": [
+                    entry(175, location="Violet City", level=5, npc="Professor Elm's Aide"),
+                    entry(133, location="Goldenrod City", level=20, npc="Bill"),
+                    entry(213, location="Cianwood City", level=15, npc="Man in house"),
+                    entry(236, location="Mt. Mortar", level=10, npc="Kiyo"),
+                    entry(147, location="Dragon's Den", level=15, npc="Elder"),
+                ],
+                "Stationary": [
+                    entry(185, location="Route 36", level=20),
+                    entry(130, location="Lake of Rage", level=30),
+                    entry(143, location="Route 11", level=50),
+                    entry(243, location="Roaming Johto", level=40),
+                    entry(244, location="Roaming Johto", level=40),
+                    entry(245, location="Roaming Johto", level=40),
+                    entry(249, location="Whirl Islands", level=60),
+                    entry(250, location="Tin Tower", level=60),
+                    entry(251, location="Ilex Forest", level=30),
+                ],
+            },
+            "Pokemon Ruby": {
+                "Starters": [
+                    entry(252, location="Littleroot Town", level=5, npc="Professor Birch"),
+                    entry(255, location="Littleroot Town", level=5, npc="Professor Birch"),
+                    entry(258, location="Littleroot Town", level=5, npc="Professor Birch"),
+                ],
+                "Trades": [
+                    entry(270, location="Rustboro City", level=5, npc="School Kid in house"),
+                    entry(273, location="Fortree City", level=13, npc="Pokemon Center NPC"),
+                    entry(300, location="Pacifidlog Town", level=15, npc="Pokemon Fan in house"),
+                    entry(311, location="Route 110", level=13, npc="Cycling Road gate NPC"),
+                    entry(312, location="Route 110", level=13, npc="Cycling Road gate NPC"),
+                ],
+                "Gift": [
+                    entry(351, location="Weather Institute", level=25, npc="Scientist"),
+                    entry(360, location="Lavaridge Town", level=5, npc="Old Woman (Egg)"),
+                    entry(374, location="Mossdeep City", level=5, npc="Steven"),
+                ],
+                "Stationary": [
+                    entry(377, location="Desert Ruins", level=40),
+                    entry(378, location="Island Cave", level=40),
+                    entry(379, location="Ancient Tomb", level=40),
+                    entry(380, location="Roaming Hoenn", level=40),
+                    entry(381, location="Southern Island", level=50),
+                    entry(382, location="Cave of Origin", level=45),
+                    entry(383, location="Terra Cave", level=70),
+                    entry(384, location="Sky Pillar", level=70),
+                ],
+            },
+            "Pokemon Sapphire": {
+                "Starters": [
+                    entry(252, location="Littleroot Town", level=5, npc="Professor Birch"),
+                    entry(255, location="Littleroot Town", level=5, npc="Professor Birch"),
+                    entry(258, location="Littleroot Town", level=5, npc="Professor Birch"),
+                ],
+                "Trades": [
+                    entry(273, location="Rustboro City", level=5, npc="School Kid in house"),
+                    entry(270, location="Fortree City", level=13, npc="Pokemon Center NPC"),
+                    entry(300, location="Pacifidlog Town", level=15, npc="Pokemon Fan in house"),
+                    entry(311, location="Route 110", level=13, npc="Cycling Road gate NPC"),
+                    entry(312, location="Route 110", level=13, npc="Cycling Road gate NPC"),
+                ],
+                "Gift": [
+                    entry(351, location="Weather Institute", level=25, npc="Scientist"),
+                    entry(360, location="Lavaridge Town", level=5, npc="Old Woman (Egg)"),
+                    entry(374, location="Mossdeep City", level=5, npc="Steven"),
+                ],
+                "Stationary": [
+                    entry(377, location="Desert Ruins", level=40),
+                    entry(378, location="Island Cave", level=40),
+                    entry(379, location="Ancient Tomb", level=40),
+                    entry(381, location="Roaming Hoenn", level=40),
+                    entry(380, location="Southern Island", level=50),
+                    entry(382, location="Marine Cave", level=70),
+                    entry(383, location="Cave of Origin", level=45),
+                    entry(384, location="Sky Pillar", level=70),
+                ],
+            },
+            "Pokemon Emerald": {
+                "Starters": [
+                    entry(252, location="Littleroot Town", level=5, npc="Professor Birch"),
+                    entry(255, location="Littleroot Town", level=5, npc="Professor Birch"),
+                    entry(258, location="Littleroot Town", level=5, npc="Professor Birch"),
+                ],
+                "Trades": [
+                    entry(270, location="Rustboro City", level=5, npc="School Kid in house"),
+                    entry(273, location="Fortree City", level=13, npc="Pokemon Center NPC"),
+                    entry(300, location="Pacifidlog Town", level=15, npc="Pokemon Fan in house"),
+                    entry(311, location="Route 110", level=13, npc="Cycling Road gate NPC"),
+                    entry(312, location="Route 110", level=13, npc="Cycling Road gate NPC"),
+                ],
+                "Gift": [
+                    entry(351, location="Weather Institute", level=25, npc="Scientist"),
+                    entry(360, location="Lavaridge Town", level=5, npc="Old Woman (Egg)"),
+                    entry(374, location="Mossdeep City", level=5, npc="Steven"),
+                ],
+                "Stationary": [
+                    entry(377, location="Desert Ruins", level=40),
+                    entry(378, location="Island Cave", level=40),
+                    entry(379, location="Ancient Tomb", level=40),
+                    entry(380, location="Roaming Hoenn", level=40),
+                    entry(381, location="Roaming Hoenn", level=40),
+                    entry(382, location="Marine Cave", level=70),
+                    entry(383, location="Terra Cave", level=70),
+                    entry(384, location="Sky Pillar", level=70),
+                ],
+            },
+            "Pokemon FireRed": {
+                "Starters": [
+                    entry(1, location="Pallet Town", level=5, npc="Professor Oak"),
+                    entry(4, location="Pallet Town", level=5, npc="Professor Oak"),
+                    entry(7, location="Pallet Town", level=5, npc="Professor Oak"),
+                ],
+                "Trades": [
+                    entry(122, location="Route 2", level=10, npc="House near Diglett's Cave"),
+                    entry(83, location="Vermilion City", level=5, npc="Pokemon Fan Club"),
+                    entry(108, location="Cinnabar Island", level=15, npc="Pokemon Lab"),
+                    entry(124, location="Cerulean City", level=20, npc="Pokemon Center"),
+                    entry(29, location="Route 5", level=16, npc="Underground Path gate"),
+                    entry(32, location="Route 11", level=16, npc="Gatehouse"),
+                ],
+                "Gift": [
+                    entry(129, location="Route 4", level=5, npc="Magikarp Salesman"),
+                    entry(133, location="Celadon Mansion", level=25, npc="NPC on rooftop"),
+                    entry(106, location="Saffron Dojo", level=25, npc="Fighting Dojo Master"),
+                    entry(107, location="Saffron Dojo", level=25, npc="Fighting Dojo Master"),
+                    entry(131, location="Silph Co.", level=25, npc="Silph Employee"),
+                    entry(138, location="Cinnabar Lab", level=5, npc="Scientist (Fossil)"),
+                    entry(140, location="Cinnabar Lab", level=5, npc="Scientist (Fossil)"),
+                ],
+                "Stationary": [
+                    entry(143, location="Route 12", level=30),
+                    entry(143, location="Route 16", level=30),
+                    entry(144, location="Seafoam Islands", level=50),
+                    entry(145, location="Power Plant", level=50),
+                    entry(146, location="Mt. Ember", level=50),
+                    entry(150, location="Cerulean Cave", level=70),
+                ],
+            },
+            "Pokemon LeafGreen": {
+                "Starters": [
+                    entry(1, location="Pallet Town", level=5, npc="Professor Oak"),
+                    entry(4, location="Pallet Town", level=5, npc="Professor Oak"),
+                    entry(7, location="Pallet Town", level=5, npc="Professor Oak"),
+                ],
+                "Trades": [
+                    entry(122, location="Route 2", level=10, npc="House near Diglett's Cave"),
+                    entry(83, location="Vermilion City", level=5, npc="Pokemon Fan Club"),
+                    entry(108, location="Cinnabar Island", level=15, npc="Pokemon Lab"),
+                    entry(124, location="Cerulean City", level=20, npc="Pokemon Center"),
+                    entry(29, location="Route 5", level=16, npc="Underground Path gate"),
+                    entry(32, location="Route 11", level=16, npc="Gatehouse"),
+                ],
+                "Gift": [
+                    entry(129, location="Route 4", level=5, npc="Magikarp Salesman"),
+                    entry(133, location="Celadon Mansion", level=25, npc="NPC on rooftop"),
+                    entry(106, location="Saffron Dojo", level=25, npc="Fighting Dojo Master"),
+                    entry(107, location="Saffron Dojo", level=25, npc="Fighting Dojo Master"),
+                    entry(131, location="Silph Co.", level=25, npc="Silph Employee"),
+                    entry(138, location="Cinnabar Lab", level=5, npc="Scientist (Fossil)"),
+                    entry(140, location="Cinnabar Lab", level=5, npc="Scientist (Fossil)"),
+                ],
+                "Stationary": [
+                    entry(143, location="Route 12", level=30),
+                    entry(143, location="Route 16", level=30),
+                    entry(144, location="Seafoam Islands", level=50),
+                    entry(145, location="Power Plant", level=50),
+                    entry(146, location="Mt. Ember", level=50),
+                    entry(150, location="Cerulean Cave", level=70),
+                ],
+            },
+        }
+
+        for game_name in self._hunt_game_options:
+            categories = data.get(game_name)
+            if not isinstance(categories, dict):
+                categories = self._default_hunt_soft_reset_categories()
+
+            normalized: Dict[str, List[Dict[str, Any]]] = self._default_hunt_soft_reset_categories()
+            for category_name in ("Starters", "Trades", "Gift", "Stationary"):
+                raw_entries = categories.get(category_name)
+                if isinstance(raw_entries, list):
+                    normalized[category_name] = list(raw_entries)
+
+            seen_ids: Set[int] = set()
+            all_entries: List[Dict[str, Any]] = []
+            for category_name in ("Starters", "Trades", "Gift", "Stationary"):
+                for item in normalized.get(category_name, []):
+                    if not isinstance(item, dict):
+                        continue
+                    try:
+                        species_id = int(item.get("id", 0))
+                    except (TypeError, ValueError):
+                        continue
+                    if species_id <= 0 or species_id in seen_ids:
+                        continue
+                    seen_ids.add(species_id)
+                    all_entries.append(dict(item))
+            normalized["Any Soft Reset"] = all_entries
+            data[game_name] = normalized
+
+        return data
+
+    def _get_hunt_soft_reset_entries_for_selection(self, game_name: str, category_name: Optional[str] = None) -> List[Dict[str, Any]]:
+        category = (category_name or self.hunt_route_var.get()).strip()
+        game_data = self._hunt_encounter_catalog.get(game_name, {})
+        soft_reset = game_data.get("soft_reset") if isinstance(game_data.get("soft_reset"), dict) else {}
+
+        raw_entries: List[Any] = []
+        if category and category in soft_reset:
+            candidate = soft_reset.get(category)
+            if isinstance(candidate, list):
+                raw_entries = candidate
+        if not raw_entries:
+            candidate = soft_reset.get("Any Soft Reset")
+            if isinstance(candidate, list):
+                raw_entries = candidate
+
+        allowed_ids = set(self._get_hunt_all_species_ids(game_name))
+        seen: Set[int] = set()
+        normalized: List[Dict[str, Any]] = []
+
+        for raw in raw_entries:
+            payload: Dict[str, Any]
+            if isinstance(raw, dict):
+                payload = dict(raw)
+                try:
+                    species_id = int(payload.get("id", payload.get("species_id", 0)))
+                except (TypeError, ValueError):
+                    continue
+            else:
+                try:
+                    species_id = int(raw)
+                except (TypeError, ValueError):
+                    continue
+                payload = {"id": species_id}
+
+            if species_id <= 0:
+                continue
+            if allowed_ids and species_id not in allowed_ids:
+                continue
+            if species_id in seen:
+                continue
+            seen.add(species_id)
+
+            payload["id"] = species_id
+            if isinstance(payload.get("level"), str):
+                try:
+                    payload["level"] = int(str(payload.get("level")).strip())
+                except (TypeError, ValueError):
+                    payload.pop("level", None)
+            normalized.append(payload)
+
+        return normalized
+
+    def _hunt_location_sort_key(self, value: str) -> Tuple[int, int, str, str]:
+        text = str(value or "").strip()
+        route_match = re.match(r"^Route\s+(\d+)(?:\s*\(([^)]*)\))?$", text, flags=re.IGNORECASE)
+        if route_match:
+            variant = str(route_match.group(2) or "").strip().lower()
+            return (0, int(route_match.group(1)), variant != "surf", variant)
+        return (1, 10_000, False, text.lower())
+
+    def _build_default_hunt_route_options(self) -> Dict[str, List[str]]:
+        route_options: Dict[str, List[str]] = {}
+        for game_name in self._hunt_game_options:
+            entries = self._hunt_encounter_catalog.get(game_name, {}).get("random", {})
+            values = sorted(list(entries.keys()), key=self._hunt_location_sort_key)
+            if "Any Route / Area" in values:
+                values = ["Any Route / Area"] + [v for v in values if v != "Any Route / Area"]
+            route_options[game_name] = values or ["Any Route / Area"]
+        return route_options
+
+    def _build_default_hunt_fishing_options(self) -> Dict[str, List[str]]:
+        fishing_options: Dict[str, List[str]] = {}
+        for game_name in self._hunt_game_options:
+            entries = self._hunt_encounter_catalog.get(game_name, {}).get("fishing", {})
+            values = sorted(list(entries.keys()), key=self._hunt_location_sort_key)
+            if "Any Fishing Spot" in values:
+                values = ["Any Fishing Spot"] + [v for v in values if v != "Any Fishing Spot"]
+            fishing_options[game_name] = values or ["Any Fishing Spot"]
+        return fishing_options
+
+    def _get_hunt_route_values(self, game_name: str, mode: str) -> List[str]:
+        if mode == "Soft Reset Hunt":
+            entries = self._hunt_encounter_catalog.get(game_name, {}).get("soft_reset", {})
+            values = list(entries.keys())
+            if "Any Soft Reset" in values:
+                values = ["Any Soft Reset"] + [v for v in values if v != "Any Soft Reset"]
+            return values or ["Any Soft Reset"]
+
+        if mode == "Fishing Encounter Hunt":
+            return list(self._hunt_fishing_options.get(game_name, ["Any Fishing Spot"]))
+
+        if mode == "Wild Encounter Hunt":
+            return list(self._hunt_route_options.get(game_name, ["Any Route / Area"]))
+
+        return []
+
+    def _get_hunt_all_species_ids(self, game_name: str) -> List[int]:
+        reader = self.tracker.pokemon_reader if self.tracker else None
+        if not reader:
+            return []
+        config = reader.get_game_config(game_name) if game_name else None
+        try:
+            max_pokemon = int(config.get("max_pokemon", 386)) if isinstance(config, dict) else 386
+        except (TypeError, ValueError):
+            max_pokemon = 386
+        return [pid for pid in range(1, max_pokemon + 1) if isinstance(reader.POKEMON_NAMES.get(pid), str)]
+
+    def _normalize_hunt_species_ids_for_game(self, game_name: str, species_ids: List[int]) -> List[int]:
+        allowed = set(self._get_hunt_all_species_ids(game_name))
+        ordered: List[int] = []
+        seen: Set[int] = set()
+        for raw in species_ids:
+            try:
+                pid = int(raw)
+            except (TypeError, ValueError):
+                continue
+            if pid <= 0 or pid not in allowed or pid in seen:
+                continue
+            ordered.append(pid)
+            seen.add(pid)
+        return ordered
+
+    def _get_hunt_species_ids_for_selection(self, game_name: str, mode: Optional[str] = None, route_name: Optional[str] = None) -> List[int]:
+        mode_value = (mode or self.hunt_mode_var.get()).strip()
+        route_value = (route_name or self.hunt_route_var.get()).strip()
+        game_data = self._hunt_encounter_catalog.get(game_name, {})
+
+        if mode_value == "Soft Reset Hunt":
+            entries = self._get_hunt_soft_reset_entries_for_selection(game_name, route_value)
+            species_ids: List[int] = []
+            for item in entries:
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    pid = int(item.get("id", 0))
+                except (TypeError, ValueError):
+                    continue
+                if pid > 0:
+                    species_ids.append(pid)
+            normalized = self._normalize_hunt_species_ids_for_game(game_name, species_ids)
+            return normalized or self._get_hunt_all_species_ids(game_name)
+
+        if mode_value == "Wild Encounter Hunt":
+            entries = game_data.get("random", {})
+            if route_value and route_value in entries:
+                species_ids = list(entries.get(route_value, []))
+            elif "Any Route / Area" in entries:
+                species_ids = list(entries.get("Any Route / Area", []))
+            else:
+                species_ids = [pid for values in entries.values() for pid in values]
+            normalized = self._normalize_hunt_species_ids_for_game(game_name, species_ids)
+            return normalized or self._get_hunt_all_species_ids(game_name)
+
+        if mode_value == "Fishing Encounter Hunt":
+            entries = game_data.get("fishing", {})
+            if route_value and route_value in entries:
+                species_ids = list(entries.get(route_value, []))
+            elif "Any Fishing Spot" in entries:
+                species_ids = list(entries.get("Any Fishing Spot", []))
+            else:
+                species_ids = [pid for values in entries.values() for pid in values]
+            normalized = self._normalize_hunt_species_ids_for_game(game_name, species_ids)
+            return normalized or self._get_hunt_all_species_ids(game_name)
+
+        # Hatching Egg Hunt fallback pool.
+        return self._get_hunt_all_species_ids(game_name)
+
+    def _get_hunt_other_species_ids(self, game_name: str) -> List[int]:
+        mode = self.hunt_mode_var.get().strip()
+        if mode == "Hatching Egg Hunt":
+            return []
+        if mode == "Soft Reset Hunt":
+            entries = self._get_hunt_soft_reset_entries_for_selection(game_name)
+            ids: List[int] = []
+            for item in entries:
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    pid = int(item.get("id", 0))
+                except (TypeError, ValueError):
+                    continue
+                if pid > 0:
+                    ids.append(pid)
+            return ids
+        return self._get_hunt_species_ids_for_selection(game_name)
+
+    def _build_hunt_tab(self):
+        """Build shiny hunt tracker tab."""
+        container = ttk.Frame(self.hunt_frame, padding=10)
+        container.pack(fill=tk.BOTH, expand=True)
+
+        controls = ttk.LabelFrame(container, text="Hunt Setup", padding=10)
+        controls.pack(fill=tk.X, pady=(0, 10))
+        for col in range(8):
+            controls.columnconfigure(col, weight=1)
+
+        ttk.Label(controls, text="Mode:").grid(row=0, column=0, sticky="w", padx=4, pady=4)
+        self._hunt_mode_combo = ttk.Combobox(
+            controls,
+            textvariable=self.hunt_mode_var,
+            values=self._hunt_modes,
+            state="readonly",
+            width=24,
+        )
+        self._hunt_mode_combo.grid(row=0, column=1, sticky="ew", padx=4, pady=4)
+        self._hunt_mode_combo.bind("<<ComboboxSelected>>", self._update_hunt_mode_controls)
+
+        ttk.Label(controls, text="Game:").grid(row=0, column=2, sticky="w", padx=4, pady=4)
+        self._hunt_game_combo = ttk.Combobox(
+            controls,
+            textvariable=self.hunt_game_var,
+            values=self._hunt_game_options,
+            state="readonly",
+            width=18,
+        )
+        self._hunt_game_combo.grid(row=0, column=3, sticky="ew", padx=4, pady=4)
+        self._hunt_game_combo.bind("<<ComboboxSelected>>", self._refresh_hunt_targets)
+
+        self._hunt_route_label = ttk.Label(controls, text="Route:")
+        self._hunt_route_label.grid(row=0, column=4, sticky="w", padx=4, pady=4)
+        self._hunt_route_combo = ttk.Combobox(
+            controls,
+            textvariable=self.hunt_route_var,
+            values=["Any Route / Area"],
+            state="readonly",
+            width=24,
+        )
+        self._hunt_route_combo.grid(row=0, column=5, sticky="ew", padx=4, pady=4)
+        self._hunt_route_combo.bind("<<ComboboxSelected>>", self._refresh_hunt_targets)
+
+        ttk.Label(controls, text="Target:").grid(row=1, column=0, sticky="w", padx=4, pady=4)
+        self._hunt_target_combo = ttk.Combobox(
+            controls,
+            textvariable=self.hunt_target_var,
+            values=[],
+            state="readonly",
+            width=36,
+        )
+        self._hunt_target_combo.grid(row=1, column=1, columnspan=3, sticky="ew", padx=4, pady=4)
+        self._hunt_target_combo.bind("<<ComboboxSelected>>", self._update_hunt_target_display)
+
+        self._hunt_start_btn = ttk.Button(controls, text="Start Hunt", command=self._start_hunt)
+        self._hunt_start_btn.grid(row=1, column=4, sticky="ew", padx=4, pady=4)
+
+        self._hunt_pause_btn = ttk.Button(controls, text="Pause Hunt", command=self._pause_hunt, state="disabled")
+        self._hunt_pause_btn.grid(row=1, column=5, sticky="ew", padx=4, pady=4)
+
+        ttk.Button(controls, text="Reset Counter", command=self._reset_hunt_counter).grid(
+            row=1, column=6, sticky="ew", padx=4, pady=4
+        )
+
+        target_frame = ttk.LabelFrame(container, text="Target", padding=10)
+        target_frame.pack(fill=tk.X, pady=(0, 10))
+
+        target_inner = ttk.Frame(target_frame)
+        target_inner.pack(anchor=tk.CENTER)
+
+        self._hunt_target_name_label = ttk.Label(
+            target_inner,
+            text="No target selected",
+            font=("Segoe UI", 12, "bold"),
+            anchor="center",
+            justify=tk.CENTER,
+        )
+        self._hunt_target_name_label.pack(pady=(0, 6))
+
+        self._hunt_target_sprite_label = ttk.Label(target_inner, text="Sprite loading...")
+        self._hunt_target_sprite_label.pack(pady=(0, 6))
+
+        self._hunt_target_type_frame = ttk.Frame(target_inner)
+        self._hunt_target_type_frame.pack(anchor=tk.CENTER, pady=(0, 4))
+        self._hunt_target_type_labels = []
+        for _ in range(2):
+            type_label = ttk.Label(self._hunt_target_type_frame, text="")
+            type_label.pack(side=tk.LEFT, padx=2)
+            self._hunt_target_type_labels.append(type_label)
+
+        self._hunt_target_meta_label = ttk.Label(
+            target_inner,
+            text="",
+            style="Subtle.TLabel",
+            anchor="center",
+            justify=tk.CENTER,
+            wraplength=520,
+        )
+        self._hunt_target_meta_label.pack(pady=(0, 6))
+
+        self._hunt_counter_label = ttk.Label(
+            target_inner,
+            text="Encounters: 0",
+            font=("Segoe UI", 12, "bold"),
+            anchor="center",
+            justify=tk.CENTER,
+        )
+        self._hunt_counter_label.pack()
+
+        self._hunt_mode_hint_label = ttk.Label(
+            target_inner,
+            text="",
+            style="Subtle.TLabel",
+            anchor="center",
+            justify=tk.CENTER,
+        )
+        self._hunt_mode_hint_label.pack(pady=(6, 0))
+
+        available_frame = ttk.LabelFrame(container, text="Available Pokemon", padding=10)
+        available_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+
+        available_body = ttk.Frame(available_frame)
+        available_body.pack(fill=tk.BOTH, expand=True)
+
+        self._hunt_available_canvas = tk.Canvas(available_body, highlightthickness=0, height=320)
+        self._hunt_available_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        self._hunt_available_scrollbar = ttk.Scrollbar(available_body, orient=tk.VERTICAL, command=self._hunt_available_canvas.yview)
+        self._hunt_available_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self._hunt_available_canvas.configure(yscrollcommand=self._hunt_available_scrollbar.set)
+
+        self._hunt_other_sprites_frame = ttk.Frame(self._hunt_available_canvas)
+        self._hunt_available_window_id = self._hunt_available_canvas.create_window((0, 0), window=self._hunt_other_sprites_frame, anchor="nw")
+        self._hunt_other_sprites_frame.bind("<Configure>", self._on_hunt_available_frame_configure)
+        self._hunt_available_canvas.bind("<Configure>", self._on_hunt_available_canvas_configure)
+        self._hunt_available_canvas.bind("<MouseWheel>", self._on_hunt_available_mousewheel)
+        self._hunt_other_sprites_frame.bind("<MouseWheel>", self._on_hunt_available_mousewheel)
+        self._hunt_other_sprite_labels = []
+
+        self.hunt_status_label = ttk.Label(container, text="Hunt idle", style="Subtle.TLabel")
+        self.hunt_status_label.pack(anchor=tk.W)
+
+        self._refresh_hunt_targets()
+        self._update_hunt_mode_controls()
+        self._set_hunt_counter(0)
+
+    def _get_hunt_species_options(self, game_name: str) -> List[Tuple[int, str]]:
+        reader = self.tracker.pokemon_reader if self.tracker else None
+        if not reader:
+            return []
+
+        species_ids = self._get_hunt_species_ids_for_selection(game_name)
+        options: List[Tuple[int, str]] = []
+        for pid in species_ids:
+            name = reader.POKEMON_NAMES.get(pid)
+            if isinstance(name, str) and name.strip():
+                options.append((int(pid), name.strip()))
+        return options
+
+    def _refresh_hunt_targets(self, _event=None):
+        game_name = self.hunt_game_var.get().strip()
+        if not game_name and self._hunt_game_options:
+            game_name = self._hunt_game_options[0]
+            self.hunt_game_var.set(game_name)
+
+        mode = self.hunt_mode_var.get().strip()
+        route_values = self._get_hunt_route_values(game_name, mode)
+        if self._hunt_route_combo is not None:
+            self._hunt_route_combo.configure(values=route_values)
+            current_route = self.hunt_route_var.get().strip()
+            if current_route not in route_values:
+                self.hunt_route_var.set(route_values[0] if route_values else "")
+
+        species_options = self._get_hunt_species_options(game_name)
+        display_values = [f"{pid:03d} {name}" for pid, name in species_options]
+        if self._hunt_target_combo is not None:
+            self._hunt_target_combo.configure(values=display_values)
+
+        current_target = self.hunt_target_var.get().strip()
+        if current_target not in display_values:
+            self.hunt_target_var.set(display_values[0] if display_values else "")
+
+        self._update_hunt_target_display()
+
+    def _get_hunt_target_pokemon_id(self) -> int:
+        raw = self.hunt_target_var.get().strip()
+        if not raw:
+            return 0
+        token = raw.split(" ", 1)[0].strip()
+        try:
+            return int(token)
+        except (TypeError, ValueError):
+            return 0
+
+    def _set_hunt_counter(self, value: int):
+        self._hunt_counter = max(0, int(value))
+        if isinstance(self._hunt_counter_label, ttk.Label):
+            self._hunt_counter_label.configure(text=f"Encounters: {self._hunt_counter:,}")
+
+    def _update_hunt_target_display(self, _event=None):
+        target_id = self._get_hunt_target_pokemon_id()
+        game_name = self.hunt_game_var.get().strip() or (self.tracker.game_name or "")
+        target_name = self.tracker.pokemon_reader.get_pokemon_name(target_id) if target_id > 0 and self.tracker and self.tracker.pokemon_reader else "No target selected"
+
+        if isinstance(self._hunt_target_name_label, ttk.Label):
+            if target_id > 0:
+                self._hunt_target_name_label.configure(text=f"Target: {target_name} (#{target_id})")
+            else:
+                self._hunt_target_name_label.configure(text="No target selected")
+
+        if isinstance(self._hunt_target_sprite_label, ttk.Label):
+            if target_id > 0:
+                sprite = self._request_party_sprite(target_id, game_name, shiny=True)
+                if sprite is not None:
+                    self._hunt_target_sprite_label.configure(image=sprite, text="")
+                    setattr(self._hunt_target_sprite_label, "image", sprite)
+                else:
+                    self._hunt_target_sprite_label.configure(image="", text="Sprite loading...")
+                    setattr(self._hunt_target_sprite_label, "image", None)
+            else:
+                self._hunt_target_sprite_label.configure(image="", text="No target")
+                setattr(self._hunt_target_sprite_label, "image", None)
+
+        target_types: List[str] = []
+        target_details: List[str] = []
+        context_details: List[str] = []
+        mode = self.hunt_mode_var.get().strip()
+        route_value = self.hunt_route_var.get().strip()
+        target_entry: Optional[Dict[str, Any]] = None
+
+        if target_id > 0 and mode == "Soft Reset Hunt":
+            for item in self._get_hunt_soft_reset_entries_for_selection(game_name):
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    if int(item.get("id", 0)) == int(target_id):
+                        target_entry = item
+                        break
+                except (TypeError, ValueError):
+                    continue
+
+        if isinstance(target_entry, dict):
+            raw_types = target_entry.get("types")
+            if isinstance(raw_types, list):
+                for value in raw_types:
+                    if isinstance(value, str) and value.strip():
+                        target_types.append(value.strip().lower())
+
+            location = target_entry.get("location")
+            if isinstance(location, str) and location.strip():
+                target_details.append(location.strip())
+            level = target_entry.get("level")
+            if isinstance(level, int) and level > 0:
+                target_details.append(f"Lv.{level}")
+            npc = target_entry.get("npc")
+            if isinstance(npc, str) and npc.strip():
+                target_details.append(f"NPC: {npc.strip()}")
+
+        if target_id > 0 and not target_types:
+            resolved_types = self._request_species_types(target_id, game_name)
+            if isinstance(resolved_types, list):
+                for value in resolved_types:
+                    if isinstance(value, str) and value.strip():
+                        target_types.append(value.strip().lower())
+
+        if mode == "Wild Encounter Hunt" and route_value:
+            context_details.append(f"Route: {route_value}")
+        elif mode == "Fishing Encounter Hunt" and route_value:
+            context_details.append(f"Fishing Spot: {route_value}")
+        elif mode == "Soft Reset Hunt" and route_value:
+            context_details.append(f"Category: {route_value}")
+        elif mode == "Hatching Egg Hunt":
+            context_details.append("Egg Hunt")
+
+        target_types = target_types[:2]
+
+        labels = self._hunt_target_type_labels if isinstance(self._hunt_target_type_labels, list) else []
+        for idx, type_label in enumerate(labels):
+            if not isinstance(type_label, ttk.Label):
+                continue
+            if idx < len(target_types):
+                type_name = target_types[idx]
+                icon = self._request_party_type_icon(type_name, game_name)
+                if icon is not None:
+                    type_label.configure(image=icon, text="")
+                    setattr(type_label, "image", icon)
+                else:
+                    type_label.configure(image="", text=type_name.title())
+                    setattr(type_label, "image", None)
+            else:
+                type_label.configure(image="", text="")
+                setattr(type_label, "image", None)
+
+        if isinstance(self._hunt_target_meta_label, ttk.Label):
+            meta_parts = context_details + target_details
+            if meta_parts:
+                self._hunt_target_meta_label.configure(text=" / ".join(meta_parts))
+            else:
+                self._hunt_target_meta_label.configure(text="")
+
+        self._update_hunt_other_species_display()
+
+    def _update_hunt_mode_controls(self, _event=None):
+        mode = self.hunt_mode_var.get().strip()
+
+        if mode == "Soft Reset Hunt":
+            route_enabled = True
+            route_label = "Category:"
+        elif mode == "Fishing Encounter Hunt":
+            route_enabled = True
+            route_label = "Fishing Spot:"
+        elif mode == "Wild Encounter Hunt":
+            route_enabled = True
+            route_label = "Route:"
+        else:
+            route_enabled = False
+            route_label = "Route:"
+
+        if isinstance(self._hunt_route_label, ttk.Label):
+            self._hunt_route_label.configure(text=route_label)
+
+        if isinstance(self._hunt_route_combo, ttk.Combobox):
+            self._hunt_route_combo.configure(state="readonly" if route_enabled else "disabled")
+
+        if isinstance(self._hunt_mode_hint_label, ttk.Label):
+            hints = {
+                "Soft Reset Hunt": "Choose category + target. Available Pokemon shows event cards.",
+                "Wild Encounter Hunt": "Choose route + target. Target list is filtered to that route.",
+                "Fishing Encounter Hunt": "Choose fishing spot + target. Target list is filtered to that fishing spot.",
+                "Hatching Egg Hunt": "Choose target species. Counter increments when eggs hatch into that target.",
+            }
+            self._hunt_mode_hint_label.configure(text=hints.get(mode, ""))
+
+        self._refresh_hunt_targets()
+
+    def _update_hunt_other_species_display(self):
+        if not isinstance(self._hunt_other_sprites_frame, ttk.Frame):
+            return
+
+        for child in self._hunt_other_sprites_frame.winfo_children():
+            child.destroy()
+
+        game_name = self.hunt_game_var.get().strip() or (self.tracker.game_name or "")
+        mode = self.hunt_mode_var.get().strip()
+
+        if mode == "Soft Reset Hunt":
+            entries = self._get_hunt_soft_reset_entries_for_selection(game_name)
+            if not entries:
+                ttk.Label(self._hunt_other_sprites_frame, text="No available Pokemon for this category.", style="Subtle.TLabel").pack(anchor=tk.W)
+                self._on_hunt_available_frame_configure()
+                return
+
+            columns = 3
+            for col in range(columns):
+                self._hunt_other_sprites_frame.columnconfigure(col, weight=1)
+
+            for idx, item in enumerate(entries):
+                try:
+                    pid = int(item.get("id", 0))
+                except (TypeError, ValueError):
+                    continue
+                if pid <= 0:
+                    continue
+
+                name = self._get_pokemon_name(pid)
+                card = ttk.LabelFrame(self._hunt_other_sprites_frame, text=f"#{pid:03d} {name}", padding=6)
+                card.grid(row=idx // columns, column=idx % columns, sticky="nsew", padx=4, pady=4)
+
+                sprite = self._request_party_sprite(pid, game_name, shiny=False)
+                sprite_label = ttk.Label(card, text="Sprite loading...", anchor=tk.CENTER, justify=tk.CENTER)
+                if sprite is not None:
+                    sprite_label.configure(image=sprite, text="")
+                    setattr(sprite_label, "image", sprite)
+                sprite_label.pack(anchor=tk.CENTER, pady=(0, 4))
+
+                type_row = ttk.Frame(card)
+                type_row.pack(anchor=tk.CENTER, pady=(0, 4))
+
+                types: List[str] = []
+                raw_types = item.get("types")
+                if isinstance(raw_types, list):
+                    for value in raw_types:
+                        if isinstance(value, str) and value.strip():
+                            types.append(value.strip().lower())
+                if not types:
+                    resolved_types = self._request_species_types(pid, game_name)
+                    if isinstance(resolved_types, list):
+                        for value in resolved_types:
+                            if isinstance(value, str) and value.strip():
+                                types.append(value.strip().lower())
+                types = types[:2]
+
+                if types:
+                    for type_name in types:
+                        icon = self._request_party_type_icon(type_name, game_name)
+                        icon_label = ttk.Label(type_row, text="")
+                        if icon is not None:
+                            icon_label.configure(image=icon)
+                            setattr(icon_label, "image", icon)
+                        else:
+                            icon_label.configure(text=type_name.title())
+                        icon_label.pack(side=tk.LEFT, padx=2)
+
+                details: List[str] = []
+                location = item.get("location")
+                if isinstance(location, str) and location.strip():
+                    details.append(location.strip())
+                level = item.get("level")
+                if isinstance(level, int) and level > 0:
+                    details.append(f"Lv.{level}")
+                npc = item.get("npc")
+                if isinstance(npc, str) and npc.strip():
+                    details.append(f"NPC: {npc.strip()}")
+
+                if details:
+                    ttk.Label(card, text=" / ".join(details), wraplength=200, justify=tk.LEFT, anchor=tk.W).pack(fill=tk.X)
+
+            self._on_hunt_available_frame_configure()
+            return
+
+        species_ids = self._get_hunt_other_species_ids(game_name)
+        if not species_ids:
+            ttk.Label(self._hunt_other_sprites_frame, text="No available Pokemon for this selection.", style="Subtle.TLabel").pack(anchor=tk.W)
+            self._on_hunt_available_frame_configure()
+            return
+
+        columns = 8
+        for col in range(columns):
+            self._hunt_other_sprites_frame.columnconfigure(col, weight=1)
+
+        for idx, pid in enumerate(species_ids):
+            item_frame = ttk.Frame(self._hunt_other_sprites_frame)
+            item_frame.grid(row=idx // columns, column=idx % columns, padx=4, pady=4, sticky="n")
+
+            sprite = self._request_party_sprite(int(pid), game_name, shiny=False)
+            sprite_label = ttk.Label(item_frame, text="...", anchor=tk.CENTER, justify=tk.CENTER)
+            if sprite is not None:
+                sprite_label.configure(image=sprite, text="")
+                setattr(sprite_label, "image", sprite)
+            sprite_label.pack(anchor=tk.CENTER)
+
+            ttk.Label(item_frame, text=self._get_pokemon_name(int(pid)), wraplength=100, justify=tk.CENTER).pack(anchor=tk.CENTER)
+
+        self._on_hunt_available_frame_configure()
+
+    def _on_hunt_available_frame_configure(self, _event=None):
+        if not isinstance(self._hunt_available_canvas, tk.Canvas):
+            return
+        bbox = self._hunt_available_canvas.bbox("all")
+        if bbox:
+            self._hunt_available_canvas.configure(scrollregion=bbox)
+
+    def _on_hunt_available_canvas_configure(self, event):
+        if not isinstance(self._hunt_available_canvas, tk.Canvas):
+            return
+        if self._hunt_available_window_id is not None:
+            self._hunt_available_canvas.itemconfigure(self._hunt_available_window_id, width=event.width)
+
+    def _on_hunt_available_mousewheel(self, event):
+        if not isinstance(self._hunt_available_canvas, tk.Canvas):
+            return
+        delta = 0
+        raw_delta = getattr(event, "delta", 0)
+        if raw_delta:
+            delta = -int(raw_delta / 120)
+        else:
+            num = getattr(event, "num", None)
+            if num == 4:
+                delta = -1
+            elif num == 5:
+                delta = 1
+        if delta != 0:
+            self._hunt_available_canvas.yview_scroll(delta, "units")
+
+    def _prime_hunt_baseline(self):
+        """Prime encounter/party baseline so counters start from next new event."""
+        mode = self.hunt_mode_var.get().strip()
+        game_for_hunt = self.hunt_game_var.get().strip() or (self.tracker.game_name if self.tracker else "") or ""
+        self._hunt_last_party_snapshot = self._snapshot_party_for_hunt(self.tracker._last_party if self.tracker else [])
+        self._hunt_last_enemy_signature = None
+
+        if mode == "Hatching Egg Hunt":
+            self._hunt_initialized = True
+            return
+
+        encounter = self.tracker.pokemon_reader.read_wild_encounter(game_for_hunt) if self.tracker and self.tracker.pokemon_reader else None
+        if isinstance(encounter, dict):
+            signature = str(encounter.get("signature", "")).strip()
+            if signature:
+                self._hunt_last_enemy_signature = signature
+        self._hunt_initialized = True
+
+    def _start_hunt(self):
+        game_name = self.hunt_game_var.get().strip()
+        if game_name not in self._hunt_game_options:
+            messagebox.showwarning("Unsupported Game", "Shiny Hunt supports Gen 2/3 games only.")
+            return
+
+        if self.hunt_mode_var.get().strip() != "Hatching Egg Hunt" and self._get_hunt_target_pokemon_id() <= 0:
+            messagebox.showwarning("No Target", "Select a hunt target before starting.")
+            return
+
+        self._hunt_active = True
+        self._hunt_alerted_signatures = set()
+        self._hunt_last_waiting_state = bool(self.retroarch.is_waiting_for_launch())
+        self._hunt_recent_other_species.clear()
+        self._update_hunt_other_species_display()
+        self._prime_hunt_baseline()
+        if isinstance(self._hunt_start_btn, ttk.Button):
+            self._hunt_start_btn.configure(state="disabled")
+        if isinstance(self._hunt_pause_btn, ttk.Button):
+            self._hunt_pause_btn.configure(state="normal")
+        if isinstance(self.hunt_status_label, ttk.Label):
+            self.hunt_status_label.configure(text="Hunt active")
+        self._log(f"[HUNT] Started {self.hunt_mode_var.get()}", "info")
+
+    def _pause_hunt(self):
+        self._hunt_active = False
+        if isinstance(self._hunt_start_btn, ttk.Button):
+            self._hunt_start_btn.configure(state="normal")
+        if isinstance(self._hunt_pause_btn, ttk.Button):
+            self._hunt_pause_btn.configure(state="disabled")
+        if isinstance(self.hunt_status_label, ttk.Label):
+            self.hunt_status_label.configure(text="Hunt paused")
+        self._log("[HUNT] Hunt paused", "info")
+
+    def _reset_hunt_counter(self):
+        self._set_hunt_counter(0)
+        self._hunt_recent_other_species.clear()
+        self._hunt_alerted_signatures.clear()
+        self._update_hunt_other_species_display()
+        self._prime_hunt_baseline()
+        self._log("[HUNT] Counter reset", "info")
+
+    def _snapshot_party_for_hunt(self, party: List[Dict]) -> Dict[int, Dict[str, object]]:
+        snapshot: Dict[int, Dict[str, object]] = {}
+        for member in party:
+            if not isinstance(member, dict):
+                continue
+            try:
+                slot = int(member.get("slot", 0))
+            except (TypeError, ValueError):
+                continue
+            if slot <= 0:
+                continue
+            name = member.get("name") if isinstance(member.get("name"), str) else ""
+            is_egg = bool(member.get("is_egg", False)) or str(name).strip().lower() == "egg"
+            snapshot[int(slot)] = {
+                "id": int(member.get("id", 0)) if isinstance(member.get("id"), int) else 0,
+                "name": str(name).strip(),
+                "is_egg": bool(is_egg),
+                "shiny": bool(member.get("shiny", False)),
+            }
+        return snapshot
+
+    def _show_shiny_hunt_popup(self, title: str, message: str):
+        self._log(f"[HUNT] {message}", "success")
+        try:
+            messagebox.showinfo(title, message, parent=self.root)
+        except Exception:
+            pass
+
+    def _handle_hunt_enemy_encounter(self, encounter: Dict[str, object], game_name: str):
+        if not isinstance(encounter, dict):
+            return
+
+        mode = self.hunt_mode_var.get().strip()
+        signature = str(encounter.get("signature", "")).strip()
+        if not signature:
+            return
+
+        if not self._hunt_initialized:
+            self._hunt_last_enemy_signature = signature
+            self._hunt_initialized = True
+            return
+
+        if signature == self._hunt_last_enemy_signature:
+            return
+
+        self._hunt_last_enemy_signature = signature
+
+        if not bool(encounter.get("is_wild", True)):
+            return
+
+        species_id = int(encounter.get("species_id", 0)) if isinstance(encounter.get("species_id"), int) else 0
+        species_name = str(encounter.get("species_name") or self.tracker.pokemon_reader.get_pokemon_name(species_id))
+        is_shiny = bool(encounter.get("shiny", False))
+        target_id = self._get_hunt_target_pokemon_id()
+
+        if mode == "Soft Reset Hunt":
+            if target_id > 0 and species_id != target_id:
+                return
+            self._set_hunt_counter(self._hunt_counter + 1)
+        elif mode in {"Wild Encounter Hunt", "Fishing Encounter Hunt"}:
+            self._set_hunt_counter(self._hunt_counter + 1)
+
+        if is_shiny:
+            alert_key = f"{mode}:{signature}"
+            if alert_key in self._hunt_alerted_signatures:
+                return
+            self._hunt_alerted_signatures.add(alert_key)
+            self._show_shiny_hunt_popup(
+                "Shiny Found!",
+                f"Shiny found: {species_name} (#{species_id}) in {game_name}.",
+            )
+
+    def _handle_hunt_egg_progress(self, current_party: List[Dict], game_name: str):
+        snapshot = self._snapshot_party_for_hunt(current_party)
+        if not self._hunt_initialized:
+            self._hunt_last_party_snapshot = snapshot
+            self._hunt_initialized = True
+            return
+
+        target_id = self._get_hunt_target_pokemon_id()
+        previous = self._hunt_last_party_snapshot
+        for slot, prev_state in previous.items():
+            curr_state = snapshot.get(slot)
+            if not curr_state:
+                continue
+            if not bool(prev_state.get("is_egg", False)):
+                continue
+            if bool(curr_state.get("is_egg", False)):
+                continue
+
+            species_id = int(curr_state.get("id", 0)) if isinstance(curr_state.get("id"), int) else 0
+            species_name = str(curr_state.get("name") or self.tracker.pokemon_reader.get_pokemon_name(species_id))
+            is_shiny = bool(curr_state.get("shiny", False))
+
+            if target_id <= 0 or species_id == target_id:
+                self._set_hunt_counter(self._hunt_counter + 1)
+
+            if is_shiny:
+                alert_key = f"egg:{slot}:{species_id}:{self._hunt_counter}"
+                if alert_key not in self._hunt_alerted_signatures:
+                    self._hunt_alerted_signatures.add(alert_key)
+                    self._show_shiny_hunt_popup(
+                        "Shiny Found!",
+                        f"Shiny hatch found: {species_name} (#{species_id}) in {game_name}.",
+                    )
+
+        self._hunt_last_party_snapshot = snapshot
+
+    def _process_hunt_updates(self):
+        """Poll hunt counters from live memory state."""
+        if not self.is_running:
+            return
+
+        try:
+            current_game = (self.tracker.game_name or "").strip()
+            if current_game and current_game in self._hunt_game_options and self.hunt_game_var.get().strip() != current_game:
+                self.hunt_game_var.set(current_game)
+                self._refresh_hunt_targets()
+
+            waiting_now = bool(self.retroarch.is_waiting_for_launch())
+            if self._hunt_active:
+                mode = self.hunt_mode_var.get().strip()
+                encounter_supported = False
+                if self.tracker and self.tracker.pokemon_reader:
+                    cfg = self.tracker.pokemon_reader.get_game_config(current_game or self.hunt_game_var.get().strip())
+                    try:
+                        encounter_supported = int(cfg.get("gen", 1)) == 3 if isinstance(cfg, dict) else False
+                    except (TypeError, ValueError):
+                        encounter_supported = False
+
+                # Fallback path for non-Gen3 games where encounter structs are not yet decoded.
+                if (
+                    mode == "Soft Reset Hunt"
+                    and not encounter_supported
+                    and self._hunt_last_waiting_state
+                    and not waiting_now
+                ):
+                    self._set_hunt_counter(self._hunt_counter + 1)
+
+                game_for_hunt = self.hunt_game_var.get().strip() or current_game
+
+                if mode == "Hatching Egg Hunt":
+                    party = list(self.tracker._last_party) if isinstance(self.tracker._last_party, list) else []
+                    self._handle_hunt_egg_progress(party, game_for_hunt)
+                else:
+                    encounter = self.tracker.pokemon_reader.read_wild_encounter(game_for_hunt) if self.tracker and self.tracker.pokemon_reader else None
+                    if isinstance(encounter, dict):
+                        self._handle_hunt_enemy_encounter(encounter, game_for_hunt)
+
+                if isinstance(self.hunt_status_label, ttk.Label):
+                    self.hunt_status_label.configure(text=f"Hunt active ({mode})")
+            else:
+                if isinstance(self.hunt_status_label, ttk.Label):
+                    self.hunt_status_label.configure(text="Hunt idle")
+
+            self._hunt_last_waiting_state = waiting_now
+        except Exception as exc:
+            log_event(logging.WARNING, "hunt_poll_exception", error=str(exc), error_type=type(exc).__name__)
+
+        self.root.after(1000, self._process_hunt_updates)
+
     def _build_log_tab(self):
         """Build log tab"""
         self.log_text = scrolledtext.ScrolledText(
@@ -5565,6 +6990,7 @@ class PokeAchieveGUI:
             "api": "API",
             "collection": "COLLECTION",
             "party": "PARTY",
+            "hunt": "HUNT",
         }.get(level, "INFO")
 
         self.log_text.configure(state='normal')
@@ -5698,6 +7124,9 @@ class PokeAchieveGUI:
                     self._merge_with_website_data(display_name)
                 
                 self.game_label.configure(text=f"Game: {display_name}")
+                if display_name in self._hunt_game_options:
+                    self.hunt_game_var.set(display_name)
+                    self._refresh_hunt_targets()
                 self._log(f"Loaded {len(self.tracker.achievements)} achievements for {display_name}", "success")
                 
                 if not self.is_running:
@@ -5803,6 +7232,7 @@ class PokeAchieveGUI:
         # Start processing queues
         self._check_unlocks()
         self._process_collection_updates()
+        self._process_hunt_updates()
     
     def _stop_tracking(self):
         """Stop tracking"""
@@ -6479,6 +7909,10 @@ class PokeAchieveGUI:
                     log_event(logging.DEBUG, "species_type_download_failed", pokemon_id=int(pokemon_id), error=error_text)
             if self._party_display_last_party:
                 self._update_party_display(self._party_display_last_party, self._party_display_last_game)
+            if isinstance(self._hunt_other_sprites_frame, ttk.Frame):
+                self._update_hunt_other_species_display()
+            if isinstance(self._hunt_target_name_label, ttk.Label):
+                self._update_hunt_target_display()
 
         try:
             self.root.after(0, _complete)
@@ -6926,6 +8360,13 @@ class PokeAchieveGUI:
                 self.progress_bar["value"] = 0
                 self.collection_label.configure(text="Caught: 0 | Shiny: 0 | Party: 0")
                 self._update_party_display([], "")
+                self._hunt_active = False
+                self._set_hunt_counter(0)
+                self._hunt_recent_other_species.clear()
+                self._hunt_alerted_signatures.clear()
+                self._hunt_last_enemy_signature = None
+                self._hunt_initialized = False
+                self._update_hunt_other_species_display()
 
                 self._threadsafe_log("Local app data cleared", "info")
                 msgbox.showinfo("Success", "App data cleared! Restart the tracker to start fresh.")
@@ -7064,6 +8505,45 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
