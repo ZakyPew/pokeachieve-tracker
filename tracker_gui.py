@@ -24,6 +24,14 @@ from datetime import datetime
 from hashlib import sha256
 from dataclasses import dataclass, asdict
 
+try:
+    from PIL import Image, ImageTk
+    PIL_AVAILABLE = True
+except Exception:
+    Image = None
+    ImageTk = None
+    PIL_AVAILABLE = False
+
 LOGGER = logging.getLogger("pokeachieve_tracker")
 if not LOGGER.handlers:
     _handler = logging.StreamHandler()
@@ -102,6 +110,8 @@ def _format_party_slot_line(member: Dict[str, object], *, debug_style: bool, nam
             base = f"SLOT {slot}: Lv.{level_int} {name}"
 
     details: List[str] = []
+    if bool(member.get("shiny")):
+        details.append("Shiny")
     for label, key in (("Gender", "gender"), ("Nature", "nature"), ("Ability", "ability")):
         value = member.get(key)
         if isinstance(value, str) and value.strip():
@@ -1731,6 +1741,32 @@ class PokemonMemoryReader:
             return "Unknown Move"
         return self._gen3_move_names.get(mid, f"Move #{mid}")
 
+    def _is_gen3_shiny(self, personality: int, ot_id: int) -> bool:
+        """Determine Gen 3 shininess from PID and OTID."""
+        try:
+            pid = int(personality) & 0xFFFFFFFF
+            oid = int(ot_id) & 0xFFFFFFFF
+        except (TypeError, ValueError):
+            return False
+
+        shiny_value = ((oid >> 16) ^ (oid & 0xFFFF) ^ (pid >> 16) ^ (pid & 0xFFFF)) & 0xFFFF
+        return shiny_value < 8
+
+    def _is_gen2_shiny_from_dvs(self, atk_def_byte: int, spd_spc_byte: int) -> bool:
+        """Determine Gen 2 shininess from DV bytes."""
+        try:
+            ad = int(atk_def_byte) & 0xFF
+            ss = int(spd_spc_byte) & 0xFF
+        except (TypeError, ValueError):
+            return False
+
+        atk_dv = (ad >> 4) & 0xF
+        def_dv = ad & 0xF
+        spd_dv = (ss >> 4) & 0xF
+        spc_dv = ss & 0xF
+
+        return def_dv == 10 and spd_dv == 10 and spc_dv == 10 and atk_dv in {2, 3, 6, 7, 10, 11, 14, 15}
+
     def _decode_gen3_party_slot_details(self, slot_bytes: List[int], max_species_id: int, allow_checksum_mismatch: bool = False, species_hint_ids: Optional[Set[int]] = None) -> Optional[Dict[str, object]]:
         """Decode species + metadata from encrypted Gen 3 party slot data."""
         if not isinstance(slot_bytes, list) or len(slot_bytes) < 100:
@@ -1876,6 +1912,7 @@ class PokemonMemoryReader:
 
                 nature_name = self.GEN3_NATURE_NAMES[personality % len(self.GEN3_NATURE_NAMES)]
                 gender_name = self._resolve_gen3_gender_label(int(normalized_species), int(personality))
+                is_shiny = self._is_gen3_shiny(int(personality), int(ot_id))
 
                 held_item_id = read_u16(decrypted, growth_offset + 2)
                 experience = read_u32(decrypted, growth_offset + 4)
@@ -1912,6 +1949,7 @@ class PokemonMemoryReader:
                     "nature": nature_name,
                     "ability": ability_name,
                     "moves": move_names[:4],
+                    "shiny": bool(is_shiny),
                     "_score": int(plausibility),
                 }
 
@@ -2519,6 +2557,7 @@ class PokemonMemoryReader:
                                 value = details.get(key)
                                 if isinstance(value, str) and value.strip():
                                     member[key] = value.strip()
+                            member["shiny"] = bool(details.get("shiny", False))
                             moves = details.get("moves")
                             if isinstance(moves, list):
                                 clean_moves = [
@@ -3173,20 +3212,59 @@ class PokemonMemoryReader:
 
         # Gen 1/2: species is first byte of slot structure.
         for i in range(int(count)):
-            slot_addr = hex(int(party_start_addr, 16) + (i * slot_size))
+            slot_addr_int = int(party_start_addr, 16) + (i * slot_size)
+            slot_addr = hex(slot_addr_int)
+
             species_id = self.retroarch.read_memory(slot_addr)
-            if species_id is None or species_id == 0:
+            slot_data = self.retroarch.read_memory(slot_addr, slot_size)
+
+            level = None
+            is_shiny = False
+
+            if isinstance(slot_data, list) and len(slot_data) >= slot_size:
+                if all(isinstance(v, int) and 0 <= int(v) <= 0xFF for v in slot_data[:slot_size]):
+                    slot_bytes = [int(v) & 0xFF for v in slot_data[:slot_size]]
+                    species_id = int(slot_bytes[0])
+
+                    if int(gen) == 2:
+                        # GSC party struct: MON_LEVEL at 0x1F, MON_DVS at 0x15-0x16.
+                        if len(slot_bytes) > 0x1F:
+                            level_candidate = int(slot_bytes[0x1F])
+                            if level_candidate > 0:
+                                level = level_candidate
+                        if len(slot_bytes) > 0x16:
+                            is_shiny = self._is_gen2_shiny_from_dvs(slot_bytes[0x15], slot_bytes[0x16])
+                    else:
+                        level_candidate = int(slot_bytes[3]) if len(slot_bytes) > 3 else 0
+                        if level_candidate > 0:
+                            level = level_candidate
+
+            if species_id is None:
                 continue
 
-            level_offset = 3
-            level_addr = hex(int(slot_addr, 16) + level_offset)
-            level = self.retroarch.read_memory(level_addr)
+            try:
+                species_id = int(species_id)
+            except (TypeError, ValueError):
+                continue
+            if species_id <= 0:
+                continue
 
-            party.append({
-                "id": species_id,
-                "level": level if level else None,
+            if level is None:
+                level_offset = 3
+                level_addr = hex(slot_addr_int + level_offset)
+                level_value = self.retroarch.read_memory(level_addr)
+                if isinstance(level_value, int) and int(level_value) > 0:
+                    level = int(level_value)
+
+            member: Dict[str, object] = {
+                "id": int(species_id),
+                "level": int(level) if isinstance(level, int) and level > 0 else None,
                 "slot": i + 1,
-            })
+            }
+            if int(gen) >= 2:
+                member["shiny"] = bool(is_shiny)
+
+            party.append(member)
 
         expected_count_value = int(count) if isinstance(count, int) and int(count) >= 0 else None
         self._last_party_read_meta.update({
@@ -4904,6 +4982,33 @@ class PokeAchieveGUI:
         self.sent_events_file = self.data_dir / "sent_events.json"
         self._sent_event_ids = self._load_sent_events()
         self._load_validation_profiles()
+        self._party_slot_widgets: Dict[int, Dict[str, object]] = {}
+        self._party_sprite_cache: Dict[Tuple[str, int, bool], object] = {}
+        self._party_sprite_pending: Set[Tuple[str, int, bool]] = set()
+        self._party_sprite_failed: Set[Tuple[str, int, bool]] = set()
+        self._party_gender_badge_cache: Dict[Tuple[str, str], object] = {}
+        self._party_gender_badge_missing: Set[Tuple[str, str]] = set()
+        self._party_shiny_badge_cache: Dict[str, object] = {}
+        self._party_shiny_badge_missing: Set[str] = set()
+        self._party_type_icon_cache: Dict[Tuple[str, str], object] = {}
+        self._party_type_icon_missing: Set[Tuple[str, str]] = set()
+        self._species_type_cache: Dict[int, Dict[str, object]] = {}
+        self._species_type_pending: Set[int] = set()
+        self._species_type_failed: Set[int] = set()
+        self._party_display_last_party: List[Dict] = []
+        self._party_display_last_game = ""
+        self._party_sprite_size = 64
+        self._party_sprite_cache_dir = self.data_dir / "sprites"
+        self._party_sprite_cache_dir.mkdir(exist_ok=True)
+        self._party_gender_badge_assets_dir = self.script_dir / "gui" / "assets" / "gender_badges"
+        if not self._party_gender_badge_assets_dir.exists():
+            self._party_gender_badge_assets_dir = self.script_dir / "assets" / "gender_badges"
+        self._party_shiny_badge_assets_dir = self.script_dir / "gui" / "assets" / "shiny_badges"
+        if not self._party_shiny_badge_assets_dir.exists():
+            self._party_shiny_badge_assets_dir = self.script_dir / "assets" / "shiny_badges"
+        self._party_type_icon_assets_dir = self.script_dir / "gui" / "assets" / "type_icons"
+        if not self._party_type_icon_assets_dir.exists():
+            self._party_type_icon_assets_dir = self.script_dir / "assets" / "type_icons"
 
         self._build_ui()
         self._start_status_check()
@@ -5169,14 +5274,95 @@ class PokeAchieveGUI:
         # Party display
         party_frame = ttk.LabelFrame(self.collection_frame, text="Current Party", padding=10)
         party_frame.pack(fill=tk.X, padx=10, pady=10)
-        
-        self.party_display = ttk.Label(party_frame, text="No party data yet - start tracking to see your Pokemon!")
-        self.party_display.pack()
-        
+
+        self.party_cards_frame = ttk.Frame(party_frame)
+        self.party_cards_frame.pack(fill=tk.X, expand=True)
+
+        for col in range(6):
+            self.party_cards_frame.columnconfigure(col, weight=1, uniform="party_slots")
+
+        self._party_slot_widgets = {}
+        for slot in range(1, 7):
+            card = ttk.LabelFrame(self.party_cards_frame, text=f"Slot {slot}", padding=8)
+            card.grid(row=0, column=slot - 1, sticky="nsew", padx=4, pady=4)
+
+            header_frame = ttk.Frame(card)
+            header_frame.pack(anchor=tk.W, pady=(0, 4))
+
+            title_label = ttk.Label(
+                header_frame,
+                text="Lv.-- Unknown",
+                justify=tk.LEFT,
+                anchor=tk.W,
+                wraplength=136,
+                font=("Segoe UI", 9, "bold"),
+            )
+            title_label.pack(side=tk.LEFT)
+
+            gender_label = ttk.Label(
+                header_frame,
+                text="",
+                justify=tk.RIGHT,
+                anchor=tk.E,
+                width=0,
+                font=("Segoe UI Symbol", 11, "bold"),
+            )
+            gender_label.pack(side=tk.LEFT, padx=(0, 0))
+
+            shiny_label = ttk.Label(
+                header_frame,
+                text="",
+                justify=tk.RIGHT,
+                anchor=tk.E,
+                width=0,
+            )
+            shiny_label.pack(side=tk.LEFT, padx=(1, 0))
+
+            sprite_label = ttk.Label(card, text="No Sprite", justify=tk.CENTER, anchor=tk.CENTER)
+            sprite_label.pack(fill=tk.X, pady=(0, 2))
+
+            type_frame = ttk.Frame(card)
+            type_frame.pack(anchor=tk.CENTER, pady=(0, 4))
+            type1_label = ttk.Label(type_frame, text="")
+            type1_label.pack(side=tk.LEFT, padx=(0, 2))
+            type2_label = ttk.Label(type_frame, text="")
+            type2_label.pack(side=tk.LEFT, padx=(0, 0))
+
+            details_label = ttk.Label(
+                card,
+                text="Ability: -\nNature: -",
+                justify=tk.LEFT,
+                anchor=tk.W,
+                wraplength=160,
+            )
+            details_label.pack(fill=tk.X, pady=(0, 4))
+
+            moves_label = ttk.Label(
+                card,
+                text="Moves:\n-\n-\n-\n-",
+                justify=tk.LEFT,
+                anchor=tk.W,
+                wraplength=160,
+            )
+            moves_label.pack(fill=tk.X)
+
+            self._party_slot_widgets[slot] = {
+                "title": title_label,
+                "gender": gender_label,
+                "shiny": shiny_label,
+                "sprite": sprite_label,
+                "type1": type1_label,
+                "type2": type2_label,
+                "details": details_label,
+                "moves": moves_label,
+            }
+
+        self._update_party_display([], "")
+
         # Recent catches
         catches_frame = ttk.LabelFrame(self.collection_frame, text="Recent Catches", padding=10)
         catches_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
+
         self.catches_list = scrolledtext.ScrolledText(
             catches_frame,
             wrap=tk.WORD,
@@ -5185,7 +5371,7 @@ class PokeAchieveGUI:
             height=10
         )
         self.catches_list.pack(fill=tk.BOTH, expand=True)
-    
+
     def _build_log_tab(self):
         """Build log tab"""
         self.log_text = scrolledtext.ScrolledText(
@@ -5859,28 +6045,643 @@ class PokeAchieveGUI:
         self._trim_scrolled_text(self.catches_list, self._max_catch_lines)
         self.catches_list.configure(state='disabled')
     
+    def _get_party_game_variant(self, game: str) -> str:
+        if not isinstance(game, str):
+            return "default"
+        lowered = game.lower()
+
+        if "firered" in lowered or "fire red" in lowered or "leafgreen" in lowered or "leaf green" in lowered:
+            return "firered-leafgreen"
+        if "emerald" in lowered:
+            return "emerald"
+        if "ruby" in lowered or "sapphire" in lowered:
+            return "ruby-sapphire"
+        if "crystal" in lowered:
+            return "crystal"
+        if "gold" in lowered:
+            return "gold"
+        if "silver" in lowered:
+            return "silver"
+        if "yellow" in lowered:
+            return "yellow"
+        if "red" in lowered or "blue" in lowered:
+            return "red-blue"
+        return "default"
+
+    def _get_party_game_family(self, game: str) -> str:
+        variant = self._get_party_game_variant(game)
+        if variant in ("red-blue", "yellow"):
+            return "gen1"
+        if variant in ("gold", "silver", "crystal"):
+            return "gen2"
+        if variant in ("ruby-sapphire", "emerald"):
+            return "gen3_hoenn"
+        if variant == "firered-leafgreen":
+            return "gen3_kanto"
+        return "default"
+
+    def _get_party_sprite_variant(self, game: str) -> Optional[str]:
+        mapping = {
+            "red-blue": "generation-i/red-blue",
+            "yellow": "generation-i/yellow",
+            "gold": "generation-ii/gold",
+            "silver": "generation-ii/silver",
+            "crystal": "generation-ii/crystal",
+            "ruby-sapphire": "generation-iii/ruby-sapphire",
+            "emerald": "generation-iii/emerald",
+            "firered-leafgreen": "generation-iii/firered-leafgreen",
+        }
+        return mapping.get(self._get_party_game_variant(game))
+
+    def _party_gender_badge_asset_candidates(self, family: str, gender_key: str) -> List[Path]:
+        safe_family = re.sub(r"[^a-z0-9_\-]+", "_", str(family).lower()).strip("_") or "default"
+        safe_gender = re.sub(r"[^a-z0-9_\-]+", "_", str(gender_key).lower()).strip("_") or "genderless"
+        candidates: List[Path] = [
+            self._party_gender_badge_assets_dir / f"{safe_family}_{safe_gender}.png",
+            self._party_gender_badge_assets_dir / f"{safe_family}_{safe_gender}.gif",
+        ]
+        if safe_family != "default":
+            candidates.extend([
+                self._party_gender_badge_assets_dir / f"default_{safe_gender}.png",
+                self._party_gender_badge_assets_dir / f"default_{safe_gender}.gif",
+            ])
+        return candidates
+
+    def _party_gender_key(self, gender: str) -> str:
+        if not isinstance(gender, str):
+            return "genderless"
+        lowered = gender.strip().lower()
+        if lowered == "male":
+            return "male"
+        if lowered == "female":
+            return "female"
+        return "genderless"
+
+    def _load_party_gender_badge_from_file(self, path: Path) -> Optional[object]:
+        if not path.exists():
+            return None
+        try:
+            return tk.PhotoImage(file=str(path))
+        except Exception as exc:
+            log_event(logging.DEBUG, "party_gender_badge_load_failed", path=str(path), error=str(exc))
+            return None
+
+    def _request_party_gender_badge(self, gender: str, game: str) -> Optional[object]:
+        family = self._get_party_game_family(game)
+        gender_key = self._party_gender_key(gender)
+        cache_key = (family, gender_key)
+
+        cached = self._party_gender_badge_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        if cache_key in self._party_gender_badge_missing:
+            return None
+
+        for asset_path in self._party_gender_badge_asset_candidates(family, gender_key):
+            if not asset_path.exists():
+                continue
+            loaded = self._load_party_gender_badge_from_file(asset_path)
+            if loaded is not None:
+                self._party_gender_badge_cache[cache_key] = loaded
+                return loaded
+
+        self._party_gender_badge_missing.add(cache_key)
+        log_event(logging.DEBUG, "party_gender_badge_missing", family=family, gender=gender_key, game=game)
+        return None
+
+    def _party_shiny_badge_asset_candidates(self, family: str) -> List[Path]:
+        safe_family = re.sub(r"[^a-z0-9_\-]+", "_", str(family).lower()).strip("_") or "default"
+        candidates: List[Path] = [
+            self._party_shiny_badge_assets_dir / f"{safe_family}_shiny.png",
+            self._party_shiny_badge_assets_dir / f"{safe_family}_shiny.gif",
+        ]
+        if safe_family != "default":
+            candidates.extend([
+                self._party_shiny_badge_assets_dir / "default_shiny.png",
+                self._party_shiny_badge_assets_dir / "default_shiny.gif",
+            ])
+        return candidates
+
+    def _load_party_shiny_badge_from_file(self, path: Path) -> Optional[object]:
+        if not path.exists():
+            return None
+        try:
+            return tk.PhotoImage(file=str(path))
+        except Exception as exc:
+            log_event(logging.DEBUG, "party_shiny_badge_load_failed", path=str(path), error=str(exc))
+            return None
+
+    def _request_party_shiny_badge(self, game: str) -> Optional[object]:
+        family = self._get_party_game_family(game)
+        cache_key = str(family)
+
+        cached = self._party_shiny_badge_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        if cache_key in self._party_shiny_badge_missing:
+            return None
+
+        for asset_path in self._party_shiny_badge_asset_candidates(family):
+            if not asset_path.exists():
+                continue
+            loaded = self._load_party_shiny_badge_from_file(asset_path)
+            if loaded is not None:
+                self._party_shiny_badge_cache[cache_key] = loaded
+                return loaded
+
+        self._party_shiny_badge_missing.add(cache_key)
+        log_event(logging.DEBUG, "party_shiny_badge_missing", family=family, game=game)
+        return None
+
+    def _type_generation_for_game(self, game: str) -> str:
+        family = self._get_party_game_family(game)
+        if family == "gen1":
+            return "generation-i"
+        if family == "gen2":
+            return "generation-ii"
+        return "generation-iii"
+
+    def _extract_types_for_generation(self, payload: Dict[str, object], generation_name: str) -> List[str]:
+        gen_order = {
+            "generation-i": 1,
+            "generation-ii": 2,
+            "generation-iii": 3,
+            "generation-iv": 4,
+            "generation-v": 5,
+            "generation-vi": 6,
+            "generation-vii": 7,
+            "generation-viii": 8,
+            "generation-ix": 9,
+        }
+        target = gen_order.get(generation_name, 3)
+
+        def _parse_types(entries: object) -> List[str]:
+            parsed: List[Tuple[int, str]] = []
+            if isinstance(entries, list):
+                for item in entries:
+                    if not isinstance(item, dict):
+                        continue
+                    try:
+                        slot = int(item.get("slot", 0))
+                    except (TypeError, ValueError):
+                        slot = 0
+                    type_info = item.get("type")
+                    type_name = ""
+                    if isinstance(type_info, dict):
+                        raw_name = type_info.get("name")
+                        if isinstance(raw_name, str):
+                            type_name = raw_name.strip().lower()
+                    if type_name:
+                        parsed.append((slot if slot > 0 else 999, type_name))
+            parsed.sort(key=lambda row: row[0])
+            return [name for _, name in parsed]
+
+        current_types = _parse_types(payload.get("types"))
+        resolved = list(current_types)
+
+        history: List[Tuple[int, List[str]]] = []
+        past_entries = payload.get("past_types")
+        if isinstance(past_entries, list):
+            for entry in past_entries:
+                if not isinstance(entry, dict):
+                    continue
+                generation_info = entry.get("generation")
+                generation_id = ""
+                if isinstance(generation_info, dict):
+                    raw_generation_id = generation_info.get("name")
+                    if isinstance(raw_generation_id, str):
+                        generation_id = raw_generation_id.strip().lower()
+                generation_value = gen_order.get(generation_id)
+                if generation_value is None:
+                    continue
+                entry_types = _parse_types(entry.get("types"))
+                if entry_types:
+                    history.append((generation_value, entry_types))
+
+        history.sort(key=lambda row: row[0])
+        for generation_value, entry_types in history:
+            if target <= generation_value:
+                resolved = list(entry_types)
+                break
+
+        if generation_name == "generation-i":
+            resolved = [t for t in resolved if t not in ("dark", "steel", "fairy")]
+            try:
+                species_id = int(payload.get("id", 0))
+            except (TypeError, ValueError):
+                species_id = 0
+            if species_id in (81, 82):
+                resolved = ["electric"]
+
+        if generation_name in ("generation-ii", "generation-iii"):
+            resolved = [t for t in resolved if t != "fairy"]
+
+        deduped: List[str] = []
+        for t in resolved:
+            if isinstance(t, str) and t and t not in deduped:
+                deduped.append(t)
+        return deduped[:2]
+
+    def _species_types_download_worker(self, pokemon_id: int):
+        payload: Optional[Dict[str, object]] = None
+        error_text = ""
+        try:
+            request = urllib.request.Request(
+                f"https://pokeapi.co/api/v2/pokemon/{int(pokemon_id)}",
+                headers={"User-Agent": "PokeAchieveTracker/1.0"},
+            )
+            with urllib.request.urlopen(request, timeout=6) as response:
+                data = response.read()
+            parsed = json.loads(data.decode("utf-8"))
+            if isinstance(parsed, dict):
+                payload = parsed
+        except Exception as exc:
+            error_text = str(exc)
+
+        def _complete():
+            self._species_type_pending.discard(int(pokemon_id))
+            if isinstance(payload, dict):
+                self._species_type_cache[int(pokemon_id)] = payload
+            else:
+                self._species_type_failed.add(int(pokemon_id))
+                if error_text:
+                    log_event(logging.DEBUG, "species_type_download_failed", pokemon_id=int(pokemon_id), error=error_text)
+            if self._party_display_last_party:
+                self._update_party_display(self._party_display_last_party, self._party_display_last_game)
+
+        try:
+            self.root.after(0, _complete)
+        except Exception:
+            pass
+
+    def _request_species_types(self, pokemon_id: int, game: str) -> Optional[List[str]]:
+        try:
+            pid = int(pokemon_id)
+        except (TypeError, ValueError):
+            return None
+        if pid <= 0:
+            return None
+
+        payload = self._species_type_cache.get(pid)
+        if isinstance(payload, dict):
+            return self._extract_types_for_generation(payload, self._type_generation_for_game(game))
+
+        if pid in self._species_type_failed or pid in self._species_type_pending:
+            return None
+
+        self._species_type_pending.add(pid)
+        threading.Thread(target=self._species_types_download_worker, args=(pid,), daemon=True).start()
+        return None
+
+    def _party_type_icon_key(self, type_name: str) -> str:
+        return re.sub(r"[^a-z0-9_\-]+", "_", str(type_name).lower()).strip("_")
+
+    def _party_type_icon_asset_candidates(self, family: str, type_name: str) -> List[Path]:
+        safe_family = re.sub(r"[^a-z0-9_\-]+", "_", str(family).lower()).strip("_") or "default"
+        safe_type = self._party_type_icon_key(type_name) or "normal"
+        candidates: List[Path] = [
+            self._party_type_icon_assets_dir / f"{safe_family}_{safe_type}.png",
+            self._party_type_icon_assets_dir / f"{safe_family}_{safe_type}.gif",
+        ]
+        if safe_family != "default":
+            candidates.extend([
+                self._party_type_icon_assets_dir / f"default_{safe_type}.png",
+                self._party_type_icon_assets_dir / f"default_{safe_type}.gif",
+            ])
+        return candidates
+
+    def _load_party_type_icon_from_file(self, path: Path) -> Optional[object]:
+        if not path.exists():
+            return None
+        try:
+            return tk.PhotoImage(file=str(path))
+        except Exception as exc:
+            log_event(logging.DEBUG, "party_type_icon_load_failed", path=str(path), error=str(exc))
+            return None
+
+    def _request_party_type_icon(self, type_name: str, game: str) -> Optional[object]:
+        if not isinstance(type_name, str) or not type_name.strip():
+            return None
+        family = self._get_party_game_family(game)
+        safe_type = self._party_type_icon_key(type_name)
+        cache_key = (family, safe_type)
+
+        cached = self._party_type_icon_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        if cache_key in self._party_type_icon_missing:
+            return None
+
+        for asset_path in self._party_type_icon_asset_candidates(family, safe_type):
+            if not asset_path.exists():
+                continue
+            loaded = self._load_party_type_icon_from_file(asset_path)
+            if loaded is not None:
+                self._party_type_icon_cache[cache_key] = loaded
+                return loaded
+
+        self._party_type_icon_missing.add(cache_key)
+        log_event(logging.DEBUG, "party_type_icon_missing", family=family, type=safe_type, game=game)
+        return None
+
+    def _party_sprite_cache_path(self, variant: str, pokemon_id: int, shiny: bool = False) -> Path:
+        safe_variant = re.sub(r"[^a-z0-9]+", "_", str(variant).lower()).strip("_") or "default"
+        suffix = "_shiny" if bool(shiny) else ""
+        return self._party_sprite_cache_dir / f"{safe_variant}_{int(pokemon_id)}{suffix}.png"
+
+    def _party_sprite_urls(self, variant: Optional[str], pokemon_id: int, shiny: bool = False) -> List[str]:
+        urls: List[str] = []
+        pid = int(pokemon_id)
+        use_shiny = bool(shiny)
+
+        if isinstance(variant, str) and variant.strip():
+            if use_shiny:
+                sprite_path = f"sprites/pokemon/versions/{variant}/shiny/{pid}.png"
+            else:
+                sprite_path = f"sprites/pokemon/versions/{variant}/{pid}.png"
+            urls.append(f"https://raw.githubusercontent.com/PokeAPI/sprites/master/{sprite_path}")
+            urls.append(f"https://cdn.jsdelivr.net/gh/PokeAPI/sprites@master/{sprite_path}")
+
+        if use_shiny:
+            urls.append(f"https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/shiny/{pid}.png")
+            urls.append(f"https://cdn.jsdelivr.net/gh/PokeAPI/sprites@master/sprites/pokemon/shiny/{pid}.png")
+        else:
+            urls.append(f"https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/{pid}.png")
+            urls.append(f"https://cdn.jsdelivr.net/gh/PokeAPI/sprites@master/sprites/pokemon/{pid}.png")
+
+        deduped: List[str] = []
+        seen: Set[str] = set()
+        for url in urls:
+            if url not in seen:
+                seen.add(url)
+                deduped.append(url)
+        return deduped
+
+    def _load_party_sprite_from_file(self, path: Path) -> Optional[object]:
+        if not path.exists():
+            return None
+        if PIL_AVAILABLE:
+            try:
+                with Image.open(path) as raw_img:
+                    image = raw_img.convert("RGBA")
+                if hasattr(Image, "Resampling"):
+                    image = image.resize((self._party_sprite_size, self._party_sprite_size), Image.Resampling.NEAREST)
+                else:
+                    image = image.resize((self._party_sprite_size, self._party_sprite_size), Image.NEAREST)
+                return ImageTk.PhotoImage(image)
+            except Exception as exc:
+                log_event(logging.DEBUG, "party_sprite_pil_load_failed", path=str(path), error=str(exc))
+        try:
+            return tk.PhotoImage(file=str(path))
+        except Exception as exc:
+            log_event(logging.DEBUG, "party_sprite_tk_load_failed", path=str(path), error=str(exc))
+            return None
+
+    def _party_sprite_download_worker(self, key: Tuple[str, int, bool], urls: List[str], path: Path):
+        data: Optional[bytes] = None
+        error_text = ""
+        for url in urls:
+            try:
+                request = urllib.request.Request(
+                    url,
+                    headers={"User-Agent": "PokeAchieveTracker/1.0"},
+                )
+                with urllib.request.urlopen(request, timeout=4) as response:
+                    data = response.read()
+                if data:
+                    break
+            except Exception as exc:
+                error_text = str(exc)
+
+        def _complete():
+            self._party_sprite_pending.discard(key)
+            if data:
+                try:
+                    path.write_bytes(data)
+                    photo = self._load_party_sprite_from_file(path)
+                    if photo is not None:
+                        self._party_sprite_cache[key] = photo
+                        if self._party_display_last_party:
+                            self._update_party_display(self._party_display_last_party, self._party_display_last_game)
+                        return
+                except Exception as write_exc:
+                    log_event(logging.DEBUG, "party_sprite_write_failed", path=str(path), error=str(write_exc))
+            self._party_sprite_failed.add(key)
+            if error_text:
+                log_event(logging.DEBUG, "party_sprite_download_failed", urls=urls, error=error_text)
+            if self._party_display_last_party:
+                self._update_party_display(self._party_display_last_party, self._party_display_last_game)
+
+        try:
+            self.root.after(0, _complete)
+        except Exception:
+            pass
+
+    def _request_party_sprite(self, pokemon_id: int, game: str, shiny: bool = False) -> Optional[object]:
+        try:
+            pid = int(pokemon_id)
+        except (TypeError, ValueError):
+            return None
+        if pid <= 0:
+            return None
+
+        variant = self._get_party_sprite_variant(game)
+        key_variant = variant if variant else "default"
+        is_shiny = bool(shiny)
+        key = (key_variant, pid, is_shiny)
+        cached = self._party_sprite_cache.get(key)
+        if cached is not None:
+            return cached
+
+        sprite_path = self._party_sprite_cache_path(key_variant, pid, is_shiny)
+        if sprite_path.exists():
+            loaded = self._load_party_sprite_from_file(sprite_path)
+            if loaded is not None:
+                self._party_sprite_cache[key] = loaded
+                return loaded
+            try:
+                sprite_path.unlink()
+            except OSError:
+                pass
+
+        if key in self._party_sprite_failed or key in self._party_sprite_pending:
+            return None
+
+        self._party_sprite_pending.add(key)
+        urls = self._party_sprite_urls(variant, pid, is_shiny)
+        threading.Thread(
+            target=self._party_sprite_download_worker,
+            args=(key, urls, sprite_path),
+            daemon=True,
+        ).start()
+        return None
+
     def _update_party_display(self, party: List[Dict], game: str = ""):
-        """Update party display in collection tab"""
-        if not party:
-            self.party_display.configure(text="Party is empty - Start tracking to see your Pokemon!")
-            return
-        
-        # Build party text with Pokemon names
-        party_lines = []
-        for p in party:
-            name = self.tracker.pokemon_reader.get_pokemon_name(p['id'])
-            level_str = f" Lv.{p['level']}" if p.get('level') else ""
-            party_lines.append(f"Slot {p['slot']}: {name}{level_str}")
-        
-        party_text = "\n".join(party_lines)
-        self.party_display.configure(text=party_text)
-        
-        # Update collection summary with game info
+        """Update party display in collection tab using horizontal slot cards."""
+        self._party_display_last_party = [dict(member) for member in party if isinstance(member, dict)]
+        self._party_display_last_game = game or ""
+
+        by_slot: Dict[int, Dict] = {}
+        for member in party:
+            if not isinstance(member, dict):
+                continue
+            try:
+                slot = int(member.get("slot", 0))
+            except (TypeError, ValueError):
+                continue
+            if 1 <= slot <= 6:
+                by_slot[slot] = member
+
+        for slot in range(1, 7):
+            widgets = self._party_slot_widgets.get(slot, {})
+            title_label = widgets.get("title")
+            gender_label = widgets.get("gender")
+            shiny_label = widgets.get("shiny")
+            sprite_label = widgets.get("sprite")
+            type1_label = widgets.get("type1")
+            type2_label = widgets.get("type2")
+            details_label = widgets.get("details")
+            moves_label = widgets.get("moves")
+            member = by_slot.get(slot)
+
+            if not member:
+                if isinstance(title_label, ttk.Label):
+                    title_label.configure(text="Empty")
+                if isinstance(gender_label, ttk.Label):
+                    gender_label.configure(text="", image="")
+                    setattr(gender_label, "image", None)
+                if isinstance(shiny_label, ttk.Label):
+                    shiny_label.configure(text="", image="")
+                    setattr(shiny_label, "image", None)
+                if isinstance(sprite_label, ttk.Label):
+                    sprite_label.configure(image="", text="")
+                    setattr(sprite_label, "image", None)
+                for type_label in (type1_label, type2_label):
+                    if isinstance(type_label, ttk.Label):
+                        type_label.configure(image="", text="")
+                        setattr(type_label, "image", None)
+                if isinstance(details_label, ttk.Label):
+                    details_label.configure(text="")
+                if isinstance(moves_label, ttk.Label):
+                    moves_label.configure(text="")
+                continue
+
+            pokemon_id = member.get("id")
+            name = member.get("name") if isinstance(member.get("name"), str) else None
+            if not name and isinstance(pokemon_id, int):
+                name = self._get_pokemon_name(pokemon_id)
+            if not name:
+                name = "Unknown"
+
+            level_text = "--"
+            try:
+                level_value = int(member.get("level"))
+                if level_value > 0:
+                    level_text = str(level_value)
+            except (TypeError, ValueError):
+                pass
+
+            gender = member.get("gender") if isinstance(member.get("gender"), str) and member.get("gender").strip() else "Unknown"
+            ability = member.get("ability") if isinstance(member.get("ability"), str) and member.get("ability").strip() else "Unknown"
+            nature = member.get("nature") if isinstance(member.get("nature"), str) and member.get("nature").strip() else "Unknown"
+            is_shiny = bool(member.get("shiny", False))
+
+            if isinstance(title_label, ttk.Label):
+                title_label.configure(text=f"Lv.{level_text} {name}")
+
+            if isinstance(gender_label, ttk.Label):
+                badge_image = self._request_party_gender_badge(gender, game)
+                if badge_image is not None:
+                    gender_label.configure(image=badge_image, text="")
+                    setattr(gender_label, "image", badge_image)
+                else:
+                    gender_label.configure(image="", text="")
+                    setattr(gender_label, "image", None)
+
+            if isinstance(shiny_label, ttk.Label):
+                if is_shiny:
+                    shiny_badge = self._request_party_shiny_badge(game)
+                    if shiny_badge is not None:
+                        shiny_label.configure(image=shiny_badge, text="")
+                        setattr(shiny_label, "image", shiny_badge)
+                    else:
+                        shiny_label.configure(image="", text="*")
+                        setattr(shiny_label, "image", None)
+                else:
+                    shiny_label.configure(image="", text="")
+                    setattr(shiny_label, "image", None)
+
+            if isinstance(sprite_label, ttk.Label):
+                pid = int(pokemon_id) if isinstance(pokemon_id, int) else 0
+                sprite_image = self._request_party_sprite(pid, game, shiny=is_shiny)
+                if sprite_image is not None:
+                    sprite_label.configure(image=sprite_image, text="")
+                    setattr(sprite_label, "image", sprite_image)
+                else:
+                    status_text = "Sprite loading..."
+                    variant = self._get_party_sprite_variant(game)
+                    key_variant = variant if variant else "default"
+                    if pid <= 0:
+                        status_text = "No sprite"
+                    elif (key_variant, pid, bool(is_shiny)) in self._party_sprite_failed:
+                        status_text = "Sprite unavailable"
+                    sprite_label.configure(image="", text=status_text)
+                    setattr(sprite_label, "image", None)
+
+            types: List[str] = []
+            raw_types = member.get("types")
+            if isinstance(raw_types, list):
+                for value in raw_types:
+                    if isinstance(value, str) and value.strip():
+                        types.append(value.strip().lower())
+            if not types:
+                pid = int(pokemon_id) if isinstance(pokemon_id, int) else 0
+                resolved_types = self._request_species_types(pid, game)
+                if isinstance(resolved_types, list):
+                    for value in resolved_types:
+                        if isinstance(value, str) and value.strip():
+                            types.append(value.strip().lower())
+            types = types[:2]
+
+            labels = [type1_label, type2_label]
+            for idx, type_label in enumerate(labels):
+                if not isinstance(type_label, ttk.Label):
+                    continue
+                if idx < len(types):
+                    type_icon = self._request_party_type_icon(types[idx], game)
+                    if type_icon is not None:
+                        type_label.configure(image=type_icon, text="")
+                        setattr(type_label, "image", type_icon)
+                    else:
+                        type_label.configure(image="", text="")
+                        setattr(type_label, "image", None)
+                else:
+                    type_label.configure(image="", text="")
+                    setattr(type_label, "image", None)
+
+            if isinstance(details_label, ttk.Label):
+                details_label.configure(text=f"Ability: {ability}\nNature: {nature}")
+
+            moves: List[str] = []
+            raw_moves = member.get("moves")
+            if isinstance(raw_moves, list):
+                for move in raw_moves:
+                    if isinstance(move, str) and move.strip():
+                        moves.append(move.strip())
+
+            while len(moves) < 4:
+                moves.append("-")
+            moves = moves[:4]
+
+            if isinstance(moves_label, ttk.Label):
+                moves_label.configure(text="Moves:\n" + "\n".join(moves))
+
         game_info = f" [{game}]" if game else ""
-        self.collection_label.configure(
-            text=f"Party: {len(party)}/6 Pokemon{game_info}"
-        )
-    
+        self.collection_label.configure(text=f"Party: {len(party)}/6 Pokemon{game_info}")
+
     def _on_achievement_unlock(self, achievement: Achievement):
         """Handle achievement unlock"""
         self._log(f"UNLOCKED: {achievement.name} (+{achievement.points} pts)", "unlock")
@@ -5955,7 +6756,7 @@ class PokeAchieveGUI:
                 self.progress_label.configure(text="0/0 (0%) - 0/0 pts")
                 self.progress_bar["value"] = 0
                 self.collection_label.configure(text="Caught: 0 | Shiny: 0 | Party: 0")
-                self.party_display.configure(text="No party data yet - start tracking to see your Pokemon!")
+                self._update_party_display([], "")
 
                 self._threadsafe_log("Local app data cleared", "info")
                 msgbox.showinfo("Success", "App data cleared! Restart the tracker to start fresh.")
@@ -6094,5 +6895,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
