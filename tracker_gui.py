@@ -1698,6 +1698,25 @@ class PokemonMemoryReader:
             streak=streak,
         )
 
+    def _log_pointer_fallback_skipped_throttled(self, game_name: str, kind: str, pointer_addr: str, static_addr: str):
+        """Throttle noisy pointer-fallback-skipped info logs while pointers jitter."""
+        if bool(getattr(self.retroarch, "is_waiting_for_launch", lambda: False)()):
+            return
+
+        key = f"{game_name}:{kind}:fallback_skipped"
+        now = time.time()
+        last = float(self._pointer_fallback_last_log.get(key, 0.0))
+        if now - last < 15.0:
+            return
+        self._pointer_fallback_last_log[key] = now
+        log_event(
+            logging.INFO,
+            "gen3_pointer_fallback_skipped",
+            game=game_name,
+            kind=kind,
+            pointer_addr=pointer_addr,
+            static_addr=static_addr,
+        )
     def _resolve_gen3_gender_label(self, species_id: int, personality: int) -> str:
         """Resolve displayed gender from species gender rate and PID."""
         try:
@@ -3331,6 +3350,7 @@ class AchievementTracker:
         self.validation_profiles: Dict[str, object] = {}
         self.recent_anomalies: List[Dict] = []
         self._derived_checker: Optional[DerivedAchievementChecker] = None
+        self._warning_last_log: Dict[str, float] = {}
     
     def set_validation_profiles(self, profiles: Dict[str, object]):
         """Inject validation profile config loaded from JSON."""
@@ -3341,6 +3361,17 @@ class AchievementTracker:
         self.recent_anomalies.append(entry)
         if len(self.recent_anomalies) > 100:
             self.recent_anomalies = self.recent_anomalies[-100:]
+
+    def _log_warning_throttled(self, kind: str, cooldown_s: float = 10.0, throttle_key: Optional[str] = None, **fields) -> bool:
+        """Emit warning logs with a per-key cooldown to reduce repeated chatter."""
+        key = throttle_key or kind
+        now = time.monotonic()
+        last = float(self._warning_last_log.get(key, 0.0))
+        if cooldown_s > 0 and (now - last) < float(cooldown_s):
+            return False
+        self._warning_last_log[key] = now
+        log_event(logging.WARNING, kind, **fields)
+        return True
 
     def _get_validation_profile(self) -> Dict[str, int]:
         """Per-game validation thresholds loaded from JSON config."""
@@ -3392,10 +3423,10 @@ class AchievementTracker:
             return
         self._bad_read_streak += 1
         self._record_anomaly("memory_read_suspicious", game=self.game_name, reason=reason, streak=self._bad_read_streak)
-        log_event(logging.WARNING, "memory_read_suspicious", game=self.game_name, reason=reason, streak=self._bad_read_streak)
+        self._log_warning_throttled("memory_read_suspicious", cooldown_s=5.0, throttle_key=f"memory_read_suspicious:{self.game_name}:{reason}", game=self.game_name, reason=reason, streak=self._bad_read_streak)
         if self._bad_read_streak >= 3:
             self._record_anomaly("memory_read_reconnect", game=self.game_name)
-            log_event(logging.WARNING, "memory_read_reconnect", game=self.game_name)
+            self._log_warning_throttled("memory_read_reconnect", cooldown_s=5.0, throttle_key=f"memory_read_reconnect:{self.game_name}", game=self.game_name)
             self.retroarch.disconnect()
             self.retroarch.connect()
             self._bad_read_streak = 0
@@ -3943,7 +3974,7 @@ class AchievementTracker:
                 candidates_this_poll += 1
                 if candidates_this_poll > max_unlocks_per_poll:
                     self._record_anomaly("unlock_spike_ignored", game=self.game_name, candidates=candidates_this_poll, threshold=max_unlocks_per_poll)
-                    log_event(logging.WARNING, "unlock_spike_ignored", game=self.game_name, candidates=candidates_this_poll, threshold=max_unlocks_per_poll)
+                    self._log_warning_throttled("unlock_spike_ignored", cooldown_s=30.0, throttle_key=f"unlock_spike_ignored:{self.game_name}", game=self.game_name, candidates=candidates_this_poll, threshold=max_unlocks_per_poll)
                     self._unlock_streaks[achievement.id] = 0
                     continue
 
@@ -3951,7 +3982,7 @@ class AchievementTracker:
                     major_candidates_this_poll += 1
                     if major_candidates_this_poll > max_major_unlocks_per_poll:
                         self._record_anomaly("major_unlock_spike_ignored", game=self.game_name, category=achievement.category, count=major_candidates_this_poll, threshold=max_major_unlocks_per_poll)
-                        log_event(logging.WARNING, "major_unlock_spike_ignored", game=self.game_name, category=achievement.category, count=major_candidates_this_poll, threshold=max_major_unlocks_per_poll)
+                        self._log_warning_throttled("major_unlock_spike_ignored", cooldown_s=30.0, throttle_key=f"major_unlock_spike_ignored:{self.game_name}:{achievement.category}", game=self.game_name, category=achievement.category, count=major_candidates_this_poll, threshold=max_major_unlocks_per_poll)
                         self._unlock_streaks[achievement.id] = 0
                         continue
 
@@ -3960,7 +3991,7 @@ class AchievementTracker:
                     max_legendary = profile.get("max_legendary_unlocks_per_poll", 1)
                     if legendary_candidates_this_poll > max_legendary:
                         self._record_anomaly("legendary_unlock_spike_ignored", game=self.game_name, count=legendary_candidates_this_poll, threshold=max_legendary)
-                        log_event(logging.WARNING, "legendary_unlock_spike_ignored", game=self.game_name, count=legendary_candidates_this_poll, threshold=max_legendary)
+                        self._log_warning_throttled("legendary_unlock_spike_ignored", cooldown_s=30.0, throttle_key=f"legendary_unlock_spike_ignored:{self.game_name}", game=self.game_name, count=legendary_candidates_this_poll, threshold=max_legendary)
                         self._unlock_streaks[achievement.id] = 0
                         continue
 
@@ -4550,14 +4581,8 @@ class AchievementTracker:
                 self._last_party = list(current_party)
                 self._bad_read_streak = 0
                 return
-
-            log_event(
-                logging.WARNING,
-                "collection_spike_ignored",
-                game=self.game_name,
-                spike_count=len(new_catches),
-                threshold=profile["max_new_catches_per_poll"],
-            )
+            self._record_anomaly("collection_spike_ignored", game=self.game_name, spike_count=len(new_catches), threshold=profile["max_new_catches_per_poll"])
+            self._log_warning_throttled("collection_spike_ignored", cooldown_s=15.0, throttle_key=f"collection_spike_ignored:{self.game_name}", game=self.game_name, spike_count=len(new_catches), threshold=profile["max_new_catches_per_poll"])
             self._handle_bad_read("bulk_catch_spike")
             effective_pokedex = list(self._last_pokedex)
             new_catches = []
@@ -6895,6 +6920,5 @@ def main():
 
 if __name__ == "__main__":
     main()
-
 
 
