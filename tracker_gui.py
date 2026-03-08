@@ -26,15 +26,29 @@ from dataclasses import dataclass, asdict
 LOGGER = logging.getLogger("pokeachieve_tracker")
 if not LOGGER.handlers:
     _handler = logging.StreamHandler()
-    _handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+    _handler.setFormatter(
+        logging.Formatter(
+            "%(asctime)s.%(msecs)03d | %(levelname)-7s | %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+    )
     LOGGER.addHandler(_handler)
 LOGGER.setLevel(logging.INFO)
+
+
+def _format_log_fields(fields: Dict[str, object]) -> str:
+    parts: List[str] = []
+    for key in sorted(fields.keys()):
+        value = fields.get(key)
+        rendered = json.dumps(value, default=str, ensure_ascii=False, sort_keys=True)
+        parts.append(f"{key}={rendered}")
+    return " | ".join(parts)
 
 
 def log_event(level: int, event: str, **fields):
     """Structured logging helper."""
     if fields:
-        LOGGER.log(level, "%s %s", event, json.dumps(fields, default=str, sort_keys=True))
+        LOGGER.log(level, "%s | %s", event, _format_log_fields(fields))
     else:
         LOGGER.log(level, "%s", event)
 
@@ -441,6 +455,8 @@ class RetroArchClient:
         self._socket_reset_counts: Dict[str, int] = {}
         self._io_error_streak = 0
         self._last_io_error_ts = 0.0
+        self._waiting_for_launch = False
+        self._waiting_since_ts = 0.0
     
     def connect(self) -> bool:
         """Connect to RetroArch"""
@@ -464,13 +480,48 @@ class RetroArchClient:
         """Disconnect from RetroArch"""
         with self.lock:
             self.connected = False
+            self._waiting_for_launch = False
+            self._waiting_since_ts = 0.0
             if self.socket:
                 try:
                     self.socket.close()
                 except OSError:
                     pass
                 self.socket = None
-    
+
+    def is_waiting_for_launch(self) -> bool:
+        """True while RetroArch appears closed/unreachable and tracker is waiting for launch."""
+        return bool(self._waiting_for_launch)
+
+    def _enter_waiting_for_launch(self, command: str, reason: str, error: Optional[str] = None):
+        """Enter compact offline mode and emit one concise wait message."""
+        if self._waiting_for_launch:
+            return
+        self._waiting_for_launch = True
+        self._waiting_since_ts = time.time()
+        log_event(
+            logging.INFO,
+            "retroarch_closed_waiting",
+            status="RetroArch Closed, waiting on RetroArch launch",
+        )
+
+    def _exit_waiting_for_launch(self, command: str):
+        """Exit offline mode after first successful response."""
+        if not self._waiting_for_launch:
+            return
+        downtime_ms = 0
+        if self._waiting_since_ts > 0:
+            downtime_ms = int(max(0.0, time.time() - self._waiting_since_ts) * 1000)
+        self._waiting_for_launch = False
+        self._waiting_since_ts = 0.0
+        log_event(
+            logging.INFO,
+            "retroarch_reconnected",
+            status="RetroArch detected, resuming polling",
+            command=command,
+            downtime_ms=downtime_ms,
+        )
+
     def _drain_stale_packets(self, max_packets: int = 8) -> int:
         """Drain stale UDP packets so delayed responses do not pollute new commands."""
         if not self.socket or max_packets <= 0:
@@ -499,6 +550,9 @@ class RetroArchClient:
         """Send a command to RetroArch and get response."""
         with self.lock:
             if not self.connected or not self.socket:
+                return None
+            # While RetroArch is offline, only probe with GET_STATUS.
+            if self._waiting_for_launch and command != "GET_STATUS":
                 return None
 
             try:
@@ -558,6 +612,7 @@ class RetroArchClient:
                         expected=expected_prefix,
                         dropped=mismatched,
                     )
+                self._exit_waiting_for_launch(command=command)
                 self._command_timeout_count = 0
                 self._socket_reset_counts[command] = 0
                 self._io_error_streak = 0
@@ -565,37 +620,20 @@ class RetroArchClient:
                 return response_text
             except ConnectionResetError as exc:
                 # On Windows UDP sockets, transient ICMP port-unreachable can surface as WSAECONNRESET.
-                # Keep the socket/session alive and retry on the next poll.
+                # Treat repeated resets as RetroArch being offline and suppress noisy per-read warnings.
                 self._io_error_streak += 1
                 self._last_io_error_ts = time.time()
                 count = int(self._socket_reset_counts.get(command, 0)) + 1
                 self._socket_reset_counts[command] = count
-                if count == 1 or count % 25 == 0:
-                    log_event(
-                        logging.WARNING,
-                        "retroarch_socket_reset",
-                        command=command,
-                        count=count,
-                        error_type=type(exc).__name__,
-                        error=str(exc),
-                        host=self.host,
-                        port=self.port,
-                    )
+                self._enter_waiting_for_launch(command=command, reason="socket_reset", error=str(exc))
                 return None
             except socket.timeout:
                 # Timeouts are expected occasionally on UDP; keep session alive.
                 self._command_timeout_count += 1
                 self._io_error_streak += 1
                 self._last_io_error_ts = time.time()
-                if self._command_timeout_count == 1 or self._command_timeout_count % 10 == 0:
-                    log_event(
-                        logging.WARNING,
-                        "retroarch_command_timeout",
-                        command=command,
-                        count=self._command_timeout_count,
-                        host=self.host,
-                        port=self.port,
-                    )
+                if command == "GET_STATUS":
+                    self._enter_waiting_for_launch(command=command, reason="timeout")
                 return None
             except OSError as exc:
                 self._io_error_streak += 1
@@ -1066,6 +1104,8 @@ class PokemonMemoryReader:
         self._saveblock_ptr_backoff_until: Dict[str, float] = {}
         self._saveblock_ptr_fail_count: Dict[str, int] = {}
         self._pointer_unreadable_last_log: Dict[str, float] = {}
+        self._pointer_unreadable_streak: Dict[str, int] = {}
+        self._pointer_unreadable_last_attempt: Dict[str, float] = {}
         self._last_gen3_party_selection: Dict[str, Dict[str, object]] = {}    
     def get_pokemon_name(self, pokemon_id: int) -> str:
         """Get Pokemon name from ID"""
@@ -1182,6 +1222,8 @@ class PokemonMemoryReader:
         if 0x02000000 <= int(ptr) < 0x02040000:
             self._saveblock_ptr_fail_count[key] = 0
             self._saveblock_ptr_backoff_until[key] = 0.0
+            self._pointer_unreadable_streak[key] = 0
+            self._pointer_unreadable_last_attempt[key] = 0.0
             return int(ptr)
 
         failures = int(self._saveblock_ptr_fail_count.get(key, 0)) + 1
@@ -1233,8 +1275,24 @@ class PokemonMemoryReader:
 
     def _log_pointer_unreadable_throttled(self, game_name: str, pointer: str, layout: Optional[str] = None):
         """Throttle noisy pointer-unreadable logs during transient UDP instability."""
+        if bool(getattr(self.retroarch, "is_waiting_for_launch", lambda: False)()):
+            return
+
         key = f"{game_name}:{pointer}"
         now = time.time()
+
+        # Treat bursts within a single poll as one failure signal.
+        last_attempt = float(self._pointer_unreadable_last_attempt.get(key, 0.0))
+        streak = int(self._pointer_unreadable_streak.get(key, 0))
+        if now - last_attempt >= 0.75:
+            streak += 1
+            self._pointer_unreadable_streak[key] = streak
+            self._pointer_unreadable_last_attempt[key] = now
+
+        # Suppress startup noise; only warn when failures persist across multiple polls.
+        if streak < 3:
+            return
+
         last = float(self._pointer_unreadable_last_log.get(key, 0.0))
         if now - last < 20.0:
             return
@@ -1245,6 +1303,7 @@ class PokemonMemoryReader:
             game=game_name,
             pointer=pointer,
             layout=layout,
+            streak=streak,
         )
 
     def _decode_gen3_party_species(self, slot_bytes: List[int], max_species_id: int) -> Optional[int]:
@@ -1956,6 +2015,9 @@ class AchievementTracker:
 
     def _handle_bad_read(self, reason: str):
         """Track repeated suspicious reads and attempt lightweight auto-recovery."""
+        if bool(getattr(self.retroarch, "is_waiting_for_launch", lambda: False)()):
+            self._bad_read_streak = 0
+            return
         self._bad_read_streak += 1
         self._record_anomaly("memory_read_suspicious", game=self.game_name, reason=reason, streak=self._bad_read_streak)
         log_event(logging.WARNING, "memory_read_suspicious", game=self.game_name, reason=reason, streak=self._bad_read_streak)
@@ -3059,7 +3121,24 @@ class AchievementTracker:
 
         # Find party changes (including slot/order changes and duplicate species).
         party_changed = current_party != self._last_party
-
+        if party_changed:
+            slots = [
+                {
+                    "slot": int(member.get("slot", 0)),
+                    "id": int(member.get("id", 0)),
+                    "level": member.get("level"),
+                }
+                for member in current_party
+                if isinstance(member, dict)
+            ]
+            log_event(
+                logging.INFO,
+                "party_state_changed",
+                game=self.game_name,
+                previous_count=len(self._last_party),
+                current_count=len(current_party),
+                slots=slots,
+            )
         # Queue updates if there are changes.
         if new_catches or party_changed:
             self._collection_queue.put({
@@ -3180,10 +3259,14 @@ class AchievementTracker:
         """Background polling loop"""
         while self._running:
             if self.retroarch.connected and self.achievements:
+                if bool(getattr(self.retroarch, "is_waiting_for_launch", lambda: False)()):
+                    self._poll_disconnected_streak += 1
+                    time.sleep(interval_ms / 1000)
+                    continue
+
                 self._poll_disconnected_streak = 0
                 self._poll_heartbeat_count += 1
                 self._cached_pokedex_for_poll = None
-
                 should_trace_poll = self._poll_heartbeat_count == 1 or self._poll_heartbeat_count % 20 == 0
                 if should_trace_poll:
                     log_event(
@@ -3276,7 +3359,7 @@ class AchievementTracker:
                         )
             else:
                 self._poll_disconnected_streak += 1
-                if self._poll_disconnected_streak == 1 or self._poll_disconnected_streak % 20 == 0:
+                if self._poll_disconnected_streak == 1:
                     log_event(
                         logging.INFO,
                         "poll_waiting_connection",
@@ -4429,6 +4512,25 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
