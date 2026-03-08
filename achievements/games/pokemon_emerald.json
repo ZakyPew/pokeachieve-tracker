@@ -8,7 +8,7 @@
   "achievements": [
     {
       "id": "emerald_starter_chosen",
-      "name": "First Steps",
+      "name": "The Journey Begins",
       "description": "Choose your starter Pokemon",
       "category": "story",
       "icon": "starter.png",
@@ -20,7 +20,7 @@
     },
     {
       "id": "emerald_pokedex_10",
-      "name": " budding Researcher",
+      "name": "Junior Researcher",
       "description": "Register 10 Pokemon in the Pokedex",
       "category": "pokedex",
       "icon": "pokedex_10.png",
