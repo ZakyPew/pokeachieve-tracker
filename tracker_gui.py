@@ -13,12 +13,13 @@ import queue
 import re
 import os
 import sys
+from collections import Counter
 import urllib.request
 import urllib.error
 from urllib.parse import urlparse, urlunparse
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Callable, Tuple
+from typing import Dict, List, Optional, Callable, Tuple, Set
 from datetime import datetime
 from hashlib import sha256
 from dataclasses import dataclass, asdict
@@ -237,6 +238,39 @@ class PokeAchieveAPI:
             return data
         return []
 
+    def _augment_unlocked_with_catalog_names(self, game_id: int, unlocked: List[str]) -> List[str]:
+        """Add name:... tokens by mapping unlocked IDs through game catalog."""
+        if not unlocked:
+            return []
+
+        numeric_ids: Set[str] = set()
+        for token in unlocked:
+            if token is None:
+                continue
+            text = str(token).strip()
+            if text.isdigit():
+                numeric_ids.add(text)
+
+        if not numeric_ids:
+            return list(dict.fromkeys(str(token) for token in unlocked if token is not None))
+
+        catalog = self._get_achievement_catalog(game_id)
+        if not catalog:
+            return list(dict.fromkeys(str(token) for token in unlocked if token is not None))
+
+        augmented: List[str] = [str(token) for token in unlocked if token is not None]
+        for item in catalog:
+            if not isinstance(item, dict):
+                continue
+            ach_id = item.get("id") or item.get("achievement_id")
+            name = item.get("name") or item.get("achievement_name")
+            if ach_id is None or not isinstance(name, str) or not name.strip():
+                continue
+            if str(ach_id) in numeric_ids:
+                augmented.append(f"name:{name.strip().lower()}")
+
+        return list(dict.fromkeys(augmented))
+
     def _resolve_achievement_id(self, game_id: int, achievement_name: Optional[str], achievement_string_id: Optional[str] = None) -> Optional[str]:
         """Resolve an achievement identifier string accepted by /api/tracker/unlock."""
         target_name = achievement_name.strip().lower() if isinstance(achievement_name, str) and achievement_name.strip() else None
@@ -260,7 +294,7 @@ class PokeAchieveAPI:
                     return string_id
 
         # Fallback: some deployments still expose user-achievement listing to API keys.
-        if target_name and not self._tracker_user_achievements_forbidden:
+        if target_name and (not self.api_key) and not self._tracker_user_achievements_forbidden:
             success, data = self._request("GET", "/api/users/me/achievements")
             if success and isinstance(data, list):
                 for item in data:
@@ -291,12 +325,15 @@ class PokeAchieveAPI:
         success, data = self._request("GET", f"/api/tracker/progress/{game_id}")
         if success:
             unlocked = self._extract_unlocked_ids(data, game_id)
+            unlocked = self._augment_unlocked_with_catalog_names(game_id, unlocked)
 
-            # Some tracker/progress responses only include IDs; augment with names for local matching.
-            more_success, more_data = self._request("GET", "/api/users/me/achievements")
-            if more_success:
-                unlocked.extend(self._extract_unlocked_ids(more_data, game_id))
-                unlocked = list(dict.fromkeys(unlocked))
+            # This endpoint is not available to tracker API keys on many deployments.
+            # Only call it when no explicit API key is configured.
+            if (not self.api_key) and (not self._tracker_user_achievements_forbidden):
+                more_success, more_data = self._request("GET", "/api/users/me/achievements")
+                if more_success:
+                    unlocked.extend(self._extract_unlocked_ids(more_data, game_id))
+                    unlocked = list(dict.fromkeys(unlocked))
             return True, unlocked
 
         # Backwards compatibility with legacy backend route
@@ -567,30 +604,70 @@ class RetroArchClient:
 
                 # UDP uses sendto and recvfrom.
                 self.socket.sendto(f"{command}\n".encode(), (self.host, self.port))
-                expected_prefix = command.split()[0]
+                command_parts = command.split()
+                expected_prefix = command_parts[0] if command_parts else command
+                expected_read_addr: Optional[int] = None
+                expected_read_len: Optional[int] = None
+                if expected_prefix == "READ_CORE_MEMORY" and len(command_parts) >= 3:
+                    try:
+                        expected_read_addr = int(str(command_parts[1]), 16)
+                    except (TypeError, ValueError):
+                        expected_read_addr = None
+                    try:
+                        expected_read_len = int(str(command_parts[2]), 0)
+                    except (TypeError, ValueError):
+                        expected_read_len = None
+
+                def _response_matches(candidate_text: str) -> bool:
+                    if not candidate_text.startswith(expected_prefix):
+                        return False
+
+                    if expected_prefix != "READ_CORE_MEMORY":
+                        return True
+
+                    if expected_read_addr is None:
+                        return True
+
+                    parts = candidate_text.split()
+                    if len(parts) < 3:
+                        return False
+
+                    try:
+                        response_addr = int(str(parts[1]), 16)
+                    except (TypeError, ValueError):
+                        return False
+
+                    if int(response_addr) != int(expected_read_addr):
+                        return False
+
+                    if expected_read_len is not None and (len(parts) - 2) < int(expected_read_len):
+                        return False
+
+                    return True
+
                 response_text: Optional[str] = None
                 mismatched = 0
                 self.socket.settimeout(self.command_timeout_seconds)
 
                 response, _addr = self.socket.recvfrom(4096)
                 candidate = response.decode(errors="replace").strip()
-                if candidate.startswith(expected_prefix):
+                if _response_matches(candidate):
                     response_text = candidate
                 else:
                     mismatched = 1
                     short_timeout = max(0.01, min(0.05, float(self.command_timeout_seconds) / 20.0))
+                    max_recovery_reads = 10 if expected_prefix == "READ_CORE_MEMORY" else 5
                     self.socket.settimeout(short_timeout)
-                    for _ in range(5):
+                    for _ in range(max_recovery_reads):
                         try:
                             response, _addr = self.socket.recvfrom(4096)
                         except socket.timeout:
                             break
                         candidate = response.decode(errors="replace").strip()
-                        if candidate.startswith(expected_prefix):
+                        if _response_matches(candidate):
                             response_text = candidate
                             break
                         mismatched += 1
-
                 self.socket.settimeout(self.command_timeout_seconds)
                 if response_text is None:
                     self._command_timeout_count += 1
@@ -602,6 +679,7 @@ class RetroArchClient:
                         command=command,
                         expected=expected_prefix,
                         mismatched=mismatched,
+                        expected_addr=hex(expected_read_addr) if expected_read_addr is not None else None,
                     )
                     return None
                 if mismatched:
@@ -611,6 +689,7 @@ class RetroArchClient:
                         command=command,
                         expected=expected_prefix,
                         dropped=mismatched,
+                        expected_addr=hex(expected_read_addr) if expected_read_addr is not None else None,
                     )
                 self._exit_waiting_for_launch(command=command)
                 self._command_timeout_count = 0
@@ -713,17 +792,53 @@ class RetroArchClient:
     
     def read_memory(self, address: str, num_bytes: int = 1) -> Optional[int]:
         """Read memory from the emulator"""
-        response = self.send_command(f"READ_CORE_MEMORY {address} {num_bytes}")
-        if response and response.startswith("READ_CORE_MEMORY"):
-            parts = response.split()
-            if len(parts) >= 3:
-                try:
-                    values = [int(x, 16) for x in parts[2:]]
-                    return values[0] if len(values) == 1 else values
-                except ValueError:
-                    pass
-        return None
-    
+        def _parse_response(response: Optional[str]) -> Optional[List[int]]:
+            if response and response.startswith("READ_CORE_MEMORY"):
+                parts = response.split()
+                if len(parts) >= 3:
+                    try:
+                        return [int(x, 16) for x in parts[2:]]
+                    except ValueError:
+                        return None
+            return None
+
+        try:
+            total_bytes = int(num_bytes)
+        except (TypeError, ValueError):
+            total_bytes = 1
+        if total_bytes <= 0:
+            return None
+
+        # Avoid oversized UDP payloads/responses on Windows (WinError 10040).
+        max_chunk_bytes = 1200
+        if total_bytes > max_chunk_bytes:
+            try:
+                base_addr = int(str(address), 16)
+            except (TypeError, ValueError):
+                parsed = _parse_response(self.send_command(f"READ_CORE_MEMORY {address} {total_bytes}"))
+                if parsed is None:
+                    return None
+                return parsed[0] if len(parsed) == 1 else parsed
+
+            values: List[int] = []
+            offset = 0
+            remaining = int(total_bytes)
+            while remaining > 0:
+                chunk = min(max_chunk_bytes, remaining)
+                chunk_addr = hex(base_addr + offset)
+                parsed = _parse_response(self.send_command(f"READ_CORE_MEMORY {chunk_addr} {chunk}"))
+                if not parsed or len(parsed) < chunk:
+                    return None
+                values.extend(parsed[:chunk])
+                remaining -= chunk
+                offset += chunk
+            return values
+
+        parsed = _parse_response(self.send_command(f"READ_CORE_MEMORY {address} {total_bytes}"))
+        if parsed is None:
+            return None
+        return parsed[0] if len(parsed) == 1 else parsed
+
     def get_status(self) -> Dict:
         """Get RetroArch status"""
         response = self.send_command("GET_STATUS")
@@ -747,7 +862,7 @@ class PokemonMemoryReader:
             "gen": 1,
             "max_pokemon": 151,
             "pokedex_seen": "0xD2F7",      # Pokemon you've encountered
-            "pokedex_caught": "0xD30A",    # Pokemon you've actually CAUGHT ⭐
+            "pokedex_caught": "0xD30A",    # Pokemon you've actually caught
             "party_count": "0xD163",
             "party_start": "0xD16B",
             "party_slot_size": 44,
@@ -827,20 +942,20 @@ class PokemonMemoryReader:
             "pokedex_caught": "0x02024D0C",
             # Emerald uses a different live party block than Ruby/Sapphire.
             "party_count": "0x020244E9",
-            "party_start": "0x02024550",
+            "party_start": "0x020244EC",
             "party_slot_size": 100,
             "party_force_byte_reads": 0,
             "party_allow_byte_fallback": 0,
             "party_ignore_count": 0,
-            "party_max_pairs": 2,
+            "party_max_pairs": 8,
             "party_enable_offset_scan": 0,
             "party_allow_double_stride": 0,
-            "party_try_double_bulk": 0,
-            "party_decode_budget_ms": 700,
+            "party_try_double_bulk": 1,
+            "party_decode_budget_ms": 1800,
             # Keep alternate candidates for core/ROM variants.
             "party_count_candidates": ["0x020244E9", "0x02024284"],
-            "party_start_candidates": ["0x02024550", "0x020244EC"],
-            "party_stride_candidates": [200, 100],
+            "party_start_candidates": ["0x020244EC", "0x02024550"],
+            "party_stride_candidates": [100, 200],
             "pokedex_allow_byte_fallback": 0,
             # Emerald-specific saveblock pointers + offsets.
             "saveblock1_ptr": "0x03005D8C",
@@ -890,8 +1005,8 @@ class PokemonMemoryReader:
         23: "Ekans", 24: "Arbok",
         25: "Pikachu", 26: "Raichu",
         27: "Sandshrew", 28: "Sandslash",
-        29: "Nidoran♀", 30: "Nidorina", 31: "Nidoqueen",
-        32: "Nidoran♂", 33: "Nidorino", 34: "Nidoking",
+        29: "Nidoran-F", 30: "Nidorina", 31: "Nidoqueen",
+        32: "Nidoran-M", 33: "Nidorino", 34: "Nidoking",
         35: "Clefairy", 36: "Clefable",
         37: "Vulpix", 38: "Ninetales",
         39: "Jigglypuff", 40: "Wigglytuff",
@@ -1093,12 +1208,21 @@ class PokemonMemoryReader:
     }
 
     # Gen 3 encrypted party substructure orders by personality % 24.
+    # Canonical Gen 3 substructure order by personality % 24.
+    # Order tuple values: 0=Growth, 1=Attacks, 2=EVs/Condition, 3=Misc.
     GEN3_PARTY_SUBSTRUCT_ORDERS = [
-        (0, 1, 2, 3), (0, 1, 3, 2), (0, 2, 1, 3), (0, 3, 1, 2), (0, 2, 3, 1), (0, 3, 2, 1),
-        (1, 0, 2, 3), (1, 0, 3, 2), (2, 0, 1, 3), (3, 0, 1, 2), (2, 0, 3, 1), (3, 0, 2, 1),
-        (1, 2, 0, 3), (1, 3, 0, 2), (2, 1, 0, 3), (3, 1, 0, 2), (2, 3, 0, 1), (3, 2, 0, 1),
-        (1, 2, 3, 0), (1, 3, 2, 0), (2, 1, 3, 0), (3, 1, 2, 0), (2, 3, 1, 0), (3, 2, 1, 0),
+        (0, 1, 2, 3), (0, 1, 3, 2), (0, 2, 1, 3), (0, 2, 3, 1), (0, 3, 1, 2), (0, 3, 2, 1),
+        (1, 0, 2, 3), (1, 0, 3, 2), (1, 2, 0, 3), (1, 2, 3, 0), (1, 3, 0, 2), (1, 3, 2, 0),
+        (2, 0, 1, 3), (2, 0, 3, 1), (2, 1, 0, 3), (2, 1, 3, 0), (2, 3, 0, 1), (2, 3, 1, 0),
+        (3, 0, 1, 2), (3, 0, 2, 1), (3, 1, 0, 2), (3, 1, 2, 0), (3, 2, 0, 1), (3, 2, 1, 0),
     ]
+    GEN3_INTERNAL_SPECIES_MAX = 411
+    GEN3_INTERNAL_UNOWN_START = 252
+    GEN3_INTERNAL_UNOWN_END = 276
+    GEN3_INTERNAL_NATIONAL_OFFSET_START = 277
+    GEN3_INTERNAL_TO_NATIONAL_OFFSET = 25
+    GEN3_UNOWN_NATIONAL_ID = 201
+
     def __init__(self, retroarch: RetroArchClient):
         self.retroarch = retroarch
         self._saveblock_ptr_backoff_until: Dict[str, float] = {}
@@ -1106,10 +1230,34 @@ class PokemonMemoryReader:
         self._pointer_unreadable_last_log: Dict[str, float] = {}
         self._pointer_unreadable_streak: Dict[str, int] = {}
         self._pointer_unreadable_last_attempt: Dict[str, float] = {}
-        self._last_gen3_party_selection: Dict[str, Dict[str, object]] = {}    
+        self._last_gen3_party_selection: Dict[str, Dict[str, object]] = {}
+        self._last_party_read_meta: Dict[str, object] = {}
+
     def get_pokemon_name(self, pokemon_id: int) -> str:
         """Get Pokemon name from ID"""
         return self.POKEMON_NAMES.get(pokemon_id, f"Pokemon #{pokemon_id}")
+
+    def get_last_party_read_meta(self) -> Dict[str, object]:
+        """Return metadata from the most recent party read attempt."""
+        return dict(self._last_party_read_meta)
+
+    def _normalize_gen3_species_id(self, species_id: int) -> Optional[int]:
+        """Map Gen 3 internal species IDs to National Dex IDs."""
+        try:
+            normalized = int(species_id)
+        except (TypeError, ValueError):
+            return None
+
+        if normalized <= 0 or normalized > int(self.GEN3_INTERNAL_SPECIES_MAX):
+            return None
+
+        if int(self.GEN3_INTERNAL_UNOWN_START) <= normalized <= int(self.GEN3_INTERNAL_UNOWN_END):
+            return int(self.GEN3_UNOWN_NATIONAL_ID)
+
+        if normalized >= int(self.GEN3_INTERNAL_NATIONAL_OFFSET_START):
+            normalized -= int(self.GEN3_INTERNAL_TO_NATIONAL_OFFSET)
+
+        return normalized
     
     def get_game_config(self, game_name: str) -> Optional[Dict]:
         """Get memory addresses for current game - uses game_configs when available"""
@@ -1306,58 +1454,106 @@ class PokemonMemoryReader:
             streak=streak,
         )
 
-    def _decode_gen3_party_species(self, slot_bytes: List[int], max_species_id: int) -> Optional[int]:
+    def _decode_gen3_party_species(self, slot_bytes: List[int], max_species_id: int, allow_checksum_mismatch: bool = False) -> Optional[int]:
         """Decode species from encrypted Gen 3 party data slot."""
         if not isinstance(slot_bytes, list) or len(slot_bytes) < 80:
             return None
 
-        def read_u32(offset: int) -> int:
-            return (
-                int(slot_bytes[offset])
-                | (int(slot_bytes[offset + 1]) << 8)
-                | (int(slot_bytes[offset + 2]) << 16)
-                | (int(slot_bytes[offset + 3]) << 24)
-            )
+        def _decode_once(candidate_bytes: List[int], allow_checksum_mismatch_local: bool = False) -> Optional[int]:
+            if len(candidate_bytes) < 80:
+                return None
 
-        personality = read_u32(0)
-        ot_id = read_u32(4)
-        key = personality ^ ot_id
+            def read_u32(offset: int) -> int:
+                return (
+                    int(candidate_bytes[offset])
+                    | (int(candidate_bytes[offset + 1]) << 8)
+                    | (int(candidate_bytes[offset + 2]) << 16)
+                    | (int(candidate_bytes[offset + 3]) << 24)
+                )
 
-        encrypted = slot_bytes[32:80]
-        if len(encrypted) < 48:
-            return None
+            personality = read_u32(0)
+            ot_id = read_u32(4)
+            if personality == 0 and ot_id == 0:
+                return None
+            key = personality ^ ot_id
 
-        decrypted = [0] * 48
-        for offset in range(0, 48, 4):
-            word = (
-                int(encrypted[offset])
-                | (int(encrypted[offset + 1]) << 8)
-                | (int(encrypted[offset + 2]) << 16)
-                | (int(encrypted[offset + 3]) << 24)
-            )
-            word ^= key
-            decrypted[offset] = word & 0xFF
-            decrypted[offset + 1] = (word >> 8) & 0xFF
-            decrypted[offset + 2] = (word >> 16) & 0xFF
-            decrypted[offset + 3] = (word >> 24) & 0xFF
+            encrypted = candidate_bytes[32:80]
+            if len(encrypted) < 48:
+                return None
 
-        # Validate checksum to reject misaligned/noisy slot reads.
-        stored_checksum = int(slot_bytes[28]) | (int(slot_bytes[29]) << 8)
-        calc_checksum = 0
-        for off in range(0, 48, 2):
-            word = int(decrypted[off]) | (int(decrypted[off + 1]) << 8)
-            calc_checksum = (calc_checksum + word) & 0xFFFF
-        if calc_checksum != stored_checksum:
-            return None
+            decrypted = [0] * 48
+            for offset in range(0, 48, 4):
+                word = (
+                    int(encrypted[offset])
+                    | (int(encrypted[offset + 1]) << 8)
+                    | (int(encrypted[offset + 2]) << 16)
+                    | (int(encrypted[offset + 3]) << 24)
+                )
+                word ^= key
+                decrypted[offset] = word & 0xFF
+                decrypted[offset + 1] = (word >> 8) & 0xFF
+                decrypted[offset + 2] = (word >> 16) & 0xFF
+                decrypted[offset + 3] = (word >> 24) & 0xFF
 
-        order = self.GEN3_PARTY_SUBSTRUCT_ORDERS[personality % 24]
-        growth_index = order.index(0)
-        growth_offset = growth_index * 12
-        species = int(decrypted[growth_offset]) | (int(decrypted[growth_offset + 1]) << 8)
+            stored_checksum = int(candidate_bytes[28]) | (int(candidate_bytes[29]) << 8)
+            calc_checksum = 0
+            for off in range(0, 48, 2):
+                word = int(decrypted[off]) | (int(decrypted[off + 1]) << 8)
+                calc_checksum = (calc_checksum + word) & 0xFFFF
+            if (calc_checksum != stored_checksum) and (not allow_checksum_mismatch_local):
+                return None
 
-        if species <= 0 or species > max_species_id:
-            return None
-        return species
+            order = self.GEN3_PARTY_SUBSTRUCT_ORDERS[personality % 24]
+            growth_index = order.index(0)
+            growth_offset = growth_index * 12
+            species = int(decrypted[growth_offset]) | (int(decrypted[growth_offset + 1]) << 8)
+
+            if species <= 0 or species > max_species_id:
+                return None
+
+            # Additional plausibility checks when checksum is bypassed.
+            if allow_checksum_mismatch_local:
+                level = int(candidate_bytes[84]) if len(candidate_bytes) > 84 else 0
+                if level <= 0 or level > 100:
+                    return None
+            return species
+
+        base_bytes = [int(v) & 0xFF for v in slot_bytes]
+        transform_candidates: List[List[int]] = [base_bytes]
+
+        # Some cores expose word-swapped buffers for certain slot alignments.
+        if len(base_bytes) >= 80:
+            swapped16 = base_bytes[:]
+            for idx in range(0, len(swapped16) - 1, 2):
+                swapped16[idx], swapped16[idx + 1] = swapped16[idx + 1], swapped16[idx]
+            transform_candidates.append(swapped16)
+
+            swapped32 = base_bytes[:]
+            for idx in range(0, len(swapped32) - 3, 4):
+                a = swapped32[idx:idx + 4]
+                swapped32[idx:idx + 4] = [a[3], a[2], a[1], a[0]]
+            transform_candidates.append(swapped32)
+
+        seen_variants = set()
+        unique_candidates: List[List[int]] = []
+        for variant in transform_candidates:
+            key = bytes(variant[:96])
+            if key in seen_variants:
+                continue
+            seen_variants.add(key)
+            unique_candidates.append(variant)
+
+        for variant in unique_candidates:
+            species = _decode_once(variant, allow_checksum_mismatch_local=False)
+            if species is not None:
+                return species
+
+        if allow_checksum_mismatch:
+            for variant in unique_candidates:
+                species = _decode_once(variant, allow_checksum_mismatch_local=True)
+                if species is not None:
+                    return species
+        return None
 
     def _read_pokedex_flags(self, start_addr: str, max_pokemon: int, allow_byte_fallback: bool = True) -> List[int]:
         """Read Pokedex bitflags from a start address."""
@@ -1498,13 +1694,48 @@ class PokemonMemoryReader:
 
         return best_list
     
-    def read_party(self, game_name: str) -> List[Dict]:
+    def read_party(self, game_name: str, caught_ids_hint: Optional[Set[int]] = None) -> List[Dict]:
         """Read current party Pokemon"""
         config = self.get_game_config(game_name)
         if not config:
+            self._last_party_read_meta = {
+                "game": game_name,
+                "generation": None,
+                "expected_count": None,
+                "decoded_count": 0,
+                "incomplete": False,
+                "count_addr": None,
+                "start_addr": None,
+                "stride": None,
+                "budget_hit": False,
+                "reason": "missing_config",
+            }
             return []
 
+        caught_ids_set: Set[int] = set()
+        if isinstance(caught_ids_hint, (set, list, tuple)):
+            for raw_id in caught_ids_hint:
+                try:
+                    pokemon_id = int(raw_id)
+                except (TypeError, ValueError):
+                    continue
+                if pokemon_id > 0:
+                    caught_ids_set.add(pokemon_id)
+        use_caught_plausibility = len(caught_ids_set) >= 5
+
         gen = int(config.get("gen", 1))
+        self._last_party_read_meta = {
+            "game": game_name,
+            "generation": int(gen),
+            "expected_count": None,
+            "decoded_count": 0,
+            "incomplete": False,
+            "count_addr": None,
+            "start_addr": None,
+            "stride": int(config.get("party_slot_size", 0) or 0),
+            "budget_hit": False,
+            "reason": None,
+        }
         party = []
         static_party_count_addr = config["party_count"]
         static_party_start_addr = config["party_start"]
@@ -1547,6 +1778,7 @@ class PokemonMemoryReader:
 
         count_valid = isinstance(count, int) and 0 <= int(count) <= 6
         max_species_id = max(self.POKEMON_NAMES.keys())
+        max_decode_species_id = int(self.GEN3_INTERNAL_SPECIES_MAX) if gen == 3 else max_species_id
 
         if gen == 3:
             force_gen3_party_byte_reads = bool(config.get("party_force_byte_reads", 0))
@@ -1567,6 +1799,11 @@ class PokemonMemoryReader:
                 primary_count_addr = hex(int(str(party_count_addr), 16))
                 primary_start_addr = hex(int(str(party_start_addr), 16))
             except (TypeError, ValueError):
+                self._last_party_read_meta.update({
+                    "count_addr": str(party_count_addr),
+                    "start_addr": str(party_start_addr),
+                    "reason": "invalid_party_addresses",
+                })
                 return []
 
             def _decode_budget_exceeded() -> bool:
@@ -1574,16 +1811,40 @@ class PokemonMemoryReader:
 
             address_pairs: List[Tuple[str, str]] = [(primary_count_addr, primary_start_addr)]
             if not used_pointer_layout:
-                count_candidates = config.get("party_count_candidates")
-                start_candidates = config.get("party_start_candidates")
-                if isinstance(start_candidates, list):
-                    for idx, start_candidate in enumerate(start_candidates):
-                        if not isinstance(start_candidate, str):
-                            continue
-                        count_candidate = primary_count_addr
-                        if isinstance(count_candidates, list) and idx < len(count_candidates) and isinstance(count_candidates[idx], str):
-                            count_candidate = count_candidates[idx]
+                raw_count_candidates = config.get("party_count_candidates")
+                raw_start_candidates = config.get("party_start_candidates")
+
+                count_candidates: List[str] = [primary_count_addr]
+                if isinstance(raw_count_candidates, list):
+                    for candidate in raw_count_candidates:
+                        if isinstance(candidate, str):
+                            count_candidates.append(candidate)
+
+                start_candidates: List[str] = [primary_start_addr]
+                if isinstance(raw_start_candidates, list):
+                    for candidate in raw_start_candidates:
+                        if isinstance(candidate, str):
+                            start_candidates.append(candidate)
+
+                # Preserve legacy indexed pairing first.
+                for idx, start_candidate in enumerate(start_candidates):
+                    count_candidate = count_candidates[idx] if idx < len(count_candidates) else primary_count_addr
+                    address_pairs.append((count_candidate, start_candidate))
+
+                # Cross-pair count and start candidates to avoid locking to a bad count address.
+                for start_candidate in start_candidates:
+                    for count_candidate in count_candidates:
                         address_pairs.append((count_candidate, start_candidate))
+
+                # Derive nearby count candidates from each start address.
+                # Emerald pointer layout uses count at (start - 0x4); some cores shift by one byte.
+                for start_candidate in start_candidates:
+                    try:
+                        start_base = int(str(start_candidate), 16)
+                    except (TypeError, ValueError):
+                        continue
+                    for delta in (-4, -3):
+                        address_pairs.append((hex(start_base + delta), start_candidate))
 
             seen_pairs = set()
             ordered_pairs: List[Tuple[str, str]] = []
@@ -1600,6 +1861,11 @@ class PokemonMemoryReader:
                 ordered_pairs.append(pair_key)
 
             if not ordered_pairs:
+                self._last_party_read_meta.update({
+                    "count_addr": str(party_count_addr),
+                    "start_addr": str(party_start_addr),
+                    "reason": "no_candidate_pairs",
+                })
                 return []
 
             try:
@@ -1616,13 +1882,117 @@ class PokemonMemoryReader:
             best_start_addr = ordered_pairs[0][1]
             best_stride = int(slot_size)
             best_expected_count = int(count) if count_valid else None
-            best_score: Tuple[int, int, int, int, int, int, int, int, int, int, int, int] = (
-                -1, -1, -1, -1, -1, -10**9, -10**9, -10**9, -10**9, -10**9, -10**9, -10**9
+            best_score: Tuple[int, ...] = (
+                -1, -1, -10**9, -10**9, -1, -1, -1, -1, -10**9, -10**9, -10**9, -10**9, -10**9, -10**9, -10**9
             )
+            perfect_candidate_found = False
 
-            def _decode_party_candidate(base_addr: int, slot_stride: int, slot_count: int) -> Tuple[List[Dict], int]:
+
+            def _decode_party_candidate(base_addr: int, slot_stride: int, slot_count: int, allow_relaxed_species: bool = False) -> Tuple[List[Dict], int]:
                 decoded_party: List[Dict] = []
                 decode_failures = 0
+
+                def _decode_species(slot_data: List[int]) -> Optional[int]:
+                    try:
+                        return self._decode_gen3_party_species(
+                            slot_data,
+                            max_species_id=max_decode_species_id,
+                            allow_checksum_mismatch=allow_relaxed_species,
+                        )
+                    except TypeError:
+                        # Compatibility for tests/overrides using legacy signature.
+                        return self._decode_gen3_party_species(slot_data, max_species_id=max_decode_species_id)
+
+                def _normalize_species(species_value: int) -> Optional[int]:
+                    normalized_species = self._normalize_gen3_species_id(species_value)
+                    if normalized_species is None:
+                        return None
+                    if normalized_species <= 0 or normalized_species > max_species_id:
+                        return None
+                    return int(normalized_species)
+
+                # Fast path: read contiguous party block once.
+                if not force_gen3_party_byte_reads and slot_count > 0 and slot_stride > 0:
+                    total_len = int(slot_count) * int(slot_stride)
+                    if total_len > 0 and total_len <= 2048:
+                        block_values = self.retroarch.read_memory(hex(base_addr), total_len)
+                        if isinstance(block_values, list) and len(block_values) >= total_len:
+                            if all(isinstance(v, int) and 0 <= int(v) <= 0xFF for v in block_values[:total_len]):
+                                for slot_idx in range(slot_count):
+                                    if _decode_budget_exceeded():
+                                        return decoded_party, decode_failures
+                                    offset = int(slot_idx) * int(slot_stride)
+                                    if len(block_values) < offset + int(slot_size):
+                                        decode_failures += 1
+                                        continue
+                                    slot_data = [int(v) & 0xFF for v in block_values[offset:offset + int(slot_size)]]
+                                    species_id = _decode_species(slot_data)
+                                    if species_id is None:
+                                        decode_failures += 1
+                                        continue
+                                    normalized_species = _normalize_species(species_id)
+                                    if normalized_species is None:
+                                        decode_failures += 1
+                                        continue
+                                    level = slot_data[84] if len(slot_data) > 84 and int(slot_data[84]) > 0 else None
+                                    decoded_party.append({
+                                        "id": normalized_species,
+                                        "level": int(level) if level is not None else None,
+                                        "slot": slot_idx + 1,
+                                    })
+                                # Only short-circuit on a complete decode; partial bulk reads can
+                                # be misleading on some cores, so fall through to per-slot recovery.
+                                if len(decoded_party) >= int(slot_count):
+                                    return decoded_party, decode_failures
+
+                    # Interleaved/word-oriented fallback: read 2x bytes and de-interleave even/odd streams.
+                    if try_double_bulk and (total_len * 2) <= 4096:
+                        block_double = self.retroarch.read_memory(hex(base_addr), total_len * 2)
+                        if isinstance(block_double, list) and len(block_double) >= (total_len * 2):
+                            if all(isinstance(v, int) and 0 <= int(v) <= 0xFF for v in block_double[:total_len * 2]):
+                                best_variant_party: List[Dict] = []
+                                best_variant_failures = slot_count
+                                for variant_block in (
+                                    [int(v) & 0xFF for v in block_double[:total_len * 2:2]],
+                                    [int(v) & 0xFF for v in block_double[1:total_len * 2:2]],
+                                ):
+                                    variant_party: List[Dict] = []
+                                    variant_failures = 0
+                                    for slot_idx in range(slot_count):
+                                        if _decode_budget_exceeded():
+                                            break
+                                        offset = int(slot_idx) * int(slot_stride)
+                                        if len(variant_block) < offset + int(slot_size):
+                                            variant_failures += 1
+                                            continue
+                                        slot_data = variant_block[offset:offset + int(slot_size)]
+                                        species_id = _decode_species(slot_data)
+                                        if species_id is None:
+                                            variant_failures += 1
+                                            continue
+                                        normalized_species = _normalize_species(species_id)
+                                        if normalized_species is None:
+                                            variant_failures += 1
+                                            continue
+                                        level = slot_data[84] if len(slot_data) > 84 and int(slot_data[84]) > 0 else None
+                                        variant_party.append({
+                                            "id": normalized_species,
+                                            "level": int(level) if level is not None else None,
+                                            "slot": slot_idx + 1,
+                                        })
+                                    if len(variant_party) > len(best_variant_party):
+                                        best_variant_party = variant_party
+                                        best_variant_failures = variant_failures
+                                if best_variant_party:
+                                    # As above, only short-circuit if fully decoded.
+                                    if len(best_variant_party) >= int(slot_count):
+                                        return best_variant_party, best_variant_failures
+
+                # Bulk paths found only a partial decode; retry clean per-slot reads.
+                if decoded_party:
+                    decoded_party = []
+                    decode_failures = 0
+
                 for slot_idx in range(slot_count):
                     if _decode_budget_exceeded():
                         return decoded_party, decode_failures
@@ -1648,28 +2018,69 @@ class PokemonMemoryReader:
                     selected_slot_data: Optional[List[int]] = None
                     selected_species: Optional[int] = None
                     for variant in slot_data_variants:
-                        species_id = self._decode_gen3_party_species(variant, max_species_id=max_species_id)
+                        species_id = _decode_species(variant)
                         if species_id is not None:
+                            normalized_species = _normalize_species(species_id)
+                            if normalized_species is None:
+                                continue
                             selected_slot_data = variant
-                            selected_species = int(species_id)
+                            selected_species = int(normalized_species)
                             break
 
                     # If bulk reads are present but fail checksum/decode, retry with direct byte reads.
                     if (selected_slot_data is None or selected_species is None) and allow_party_byte_fallback:
-                        slot_data = [0] * 85
+                        slot_data_low = [0] * 85
+                        slot_data_high = [0] * 85
+                        slot_data_addrle = [0] * 85
+                        slot_data_addrbe = [0] * 85
+                        saw_wide_values = False
                         for byte_idx in gen3_required_slot_bytes:
                             if _decode_budget_exceeded():
                                 return decoded_party, decode_failures
-                            byte_val = self.retroarch.read_memory(hex(base_addr + (slot_idx * slot_stride) + int(byte_idx)))
+                            abs_addr = base_addr + (slot_idx * slot_stride) + int(byte_idx)
+                            byte_val = self.retroarch.read_memory(hex(abs_addr))
                             if not isinstance(byte_val, int):
-                                slot_data = []
+                                slot_data_low = []
+                                slot_data_high = []
+                                slot_data_addrle = []
+                                slot_data_addrbe = []
                                 break
-                            slot_data[int(byte_idx)] = int(byte_val) & 0xFF
-                        if slot_data:
-                            species_id = self._decode_gen3_party_species(slot_data, max_species_id=max_species_id)
+
+                            raw_val = int(byte_val)
+                            if raw_val > 0xFF:
+                                saw_wide_values = True
+
+                            low_byte = raw_val & 0xFF
+                            high_byte = (raw_val >> 8) & 0xFF
+                            le_shift = (int(abs_addr) & 0x3) * 8
+                            be_shift = (3 - (int(abs_addr) & 0x3)) * 8
+
+                            slot_data_low[int(byte_idx)] = low_byte
+                            slot_data_high[int(byte_idx)] = high_byte
+                            slot_data_addrle[int(byte_idx)] = (raw_val >> le_shift) & 0xFF
+                            slot_data_addrbe[int(byte_idx)] = (raw_val >> be_shift) & 0xFF
+
+                        slot_data_candidates: List[List[int]] = []
+                        if slot_data_low:
+                            slot_data_candidates.append(slot_data_low)
+                            if saw_wide_values:
+                                slot_data_candidates.extend([slot_data_addrle, slot_data_high, slot_data_addrbe])
+
+                        seen_variant_keys = set()
+                        for slot_variant in slot_data_candidates:
+                            variant_key = bytes(int(v) & 0xFF for v in slot_variant[:85])
+                            if variant_key in seen_variant_keys:
+                                continue
+                            seen_variant_keys.add(variant_key)
+
+                            species_id = _decode_species(slot_variant)
                             if species_id is not None:
-                                selected_slot_data = slot_data
-                                selected_species = int(species_id)
+                                normalized_species = _normalize_species(species_id)
+                                if normalized_species is None:
+                                    continue
+                                selected_slot_data = slot_variant
+                                selected_species = int(normalized_species)
+                                break
 
                     if selected_slot_data is None or selected_species is None:
                         decode_failures += 1
@@ -1787,12 +2198,28 @@ class PokemonMemoryReader:
                             if contiguous_prefix_len == int(local_count):
                                 count_exact = 1
 
+                        caught_overlap = contiguous_prefix_len
+                        caught_unknown = 0
+                        caught_bonus = 0
+                        if use_caught_plausibility and contiguous_prefix_len > 0:
+                            caught_bonus = 1
+                            caught_overlap = sum(
+                                1
+                                for member in normalized_party
+                                if int(member.get("id", 0)) in caught_ids_set
+                            )
+                            caught_unknown = max(0, contiguous_prefix_len - int(caught_overlap))
+
                         base_penalty = abs(int(base) - int(start_base))
                         stride_penalty = abs(int(slot_stride) - int(slot_size))
 
                         # Prefer a contiguous 1..N prefix, then count agreement and minimal fallback deviation.
+                        # When we have a stable caught list, also prefer party candidates that are actually caught.
                         score = (
                             count_exact,
+                            caught_bonus,
+                            caught_overlap,
+                            -caught_unknown,
                             contiguous_prefix_len,
                             contiguous_only,
                             starts_at_one,
@@ -1817,10 +2244,73 @@ class PokemonMemoryReader:
                             best_start_addr = start_candidate
                             best_expected_count = int(local_count) if local_count_valid else None
 
-                    if budget_exceeded:
+                            if (
+                                count_exact == 1
+                                and contiguous_only == 1
+                                and int(failures) == 0
+                                and int(base) == int(start_base)
+                                and int(slot_stride) == int(slot_size)
+                                and str(count_candidate) == str(primary_count_addr)
+                                and str(start_candidate) == str(primary_start_addr)
+                            ):
+                                perfect_candidate_found = True
+
+                        if perfect_candidate_found:
+                            break
+
+                    if budget_exceeded or perfect_candidate_found:
                         break
-                if budget_exceeded:
+                if budget_exceeded or perfect_candidate_found:
                     break
+
+                if budget_exceeded or perfect_candidate_found:
+                    break
+            # If fallback search settled on a non-canonical stride/base with an incomplete decode,
+            # retry the canonical static layout directly before accepting fallback output.
+            if (
+                isinstance(best_expected_count, int)
+                and int(best_expected_count) > 0
+                and len(best_party) < int(best_expected_count)
+                and int(best_stride) != int(slot_size)
+            ):
+                try:
+                    canonical_base = int(primary_start_addr, 16)
+                except (TypeError, ValueError):
+                    canonical_base = None
+
+                if canonical_base is not None:
+                    canonical_party, canonical_failures = _decode_party_candidate(canonical_base, int(slot_size), int(best_expected_count))
+                    canonical_slots = [
+                        int(member.get("slot", 0))
+                        for member in canonical_party
+                        if int(member.get("slot", 0)) > 0
+                    ]
+                    canonical_prefix_len = 0
+                    for slot_number in canonical_slots:
+                        if slot_number == canonical_prefix_len + 1:
+                            canonical_prefix_len += 1
+                        else:
+                            break
+                    canonical_normalized = canonical_party[:canonical_prefix_len]
+
+                    if len(canonical_normalized) > len(best_party):
+                        best_party = canonical_normalized
+                        best_raw_party_len = len(canonical_party)
+                        best_raw_slots = canonical_slots
+                        best_base = int(canonical_base)
+                        best_start_addr = primary_start_addr
+                        best_stride = int(slot_size)
+                        best_count_addr = primary_count_addr
+                        log_event(
+                            logging.INFO,
+                            "gen3_party_canonical_recovered",
+                            game=game_name,
+                            decoded=len(best_party),
+                            expected=best_expected_count,
+                            base=hex(int(best_base)),
+                            stride=int(best_stride),
+                            failures=int(canonical_failures),
+                        )
 
             if budget_exceeded:
                 log_event(
@@ -1834,6 +2324,145 @@ class PokemonMemoryReader:
                     count_addr=best_count_addr,
                 )
 
+            interleaved_recovery_meta: Optional[Dict[str, object]] = None
+            interleaved_recovery_miss_meta: Optional[Dict[str, object]] = None
+            # Recover interleaved half-party candidates (e.g. Emerald 3/6 at stride 200).
+            if (
+                best_party
+                and isinstance(best_expected_count, int)
+                and int(best_expected_count) > 1
+                and len(best_party) * 2 == int(best_expected_count)
+                and int(best_stride) == int(slot_size) * 2
+            ):
+                companion_seed_bases: List[int] = []
+                for companion_base in (int(best_base) - int(slot_size), int(best_base) + int(slot_size)):
+                    if int(companion_base) > 0 and int(companion_base) != int(best_base):
+                        companion_seed_bases.append(int(companion_base))
+
+                raw_partner_start_candidates = config.get("party_start_candidates")
+                if isinstance(raw_partner_start_candidates, list):
+                    for candidate in raw_partner_start_candidates:
+                        try:
+                            candidate_base = int(str(candidate), 16)
+                        except (TypeError, ValueError):
+                            continue
+                        if candidate_base > 0 and candidate_base != int(best_base):
+                            companion_seed_bases.append(int(candidate_base))
+
+                companion_bases: List[int] = []
+                seen_companion_bases = set()
+                # Probe near each companion seed for byte-shifted/interleaved alignments.
+                for seed_base in companion_seed_bases:
+                    for jitter in (0, 1, -1, 2, -2, 4, -4, 8, -8):
+                        candidate = int(seed_base) + int(jitter)
+                        if candidate <= 0 or candidate == int(best_base) or candidate in seen_companion_bases:
+                            continue
+                        seen_companion_bases.add(candidate)
+                        companion_bases.append(candidate)
+
+                partner_party: List[Dict] = []
+                partner_base: Optional[int] = None
+                partner_failures = 10**9
+                partner_raw_len = 0
+                partner_raw_slots: List[int] = []
+                interleaved_probe_results: List[Dict[str, int]] = []
+
+                # Reserve a small dedicated budget for half-party recovery even after main scan hits budget.
+                recovery_saved_deadline = decode_deadline
+                decode_deadline = max(float(decode_deadline), time.perf_counter() + 1.2)
+                try:
+                    for companion_base in companion_bases:
+                        candidate_party, candidate_failures = _decode_party_candidate(companion_base, int(best_stride), int(best_expected_count), allow_relaxed_species=True)
+                        slot_numbers = [
+                            int(member.get("slot", 0))
+                            for member in candidate_party
+                            if int(member.get("slot", 0)) > 0
+                        ]
+                        contiguous_prefix_len = 0
+                        for slot_number in slot_numbers:
+                            if slot_number == contiguous_prefix_len + 1:
+                                contiguous_prefix_len += 1
+                            else:
+                                break
+
+                        normalized_partner = candidate_party[:contiguous_prefix_len]
+                        interleaved_probe_results.append({
+                            "base": int(companion_base),
+                            "raw": len(candidate_party),
+                            "normalized": len(normalized_partner),
+                            "failures": int(candidate_failures),
+                        })
+                        if not normalized_partner:
+                            continue
+
+                        if (
+                            len(normalized_partner) > len(partner_party)
+                            or (
+                                len(normalized_partner) == len(partner_party)
+                                and int(candidate_failures) < int(partner_failures)
+                            )
+                        ):
+                            partner_party = normalized_partner
+                            partner_base = int(companion_base)
+                            partner_failures = int(candidate_failures)
+                            partner_raw_len = len(candidate_party)
+                            partner_raw_slots = slot_numbers
+                finally:
+                    decode_deadline = recovery_saved_deadline
+
+                if partner_party and partner_base is not None:
+                    if int(best_base) <= int(partner_base):
+                        low_phase = best_party
+                        high_phase = partner_party
+                    else:
+                        low_phase = partner_party
+                        high_phase = best_party
+
+                    merged_party: List[Dict] = []
+                    max_phase_len = max(len(low_phase), len(high_phase))
+                    for slot_idx in range(max_phase_len):
+                        if slot_idx < len(low_phase):
+                            member = dict(low_phase[slot_idx])
+                            member["slot"] = len(merged_party) + 1
+                            merged_party.append(member)
+                        if slot_idx < len(high_phase):
+                            member = dict(high_phase[slot_idx])
+                            member["slot"] = len(merged_party) + 1
+                            merged_party.append(member)
+
+                    merged_party = merged_party[:int(best_expected_count)]
+                    if len(merged_party) == int(best_expected_count):
+                        original_base = int(best_base)
+                        original_stride = int(best_stride)
+                        best_party = merged_party
+                        best_raw_party_len = max(best_raw_party_len, partner_raw_len, len(merged_party))
+                        best_raw_slots = [
+                            int(member.get("slot", 0))
+                            for member in merged_party
+                            if int(member.get("slot", 0)) > 0
+                        ]
+                        best_base = min(int(best_base), int(partner_base))
+                        best_start_addr = hex(int(best_base))
+                        best_stride = int(slot_size)
+                        interleaved_recovery_meta = {
+                            "original_base": hex(original_base),
+                            "companion_base": hex(int(partner_base)),
+                            "original_stride": int(original_stride),
+                            "selected_stride": int(best_stride),
+                            "merged": len(best_party),
+                            "expected": int(best_expected_count),
+                            "partner_slots": partner_raw_slots,
+                        }
+
+                if interleaved_recovery_meta is None:
+                    interleaved_recovery_miss_meta = {
+                        "base": hex(int(best_base)),
+                        "stride": int(best_stride),
+                        "decoded": len(best_party),
+                        "expected": int(best_expected_count),
+                        "probes": interleaved_probe_results,
+                    }
+
             selection = {
                 "count_addr": str(best_count_addr),
                 "start_addr": str(best_start_addr),
@@ -1843,6 +2472,22 @@ class PokemonMemoryReader:
             previous_selection = self._last_gen3_party_selection.get(game_name)
             selection_changed = previous_selection != selection
             self._last_gen3_party_selection[game_name] = selection
+
+            if selection_changed and interleaved_recovery_meta:
+                log_event(
+                    logging.INFO,
+                    "gen3_party_interleaved_recovered",
+                    game=game_name,
+                    **interleaved_recovery_meta,
+                )
+
+            if selection_changed and interleaved_recovery_miss_meta:
+                log_event(
+                    logging.INFO,
+                    "gen3_party_interleaved_unrecovered",
+                    game=game_name,
+                    **interleaved_recovery_miss_meta,
+                )
 
             if best_expected_count == 0 and best_party and selection_changed:
                 log_event(
@@ -1886,9 +2531,30 @@ class PokemonMemoryReader:
                     slots=best_raw_slots,
                 )
 
+            expected_count_value = int(best_expected_count) if isinstance(best_expected_count, int) and int(best_expected_count) >= 0 else None
+            self._last_party_read_meta.update({
+                "expected_count": expected_count_value,
+                "decoded_count": len(best_party),
+                "incomplete": bool(expected_count_value and len(best_party) < expected_count_value),
+                "count_addr": str(best_count_addr),
+                "start_addr": str(best_start_addr),
+                "stride": int(best_stride),
+                "budget_hit": bool(budget_exceeded),
+                "reason": None,
+            })
             return best_party
 
         if not count_valid:
+            self._last_party_read_meta.update({
+                "expected_count": None,
+                "decoded_count": 0,
+                "incomplete": False,
+                "count_addr": str(party_count_addr),
+                "start_addr": str(party_start_addr),
+                "stride": int(slot_size),
+                "budget_hit": False,
+                "reason": "invalid_party_count",
+            })
             return []
 
         # Gen 1/2: species is first byte of slot structure.
@@ -1908,6 +2574,17 @@ class PokemonMemoryReader:
                 "slot": i + 1,
             })
 
+        expected_count_value = int(count) if isinstance(count, int) and int(count) >= 0 else None
+        self._last_party_read_meta.update({
+            "expected_count": expected_count_value,
+            "decoded_count": len(party),
+            "incomplete": bool(expected_count_value and len(party) < expected_count_value),
+            "count_addr": str(party_count_addr),
+            "start_addr": str(party_start_addr),
+            "stride": int(slot_size),
+            "budget_hit": False,
+            "reason": None,
+        })
         return party
 class AchievementTracker:
     """Tracks achievements and reports unlocks"""
@@ -1952,6 +2629,9 @@ class AchievementTracker:
         self._poll_heartbeat_count = 0
         self._poll_disconnected_streak = 0
         self._party_skip_streak = 0
+        self._pending_party_change: Optional[Dict[str, object]] = None
+        self._baseline_snapshot_pending = False
+        self._baseline_snapshot_wait_polls = 0
         self._cached_pokedex_for_poll: Optional[List[int]] = None
         self._warmup_logged = False
         self._startup_baseline_captured = False
@@ -2276,7 +2956,11 @@ class AchievementTracker:
             return []
 
         try:
-            party = self.pokemon_reader.read_party(self.game_name)
+            party_hint = self._cached_pokedex_for_poll if isinstance(self._cached_pokedex_for_poll, list) else self._last_pokedex
+            try:
+                party = self.pokemon_reader.read_party(self.game_name, caught_ids_hint=party_hint)
+            except TypeError:
+                party = self.pokemon_reader.read_party(self.game_name)
         except Exception as exc:
             self._record_anomaly(
                 "party_read_exception",
@@ -2376,6 +3060,9 @@ class AchievementTracker:
             self._poll_heartbeat_count = 0
             self._poll_disconnected_streak = 0
             self._party_skip_streak = 0
+            self._pending_party_change = None
+            self._baseline_snapshot_pending = False
+            self._baseline_snapshot_wait_polls = 0
             self._cached_pokedex_for_poll = None
             self._warmup_logged = False
             self._startup_baseline_captured = False
@@ -3056,12 +3743,28 @@ class AchievementTracker:
             self._collection_baseline_candidate_streak = 0
 
             # Sync one stable startup snapshot so existing save data uploads reliably.
+            if not current_party and current_pokedex:
+                self._baseline_snapshot_pending = True
+                self._baseline_snapshot_wait_polls = 0
+                log_event(
+                    logging.INFO,
+                    "collection_baseline_established",
+                    game=self.game_name,
+                    catches=len(current_pokedex),
+                    party=len(current_party),
+                    party_sync_deferred=True,
+                )
+                return
+
+            self._baseline_snapshot_pending = False
+            self._baseline_snapshot_wait_polls = 0
             log_event(
                 logging.INFO,
                 "collection_baseline_established",
                 game=self.game_name,
                 catches=len(current_pokedex),
                 party=len(current_party),
+                party_sync_deferred=False,
             )
             self._collection_queue.put({
                 "catches": list(current_pokedex),
@@ -3073,6 +3776,38 @@ class AchievementTracker:
 
         profile = self._get_validation_profile()
         effective_pokedex = list(current_pokedex)
+        baseline_snapshot_queued = False
+        if self._baseline_snapshot_pending:
+            self._baseline_snapshot_wait_polls += 1
+            should_flush_baseline = bool(current_party) or self._baseline_snapshot_wait_polls >= 3
+            if should_flush_baseline:
+                flush_reason = "party_ready" if current_party else "timeout"
+                self._collection_queue.put({
+                    "catches": list(self._last_pokedex),
+                    "party": current_party,
+                    "previous_party": [],
+                    "game": self.game_name,
+                })
+                baseline_snapshot_queued = True
+                log_event(
+                    logging.INFO,
+                    "collection_baseline_sync_flushed",
+                    game=self.game_name,
+                    reason=flush_reason,
+                    catches=len(self._last_pokedex),
+                    party=len(current_party),
+                    polls=self._baseline_snapshot_wait_polls,
+                )
+                self._baseline_snapshot_pending = False
+                self._baseline_snapshot_wait_polls = 0
+            elif self._baseline_snapshot_wait_polls == 1 or self._baseline_snapshot_wait_polls % 10 == 0:
+                log_event(
+                    logging.INFO,
+                    "collection_baseline_sync_waiting",
+                    game=self.game_name,
+                    catches=len(self._last_pokedex),
+                    polls=self._baseline_snapshot_wait_polls,
+                )
 
         # Detect suspicious empty reads after we already had a populated baseline.
         if not current_pokedex and len(self._last_pokedex) >= 10:
@@ -3120,27 +3855,112 @@ class AchievementTracker:
             self._bad_read_streak = 0
 
         # Find party changes (including slot/order changes and duplicate species).
+        party_read_meta = self.pokemon_reader.get_last_party_read_meta() if self.pokemon_reader else {}
         party_changed = current_party != self._last_party
+        drop_pending_set = False
+
+        def _party_signature(party_members: List[Dict]) -> tuple:
+            signature_rows = []
+            for member in party_members:
+                if not isinstance(member, dict):
+                    continue
+                try:
+                    signature_rows.append((
+                        int(member.get("slot", 0)),
+                        int(member.get("id", 0)),
+                        int(member.get("level", 0)) if member.get("level") is not None else None,
+                    ))
+                except (TypeError, ValueError):
+                    continue
+            return tuple(sorted(signature_rows))
+
         if party_changed:
-            slots = [
-                {
+            expected_count = party_read_meta.get("expected_count")
+            decoded_count = party_read_meta.get("decoded_count")
+            incomplete_read = bool(party_read_meta.get("incomplete"))
+            candidate_signature = _party_signature(current_party)
+            previous_count = len(self._last_party)
+            current_count = len(current_party)
+
+            should_confirm_drop = (
+                current_count < previous_count
+                and incomplete_read
+            )
+
+            if should_confirm_drop:
+                pending = self._pending_party_change or {}
+                is_same_candidate = (
+                    pending.get("signature") == candidate_signature
+                    and int(pending.get("previous_count", -1)) == int(previous_count)
+                )
+                if is_same_candidate:
+                    self._pending_party_change = None
+                    log_event(
+                        logging.INFO,
+                        "party_drop_confirmed_after_retry",
+                        game=self.game_name,
+                        previous_count=previous_count,
+                        current_count=current_count,
+                        expected_count=expected_count,
+                        decoded_count=decoded_count,
+                    )
+                else:
+                    self._pending_party_change = {
+                        "signature": candidate_signature,
+                        "previous_count": int(previous_count),
+                    }
+                    drop_pending_set = True
+                    log_event(
+                        logging.INFO,
+                        "party_read_skipped",
+                        game=self.game_name,
+                        reason="party_drop_pending_confirmation",
+                        previous_count=previous_count,
+                        current_count=current_count,
+                        expected_count=expected_count,
+                        decoded_count=decoded_count,
+                    )
+                    party_changed = False
+                    current_party = list(self._last_party)
+
+        if party_changed:
+            self._pending_party_change = None
+            slots: List[Dict[str, object]] = []
+            for member in current_party:
+                if not isinstance(member, dict):
+                    continue
+                dex_id = int(member.get("id", 0))
+                slots.append({
                     "slot": int(member.get("slot", 0)),
-                    "id": int(member.get("id", 0)),
+                    "name": self.pokemon_reader.get_pokemon_name(dex_id) if dex_id > 0 else f"Pokemon #{dex_id}",
                     "level": member.get("level"),
-                }
-                for member in current_party
-                if isinstance(member, dict)
-            ]
+                })
             log_event(
                 logging.INFO,
                 "party_state_changed",
                 game=self.game_name,
                 previous_count=len(self._last_party),
                 current_count=len(current_party),
-                slots=slots,
             )
+            for slot_info in sorted(slots, key=lambda s: int(s.get("slot", 0))):
+                slot_num = int(slot_info.get("slot", 0))
+                slot_name = str(slot_info.get("name") or "Unknown")
+                level_value = slot_info.get("level")
+                try:
+                    level_int = int(level_value) if level_value is not None else None
+                except (TypeError, ValueError):
+                    level_int = None
+                if level_int is not None and level_int > 0:
+                    line = f"Party Slot {slot_num}: {slot_name}, Lv.{level_int}"
+                else:
+                    line = f"Party Slot {slot_num}: {slot_name}"
+                log_event(logging.INFO, "party_slot", game=self.game_name, text=line)
+        else:
+            if not drop_pending_set and current_party == self._last_party:
+                self._pending_party_change = None
+
         # Queue updates if there are changes.
-        if new_catches or party_changed:
+        if (new_catches or party_changed) and not baseline_snapshot_queued:
             self._collection_queue.put({
                 "previous_party": list(self._last_party),
                 "catches": new_catches,
@@ -3390,7 +4210,7 @@ class PokeAchieveGUI:
     
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("🎮 PokeAchieve Tracker v1.9")
+        self.root.title("PokeAchieve Tracker v1.9")
         self.root.geometry("980x700")
         self.root.minsize(760, 520)
         self._configure_styles()
@@ -3670,7 +4490,7 @@ class PokeAchieveGUI:
 
         self.start_btn = ttk.Button(
             controls_frame,
-            text="▶ Start Tracking",
+            text="Start Tracking",
             command=self._start_tracking,
             style="Primary.TButton"
         )
@@ -3678,22 +4498,22 @@ class PokeAchieveGUI:
 
         self.stop_btn = ttk.Button(
             controls_frame,
-            text="⏹ Stop",
+            text="Stop",
             command=self._stop_tracking,
             state='disabled'
         )
         self.stop_btn.grid(row=0, column=1, padx=4, pady=4, sticky="ew")
 
-        ttk.Button(controls_frame, text="🔄 Sync", command=self._sync_with_server).grid(
+        ttk.Button(controls_frame, text="Sync", command=self._sync_with_server).grid(
             row=0, column=2, padx=4, pady=4, sticky="ew"
         )
-        ttk.Button(controls_frame, text="⚙ Settings", command=self._show_settings).grid(
+        ttk.Button(controls_frame, text="Settings", command=self._show_settings).grid(
             row=0, column=3, padx=4, pady=4, sticky="ew"
         )
-        ttk.Button(controls_frame, text="🗑 Clear Data", command=self._clear_app_data).grid(
+        ttk.Button(controls_frame, text="Clear Data", command=self._clear_app_data).grid(
             row=0, column=4, padx=4, pady=4, sticky="ew"
         )
-        ttk.Button(controls_frame, text="📦 Export Diagnostics", command=self._export_diagnostics).grid(
+        ttk.Button(controls_frame, text="Export Diagnostics", command=self._export_diagnostics).grid(
             row=0, column=5, padx=4, pady=4, sticky="ew"
         )
 
@@ -3754,10 +4574,19 @@ class PokeAchieveGUI:
     def _log(self, message: str, level: str = "info"):
         """Add message to log"""
         timestamp = datetime.now().strftime("%H:%M:%S")
-        prefix = {"info": "ℹ", "success": "✅", "error": "❌", "unlock": "🏆", "api": "🌐", "collection": "📱"}.get(level, "ℹ")
-        
+        prefix = {
+            "info": "INFO",
+            "success": "OK",
+            "error": "ERROR",
+            "warning": "WARN",
+            "unlock": "UNLOCK",
+            "api": "API",
+            "collection": "COLLECTION",
+            "party": "PARTY",
+        }.get(level, "INFO")
+
         self.log_text.configure(state='normal')
-        self.log_text.insert('end', f"[{timestamp}] {prefix} {message}\n")
+        self.log_text.insert('end', f"[{timestamp}] {prefix}: {message}\n")
         self._trim_scrolled_text(self.log_text, self._max_log_lines)
         self.log_text.see('end')
         self.log_text.configure(state='disabled')
@@ -3797,7 +4626,7 @@ class PokeAchieveGUI:
         """Apply async status results on the Tk main thread."""
         try:
             if status.get("ra_connected"):
-                self.ra_status_label.configure(text="RetroArch: Connected ✓")
+                self.ra_status_label.configure(text="RetroArch: Connected")
                 self._detect_game(status.get("game_name"))
             else:
                 self.ra_status_label.configure(text="RetroArch: Disconnected")
@@ -4173,11 +5002,117 @@ class PokeAchieveGUI:
                 
                 # Update party display
                 self._update_party_display(party, game)
+                # Log party changes to tracker log (independent of API dedupe behavior).
+                if party != previous_party:
+                    def _normalize_member(member: Dict) -> Optional[Tuple[int, int, str]]:
+                        if not isinstance(member, dict):
+                            return None
+                        pokemon_id = member.get("id")
+                        if not isinstance(pokemon_id, int) or pokemon_id <= 0:
+                            return None
+                        name = member.get("name")
+                        if not isinstance(name, str) or not name.strip():
+                            name = self.tracker.pokemon_reader.get_pokemon_name(pokemon_id)
+                        level = member.get("level")
+                        try:
+                            level_int = int(level) if level is not None else 0
+                        except (TypeError, ValueError):
+                            level_int = 0
+                        return pokemon_id, level_int, name
+
+                    previous_counter = Counter()
+                    current_counter = Counter()
+                    member_names: Dict[Tuple[int, int], str] = {}
+
+                    for member in previous_party:
+                        normalized = _normalize_member(member)
+                        if not normalized:
+                            continue
+                        pokemon_id, level_int, name = normalized
+                        key = (pokemon_id, level_int)
+                        previous_counter[key] += 1
+                        member_names.setdefault(key, name)
+
+                    for member in party:
+                        normalized = _normalize_member(member)
+                        if not normalized:
+                            continue
+                        pokemon_id, level_int, name = normalized
+                        key = (pokemon_id, level_int)
+                        current_counter[key] += 1
+                        member_names.setdefault(key, name)
+
+                    initial_party_sync = not previous_party
+                    delta_logged = False
+
+                    if not initial_party_sync:
+                        deposited = previous_counter - current_counter
+                        added = current_counter - previous_counter
+
+                        had_deposits = False
+                        for (pokemon_id, level_int), count in deposited.items():
+                            name = member_names.get((pokemon_id, level_int), self.tracker.pokemon_reader.get_pokemon_name(pokemon_id))
+                            if level_int > 0:
+                                line = f"Lv.{level_int} {name} deposited into PC"
+                            else:
+                                line = f"{name} deposited into PC"
+                            for _ in range(count):
+                                self._log(line, "party")
+                                delta_logged = True
+                                had_deposits = True
+
+                        if had_deposits:
+                            self._last_party_pc_activity_ts = time.time()
+
+                        last_pc_activity_ts = float(getattr(self, "_last_party_pc_activity_ts", 0.0) or 0.0)
+                        recent_pc_activity = bool(last_pc_activity_ts and (time.time() - last_pc_activity_ts) <= 30.0)
+
+                        for (pokemon_id, level_int), count in added.items():
+                            name = member_names.get((pokemon_id, level_int), self.tracker.pokemon_reader.get_pokemon_name(pokemon_id))
+                            if level_int > 0:
+                                base_line = f"Lv.{level_int} {name}"
+                            else:
+                                base_line = str(name)
+
+                            for _ in range(count):
+                                if recent_pc_activity or had_deposits:
+                                    self._log(f"{base_line} withdrawn from PC", "party")
+                                    self._last_party_pc_activity_ts = time.time()
+                                else:
+                                    self._log(f"{base_line} was caught!", "party")
+                                    self._log(f"{base_line} was added to the party.", "party")
+                                delta_logged = True
+
+                    # Keep slot snapshot for initial party discovery and non-roster edits (e.g., reordering).
+                    should_log_slots = initial_party_sync or not delta_logged
+                    if should_log_slots:
+                        if not party:
+                            self._log("EMPTY", "party")
+                        else:
+                            for member in sorted(
+                                (m for m in party if isinstance(m, dict)),
+                                key=lambda p: int(p.get("slot", 0))
+                            ):
+                                slot = member.get("slot")
+                                pokemon_id = member.get("id")
+                                if not isinstance(slot, int) or not isinstance(pokemon_id, int):
+                                    continue
+                                name = member.get("name")
+                                if not isinstance(name, str) or not name.strip():
+                                    name = self.tracker.pokemon_reader.get_pokemon_name(pokemon_id)
+                                level = member.get("level")
+                                try:
+                                    level_int = int(level) if level is not None else 0
+                                except (TypeError, ValueError):
+                                    level_int = 0
+                                if level_int > 0:
+                                    self._log(f"SLOT {slot}: Lv.{level_int} {name}", "party")
+                                else:
+                                    self._log(f"SLOT {slot}: {name}", "party")
                 
                 # Post to API
                 if self.api:
-                    self.tracker.post_collection_to_platform(catches, party, game, previous_party=previous_party)
-                
+                    self.tracker.post_collection_to_platform(catches, party, game, previous_party=previous_party)                
             except queue.Empty:
                 break
         
@@ -4222,18 +5157,30 @@ class PokeAchieveGUI:
         # Update party (additions, removals, and slot moves).
         previous_party = previous_party or []
         previous_by_slot = {}
+        previous_details_by_slot = {}
         for member in previous_party:
             slot = member.get("slot")
             pokemon_id = member.get("id")
             if isinstance(slot, int) and 1 <= slot <= 6 and isinstance(pokemon_id, int) and pokemon_id > 0:
                 previous_by_slot[slot] = pokemon_id
+                previous_details_by_slot[slot] = {
+                    "id": pokemon_id,
+                    "name": member.get("name"),
+                    "level": member.get("level"),
+                }
 
         current_by_slot = {}
+        current_details_by_slot = {}
         for member in party:
             slot = member.get("slot")
             pokemon_id = member.get("id")
             if isinstance(slot, int) and 1 <= slot <= 6 and isinstance(pokemon_id, int) and pokemon_id > 0:
                 current_by_slot[slot] = pokemon_id
+                current_details_by_slot[slot] = {
+                    "id": pokemon_id,
+                    "name": member.get("name"),
+                    "level": member.get("level"),
+                }
 
         for slot in range(1, 7):
             previous_id = previous_by_slot.get(slot)
@@ -4248,7 +5195,6 @@ class PokeAchieveGUI:
                     self.root.after(0, self._update_sync_meta_labels)
                     self._threadsafe_log(f"Failed to update party: {error_msg}", "error")
                     return False
-                self._threadsafe_log(f"Removed party: {previous_id} from slot {slot}", "api")
 
             if current_id and current_id != previous_id:
                 log_event(logging.DEBUG, "collection_sync_party_update", action="add", slot=slot, pokemon_id=current_id)
@@ -4259,7 +5205,6 @@ class PokeAchieveGUI:
                     self.root.after(0, self._update_sync_meta_labels)
                     self._threadsafe_log(f"Failed to update party: {error_msg}", "error")
                     return False
-                self._threadsafe_log(f"Updated party: {current_id} in slot {slot}", "api")
 
         return True
 
@@ -4275,7 +5220,7 @@ class PokeAchieveGUI:
         self.catches_list.configure(state='normal')
         timestamp = datetime.now().strftime("%H:%M:%S")
         game_info = f" [{game}]" if game else ""
-        mobile_icon = "\U0001F4F1"
+        mobile_icon = "[CATCH]"
         self.catches_list.insert('1.0', f"[{timestamp}] {mobile_icon} NEW CATCH: {pokemon_name} (#{pokemon_id}){game_info}\n")
         self._trim_scrolled_text(self.catches_list, self._max_catch_lines)
         self.catches_list.configure(state='disabled')
@@ -4308,7 +5253,7 @@ class PokeAchieveGUI:
         
         self.recent_list.configure(state='normal')
         timestamp = datetime.now().strftime("%H:%M:%S")
-        rarity_emoji = {"common": "⚪", "uncommon": "🟢", "rare": "🔵", "epic": "🟣", "legendary": "🟠"}.get(achievement.rarity, "⚪")
+        rarity_emoji = {"common": "[C]", "uncommon": "[U]", "rare": "[R]", "epic": "[E]", "legendary": "[L]"}.get(achievement.rarity, "[C]")
         
         self.recent_list.insert('1.0', f"[{timestamp}] {rarity_emoji} {achievement.name}\n")
         self._trim_scrolled_text(self.recent_list, self._max_recent_lines)
@@ -4360,6 +5305,9 @@ class PokeAchieveGUI:
                 self.tracker._last_party = []
                 self.tracker._last_pokedex = []
                 self.tracker._collection_baseline_initialized = False
+                self.tracker._pending_party_change = None
+                self.tracker._baseline_snapshot_pending = False
+                self.tracker._baseline_snapshot_wait_polls = 0
                 self.tracker._unlock_streaks = {}
                 self.tracker._achievement_poll_count = 0
                 self.tracker._warmup_logged = False
@@ -4387,7 +5335,7 @@ class PokeAchieveGUI:
 
         if not self.api:
             msgbox.showwarning("Not Connected", 
-                "No API key configured. Go to Settings → API to add your API key.")
+                "No API key configured. Go to Settings -> API to add your API key.")
             return
 
         if not self.tracker.game_id:
@@ -4512,45 +5460,6 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 

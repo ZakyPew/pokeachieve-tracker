@@ -124,20 +124,19 @@ class StubCatalogUnlockAPI(PokeAchieveAPI):
 
 class StubProgressAPI(PokeAchieveAPI):
     def __init__(self):
-        super().__init__(base_url="https://example.invalid", api_key="")
+        super().__init__(base_url="https://example.invalid", api_key="tracker_test_key")
+        self.calls = []
 
     def _request(self, method: str, endpoint: str, data: dict = None):
+        self.calls.append((method, endpoint, data))
         if endpoint.startswith("/api/tracker/progress/"):
             return True, {"unlocked_achievement_ids": ["1001"]}
-        if endpoint == "/api/users/me/achievements":
+        if endpoint == "/api/games/3/achievements":
             return True, [
-                {
-                    "game_id": 3,
-                    "unlocked": True,
-                    "achievement_id": 1001,
-                    "achievement_name": "Knuckle Badge",
-                }
+                {"id": 1001, "name": "Knuckle Badge"}
             ]
+        if endpoint == "/api/users/me/achievements":
+            return False, {"status": 401, "error": "should not be called in API-key mode"}
         return False, {"status": 404, "error": "unexpected"}
 
 
@@ -185,6 +184,77 @@ class ReportingValidationTests(unittest.TestCase):
         slot[28] = 0x34
         slot[29] = 0x12
         self.assertIsNone(reader._decode_gen3_party_species(slot, max_species_id=386))
+
+    def test_gen3_substruct_order_table_matches_canonical(self):
+        reader = self.tracker.pokemon_reader
+        expected = [
+            (0, 1, 2, 3), (0, 1, 3, 2), (0, 2, 1, 3), (0, 2, 3, 1), (0, 3, 1, 2), (0, 3, 2, 1),
+            (1, 0, 2, 3), (1, 0, 3, 2), (1, 2, 0, 3), (1, 2, 3, 0), (1, 3, 0, 2), (1, 3, 2, 0),
+            (2, 0, 1, 3), (2, 0, 3, 1), (2, 1, 0, 3), (2, 1, 3, 0), (2, 3, 0, 1), (2, 3, 1, 0),
+            (3, 0, 1, 2), (3, 0, 2, 1), (3, 1, 0, 2), (3, 1, 2, 0), (3, 2, 0, 1), (3, 2, 1, 0),
+        ]
+        self.assertEqual(reader.GEN3_PARTY_SUBSTRUCT_ORDERS, expected)
+
+    def test_gen3_internal_species_map_to_national_dex(self):
+        reader = self.tracker.pokemon_reader
+        self.assertEqual(reader._normalize_gen3_species_id(251), 251)
+        self.assertEqual(reader._normalize_gen3_species_id(252), 201)
+        self.assertEqual(reader._normalize_gen3_species_id(276), 201)
+        self.assertEqual(reader._normalize_gen3_species_id(277), 252)
+        self.assertEqual(reader._normalize_gen3_species_id(411), 386)
+        self.assertIsNone(reader._normalize_gen3_species_id(412))
+
+    def test_gen3_party_normalizes_internal_species_output(self):
+        class PartyRetroSingle:
+            def read_memory(self, addr: str, num_bytes: int = 1):
+                address = int(addr, 16)
+                if num_bytes == 1:
+                    if address == 0x3000:
+                        return 1
+                    return 0
+                if num_bytes == 100:
+                    slot = [0] * 100
+                    slot[84] = 22
+                    return slot
+                if num_bytes > 1:
+                    return [0] * int(num_bytes)
+                return 0
+
+        reader = self.tracker.pokemon_reader
+        original_retro = reader.retroarch
+        original_config_getter = reader.get_game_config
+        original_decode = reader._decode_gen3_party_species
+        seen_max_species = []
+
+        reader.retroarch = PartyRetroSingle()
+        reader.get_game_config = lambda game_name: {
+            "gen": 3,
+            "layout_id": "gen3_emerald",
+            "party_count": "0x3000",
+            "party_start": "0x3004",
+            "party_slot_size": 100,
+            "party_use_pointer_layout": 0,
+            "party_max_pairs": 1,
+            "party_enable_offset_scan": 0,
+            "party_allow_double_stride": 0,
+            "party_try_double_bulk": 0,
+        }
+
+        def fake_decode(slot_data, max_species_id, allow_checksum_mismatch=False):
+            seen_max_species.append(int(max_species_id))
+            return 358
+
+        reader._decode_gen3_party_species = fake_decode
+        try:
+            party = reader.read_party("Pokemon Emerald")
+            self.assertEqual(seen_max_species[0], 411)
+            self.assertEqual(len(party), 1)
+            self.assertEqual(party[0]["id"], 333)
+            self.assertEqual(party[0]["level"], 22)
+        finally:
+            reader.retroarch = original_retro
+            reader.get_game_config = original_config_getter
+            reader._decode_gen3_party_species = original_decode
 
     def test_gen3_party_prefers_contiguous_slots_when_scores_tie(self):
         class PartyRetro:
@@ -424,6 +494,57 @@ class ReportingValidationTests(unittest.TestCase):
             reader._decode_gen3_party_species = original_decode
 
 
+    def test_gen3_party_recovers_interleaved_half_party_phases(self):
+        class PartyRetroInterleavedPhases:
+            def read_memory(self, addr: str, num_bytes: int = 1):
+                address = int(addr, 16)
+                if num_bytes == 1:
+                    if address == 0x3000:
+                        return 6
+                    return 0
+
+                if num_bytes == 100:
+                    slot = [0] * 100
+                    if address >= 0x3000 and (address - 0x3000) % 100 == 0:
+                        idx = (address - 0x3000) // 100
+                        if 0 <= idx < 6:
+                            slot[0] = 30 + idx
+                    return slot
+
+                return 0
+
+        reader = self.tracker.pokemon_reader
+        original_retro = reader.retroarch
+        original_config_getter = reader.get_game_config
+        original_decode = reader._decode_gen3_party_species
+
+        reader.retroarch = PartyRetroInterleavedPhases()
+        reader.get_game_config = lambda game_name: {
+            "gen": 3,
+            "layout_id": "gen3_emerald",
+            "party_count": "0x3000",
+            "party_start": "0x3000",
+            "party_slot_size": 100,
+            "party_use_pointer_layout": 0,
+            "party_enable_offset_scan": 0,
+            "party_allow_double_stride": 0,
+            "party_stride_candidates": [200],
+            "party_start_candidates": ["0x3000", "0x3064"],
+            "party_count_candidates": ["0x3000"],
+            "party_max_pairs": 4,
+            "party_decode_budget_ms": 1800,
+        }
+        reader._decode_gen3_party_species = lambda slot_data, max_species_id: int(slot_data[0]) if int(slot_data[0]) > 0 else None
+        try:
+            party = reader.read_party("Pokemon Emerald")
+            self.assertEqual([member["slot"] for member in party], [1, 2, 3, 4, 5, 6])
+            self.assertEqual([member["id"] for member in party], [30, 31, 32, 33, 34, 35])
+        finally:
+            reader.retroarch = original_retro
+            reader.get_game_config = original_config_getter
+            reader._decode_gen3_party_species = original_decode
+
+
     def test_gen3_party_fallback_when_count_reads_zero(self):
         class PartyRetroZero:
             def read_memory(self, addr: str, num_bytes: int = 1):
@@ -619,6 +740,7 @@ class ReportingValidationTests(unittest.TestCase):
         self.assertTrue(ok)
         self.assertIn("1001", unlocked)
         self.assertIn("name:knuckle badge", unlocked)
+        self.assertFalse(any(call[1] == "/api/users/me/achievements" for call in api.calls))
 
     def test_pokedex_count_hint_mismatch_falls_back_to_last_known(self):
         self.tracker.achievements = [
@@ -830,6 +952,93 @@ class ReportingValidationTests(unittest.TestCase):
         self.assertEqual(update["previous_party"], [{"id": 25, "level": 15, "slot": 1}, {"id": 10, "level": 7, "slot": 2}])
         self.assertEqual(update["game"], "Pokemon Emerald")
 
+    def test_party_drop_with_incomplete_decode_requires_retry_confirmation(self):
+        self.tracker._collection_baseline_initialized = True
+        self.tracker._last_pokedex = [1, 4, 7]
+        self.tracker._last_party = [
+            {"id": 25, "level": 15, "slot": 1},
+            {"id": 10, "level": 7, "slot": 2},
+            {"id": 12, "level": 9, "slot": 3},
+        ]
+        self.tracker._pending_party_change = None
+
+        self.tracker._read_current_pokedex_caught = lambda: [1, 4, 7]
+        self.tracker.pokemon_reader.read_party = lambda game: [
+            {"id": 25, "level": 15, "slot": 1},
+            {"id": 12, "level": 9, "slot": 2},
+        ]
+        self.tracker.pokemon_reader.get_last_party_read_meta = lambda: {
+            "expected_count": 3,
+            "decoded_count": 2,
+            "incomplete": True,
+        }
+
+        self.tracker.check_collection()
+        self.assertTrue(self.tracker._collection_queue.empty())
+        self.assertEqual(len(self.tracker._last_party), 3)
+        self.assertIsNotNone(self.tracker._pending_party_change)
+
+        self.tracker.check_collection()
+        self.assertFalse(self.tracker._collection_queue.empty())
+        update = self.tracker._collection_queue.get_nowait()
+        self.assertEqual(len(update["previous_party"]), 3)
+        self.assertEqual(len(update["party"]), 2)
+        self.assertEqual(len(self.tracker._last_party), 2)
+        self.assertIsNone(self.tracker._pending_party_change)
+
+    def test_party_drop_with_complete_decode_updates_immediately(self):
+        self.tracker._collection_baseline_initialized = True
+        self.tracker._last_pokedex = [1, 4, 7]
+        self.tracker._last_party = [
+            {"id": 25, "level": 15, "slot": 1},
+            {"id": 10, "level": 7, "slot": 2},
+            {"id": 12, "level": 9, "slot": 3},
+        ]
+        self.tracker._pending_party_change = None
+
+        self.tracker._read_current_pokedex_caught = lambda: [1, 4, 7]
+        self.tracker.pokemon_reader.read_party = lambda game: [
+            {"id": 25, "level": 15, "slot": 1},
+            {"id": 12, "level": 9, "slot": 2},
+        ]
+        self.tracker.pokemon_reader.get_last_party_read_meta = lambda: {
+            "expected_count": 2,
+            "decoded_count": 2,
+            "incomplete": False,
+        }
+
+        self.tracker.check_collection()
+        self.assertFalse(self.tracker._collection_queue.empty())
+        update = self.tracker._collection_queue.get_nowait()
+        self.assertEqual(len(update["previous_party"]), 3)
+        self.assertEqual(len(update["party"]), 2)
+        self.assertEqual(len(self.tracker._last_party), 2)
+        self.assertIsNone(self.tracker._pending_party_change)
+
+    def test_collection_baseline_defers_empty_party_sync_until_party_ready(self):
+        self.tracker._collection_baseline_initialized = False
+        self.tracker._read_current_pokedex_caught = lambda: [1, 2, 3]
+        self.tracker.pokemon_reader.read_party = lambda game: []
+
+        # First call seeds baseline candidate.
+        self.tracker.check_collection()
+        self.assertFalse(self.tracker._collection_baseline_initialized)
+
+        # Second call establishes baseline but defers startup sync because party is empty.
+        self.tracker.check_collection()
+        self.assertTrue(self.tracker._collection_baseline_initialized)
+        self.assertTrue(self.tracker._baseline_snapshot_pending)
+        self.assertTrue(self.tracker._collection_queue.empty())
+
+        # Party appears; deferred baseline snapshot should flush with catches + party once.
+        self.tracker.pokemon_reader.read_party = lambda game: [{"id": 25, "level": 5, "slot": 1}]
+        self.tracker.check_collection()
+        self.assertFalse(self.tracker._baseline_snapshot_pending)
+        self.assertFalse(self.tracker._collection_queue.empty())
+        update = self.tracker._collection_queue.get_nowait()
+        self.assertEqual(update["catches"], [1, 2, 3])
+        self.assertEqual(update["party"], [{"id": 25, "level": 5, "slot": 1}])
+
     def test_collection_baseline_requires_stable_read(self):
         self.tracker._collection_baseline_initialized = False
         self.tracker.pokemon_reader.read_party = lambda game: []
@@ -885,4 +1094,5 @@ if __name__ == "__main__":
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(ReportingValidationTests)
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     raise SystemExit(0 if result.wasSuccessful() else 1)
+
 
