@@ -1,0 +1,236 @@
+{
+  "game": {
+    "name": "Pokemon Silver",
+    "platform": "gbc",
+    "generation": 2,
+    "rom_hash": "B2C3D4E5F6A7B8C9D0E1F2A3B4C5D6E7F8A9B0C1"
+  },
+  "achievements": [
+    {
+      "id": "silver_starter_chosen",
+      "name": "The Journey Begins",
+      "description": "Choose your starter Pokemon",
+      "category": "story",
+      "icon": "starter.png",
+      "target_value": 1,
+      "rarity": "common",
+      "points": 10
+    },
+    {
+      "id": "silver_pokedex_10",
+      "name": "Junior Researcher",
+      "description": "Register 10 Pokemon in the Pokedex",
+      "category": "pokedex",
+      "icon": "pokedex_10.png",
+      "target_value": 10,
+      "rarity": "common",
+      "points": 20
+    },
+    {
+      "id": "silver_pokedex_50",
+      "name": "Pokemon Collector",
+      "description": "Register 50 Pokemon in the Pokedex",
+      "category": "pokedex",
+      "icon": "pokedex_50.png",
+      "target_value": 50,
+      "rarity": "uncommon",
+      "points": 50
+    },
+    {
+      "id": "silver_pokedex_100",
+      "name": "Pokedex Master",
+      "description": "Register 100 Pokemon in the Pokedex",
+      "category": "pokedex",
+      "icon": "pokedex_100.png",
+      "target_value": 100,
+      "rarity": "rare",
+      "points": 100
+    },
+    {
+      "id": "silver_pokedex_complete",
+      "name": "Johto Completionist",
+      "description": "Complete the Johto Pokedex",
+      "category": "pokedex",
+      "icon": "pokedex_complete.png",
+      "target_value": 251,
+      "rarity": "epic",
+      "points": 500
+    },
+    {
+      "id": "silver_gym_1_falkner",
+      "name": "Zephyr Badge",
+      "description": "Defeat Falkner and earn the Zephyr Badge",
+      "category": "gym",
+      "icon": "gym_1.png",
+      "target_value": 1,
+      "rarity": "common",
+      "memory_address": "0xD35C",
+      "memory_condition": "& 0x01",
+      "points": 25
+    },
+    {
+      "id": "silver_gym_2_bugsy",
+      "name": "Hive Badge",
+      "description": "Defeat Bugsy and earn the Hive Badge",
+      "category": "gym",
+      "icon": "gym_2.png",
+      "target_value": 1,
+      "rarity": "common",
+      "memory_address": "0xD35C",
+      "memory_condition": "& 0x02",
+      "points": 25
+    },
+    {
+      "id": "silver_gym_3_whitney",
+      "name": "Plain Badge",
+      "description": "Defeat Whitney and earn the Plain Badge",
+      "category": "gym",
+      "icon": "gym_3.png",
+      "target_value": 1,
+      "rarity": "common",
+      "memory_address": "0xD35C",
+      "memory_condition": "& 0x04",
+      "points": 25
+    },
+    {
+      "id": "silver_gym_4_morty",
+      "name": "Fog Badge",
+      "description": "Defeat Morty and earn the Fog Badge",
+      "category": "gym",
+      "icon": "gym_4.png",
+      "target_value": 1,
+      "rarity": "common",
+      "memory_address": "0xD35C",
+      "memory_condition": "& 0x08",
+      "points": 25
+    },
+    {
+      "id": "silver_gym_5_chuck",
+      "name": "Storm Badge",
+      "description": "Defeat Chuck and earn the Storm Badge",
+      "category": "gym",
+      "icon": "gym_5.png",
+      "target_value": 1,
+      "rarity": "common",
+      "memory_address": "0xD35C",
+      "memory_condition": "& 0x10",
+      "points": 25
+    },
+    {
+      "id": "silver_gym_6_jasmine",
+      "name": "Mineral Badge",
+      "description": "Defeat Jasmine and earn the Mineral Badge",
+      "category": "gym",
+      "icon": "gym_6.png",
+      "target_value": 1,
+      "rarity": "common",
+      "memory_address": "0xD35C",
+      "memory_condition": "& 0x20",
+      "points": 25
+    },
+    {
+      "id": "silver_gym_7_pryce",
+      "name": "Glacier Badge",
+      "description": "Defeat Pryce and earn the Glacier Badge",
+      "category": "gym",
+      "icon": "gym_7.png",
+      "target_value": 1,
+      "rarity": "common",
+      "memory_address": "0xD35C",
+      "memory_condition": "& 0x40",
+      "points": 25
+    },
+    {
+      "id": "silver_gym_8_clair",
+      "name": "Rising Badge",
+      "description": "Defeat Clair and earn the Rising Badge",
+      "category": "gym",
+      "icon": "gym_8.png",
+      "target_value": 1,
+      "rarity": "uncommon",
+      "memory_address": "0xD35C",
+      "memory_condition": "& 0x80",
+      "points": 30
+    },
+    {
+      "id": "silver_gym_all",
+      "name": "Johto Gym Champion",
+      "description": "Defeat all 8 Gym Leaders in Johto",
+      "category": "gym",
+      "icon": "gym_all.png",
+      "target_value": 8,
+      "rarity": "rare",
+      "points": 150
+    },
+    {
+      "id": "silver_elite_four_will",
+      "name": "Psychic Master Slayer",
+      "description": "Defeat Will of the Elite Four",
+      "category": "elite_four",
+      "icon": "will.png",
+      "target_value": 1,
+      "rarity": "uncommon",
+      "points": 50
+    },
+    {
+      "id": "silver_elite_four_koga",
+      "name": "Poison Master Slayer",
+      "description": "Defeat Koga of the Elite Four",
+      "category": "elite_four",
+      "icon": "koga.png",
+      "target_value": 1,
+      "rarity": "uncommon",
+      "points": 50
+    },
+    {
+      "id": "silver_elite_four_bruno",
+      "name": "Fighting Master Slayer",
+      "description": "Defeat Bruno of the Elite Four",
+      "category": "elite_four",
+      "icon": "bruno.png",
+      "target_value": 1,
+      "rarity": "uncommon",
+      "points": 50
+    },
+    {
+      "id": "silver_elite_four_karen",
+      "name": "Dark Master Slayer",
+      "description": "Defeat Karen of the Elite Four",
+      "category": "elite_four",
+      "icon": "karen.png",
+      "target_value": 1,
+      "rarity": "rare",
+      "points": 75
+    },
+    {
+      "id": "silver_elite_four_all",
+      "name": "Elite Four Conqueror",
+      "description": "Defeat all members of the Elite Four",
+      "category": "elite_four",
+      "icon": "elite_four.png",
+      "target_value": 4,
+      "rarity": "epic",
+      "points": 200
+    },
+    {
+      "id": "silver_champion_lance",
+      "name": "Johto Champion",
+      "description": "Defeat Lance and become the Pokemon Champion",
+      "category": "champion",
+      "icon": "champion.png",
+      "target_value": 1,
+      "rarity": "epic",
+      "points": 500
+    },
+    {
+      "id": "silver_red_battle",
+      "name": "Mountain Summit",
+      "description": "Defeat Red at Mt. Silver",
+      "category": "special",
+      "icon": "red.png",
+      "target_value": 1,
+      "rarity": "legendary",
+      "points": 1000
+    }
+  ]
+}

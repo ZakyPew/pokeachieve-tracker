@@ -1,0 +1,82 @@
+{
+    "default_by_gen":  {
+                           "1":  {
+                                     "max_unlocks_per_poll":  3,
+                                     "max_new_catches_per_poll":  5,
+                                     "max_major_unlocks_per_poll":  2
+                                 },
+                           "2":  {
+                                     "max_unlocks_per_poll":  3,
+                                     "max_new_catches_per_poll":  5,
+                                     "max_major_unlocks_per_poll":  2
+                                 },
+                           "3":  {
+                                     "max_unlocks_per_poll":  8,
+                                     "max_new_catches_per_poll":  20,
+                                     "max_major_unlocks_per_poll":  3,
+                                     "unlock_confirmations_gym_gen3":  2,
+                                     "startup_max_unlocks_per_poll":  12,
+                                     "startup_max_major_unlocks_per_poll":  10,
+                                     "startup_unlock_confirmations_default":  1,
+                                     "startup_unlock_confirmations_legendary":  2,
+                                     "startup_unlock_confirmations_gym_gen3":  1
+                                 }
+                       },
+    "per_game":  {
+                     "pokemon_emerald":  {
+                                             "max_unlocks_per_poll":  8,
+                                             "max_new_catches_per_poll":  20,
+                                             "max_major_unlocks_per_poll":  3,
+                                             "unlock_confirmations_gym_gen3":  2,
+                                             "startup_max_unlocks_per_poll":  12,
+                                             "startup_max_major_unlocks_per_poll":  10,
+                                             "startup_unlock_confirmations_default":  1,
+                                             "startup_unlock_confirmations_legendary":  2,
+                                             "startup_unlock_confirmations_gym_gen3":  1
+                                         },
+                     "pokemon_ruby":  {
+                                          "max_unlocks_per_poll":  8,
+                                          "max_new_catches_per_poll":  20,
+                                          "max_major_unlocks_per_poll":  3,
+                                          "unlock_confirmations_gym_gen3":  2,
+                                          "startup_max_unlocks_per_poll":  12,
+                                          "startup_max_major_unlocks_per_poll":  10,
+                                          "startup_unlock_confirmations_default":  1,
+                                          "startup_unlock_confirmations_legendary":  2,
+                                          "startup_unlock_confirmations_gym_gen3":  1
+                                      },
+                     "pokemon_sapphire":  {
+                                              "max_unlocks_per_poll":  8,
+                                              "max_new_catches_per_poll":  20,
+                                              "max_major_unlocks_per_poll":  3,
+                                              "unlock_confirmations_gym_gen3":  2,
+                                              "startup_max_unlocks_per_poll":  12,
+                                              "startup_max_major_unlocks_per_poll":  10,
+                                              "startup_unlock_confirmations_default":  1,
+                                              "startup_unlock_confirmations_legendary":  2,
+                                              "startup_unlock_confirmations_gym_gen3":  1
+                                          },
+                     "pokemon_firered":  {
+                                             "max_unlocks_per_poll":  8,
+                                             "max_new_catches_per_poll":  20,
+                                             "max_major_unlocks_per_poll":  3,
+                                             "unlock_confirmations_gym_gen3":  2,
+                                             "startup_max_unlocks_per_poll":  12,
+                                             "startup_max_major_unlocks_per_poll":  10,
+                                             "startup_unlock_confirmations_default":  1,
+                                             "startup_unlock_confirmations_legendary":  2,
+                                             "startup_unlock_confirmations_gym_gen3":  1
+                                         },
+                     "pokemon_leafgreen":  {
+                                               "max_unlocks_per_poll":  8,
+                                               "max_new_catches_per_poll":  20,
+                                               "max_major_unlocks_per_poll":  3,
+                                               "unlock_confirmations_gym_gen3":  2,
+                                               "startup_max_unlocks_per_poll":  12,
+                                               "startup_max_major_unlocks_per_poll":  10,
+                                               "startup_unlock_confirmations_default":  1,
+                                               "startup_unlock_confirmations_legendary":  2,
+                                               "startup_unlock_confirmations_gym_gen3":  1
+                                           }
+                 }
+}
