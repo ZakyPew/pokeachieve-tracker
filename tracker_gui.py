@@ -110,8 +110,7 @@ def _format_party_slot_line(member: Dict[str, object], *, debug_style: bool, nam
             base = f"SLOT {slot}: Lv.{level_int} {name}"
 
     details: List[str] = []
-    if bool(member.get("shiny")):
-        details.append("Shiny")
+    details.append("Shiny" if bool(member.get("shiny")) else "Normal")
     for label, key in (("Gender", "gender"), ("Nature", "nature"), ("Ability", "ability")):
         value = member.get(key)
         if isinstance(value, str) and value.strip():
@@ -1762,14 +1761,20 @@ class PokemonMemoryReader:
 
     def _is_gen3_shiny(self, personality: int, ot_id: int) -> bool:
         """Determine Gen 3 shininess from PID and OTID."""
+        shiny_value = self._gen3_shiny_value(personality, ot_id)
+        if shiny_value is None:
+            return False
+        return int(shiny_value) < 8
+
+    def _gen3_shiny_value(self, personality: int, ot_id: int) -> Optional[int]:
+        """Return Gen 3 shiny XOR value from PID and OTID."""
         try:
             pid = int(personality) & 0xFFFFFFFF
             oid = int(ot_id) & 0xFFFFFFFF
         except (TypeError, ValueError):
-            return False
+            return None
 
-        shiny_value = ((oid >> 16) ^ (oid & 0xFFFF) ^ (pid >> 16) ^ (pid & 0xFFFF)) & 0xFFFF
-        return shiny_value < 8
+        return int(((oid >> 16) ^ (oid & 0xFFFF) ^ (pid >> 16) ^ (pid & 0xFFFF)) & 0xFFFF)
 
     def _is_gen2_shiny_from_dvs(self, atk_def_byte: int, spd_spc_byte: int) -> bool:
         """Determine Gen 2 shininess from DV bytes."""
@@ -1827,6 +1832,27 @@ class PokemonMemoryReader:
             ot_id = read_u32(candidate_bytes, 4)
             if personality == 0 and ot_id == 0:
                 return None
+
+            # Header bytes are not encrypted; they help disambiguate byte-order variants
+            # that can still decrypt into plausible secure substructures.
+            language_id = int(candidate_bytes[18]) & 0xFF if len(candidate_bytes) > 18 else -1
+            markings = int(candidate_bytes[27]) & 0xFF if len(candidate_bytes) > 27 else 0
+            misc_flags = int(candidate_bytes[19]) & 0xFF if len(candidate_bytes) > 19 else 0
+            header_plausibility = 0
+            if 1 <= language_id <= 7:
+                header_plausibility += 6
+            elif language_id == 0:
+                header_plausibility += 2
+            else:
+                header_plausibility -= 8
+            if 0 <= markings <= 0x0F:
+                header_plausibility += 2
+            else:
+                header_plausibility -= 2
+            if 0 <= misc_flags <= 0x7F:
+                header_plausibility += 1
+            else:
+                header_plausibility -= 1
 
             key = personality ^ ot_id
             encrypted = candidate_bytes[32:80]
@@ -1931,7 +1957,8 @@ class PokemonMemoryReader:
 
                 nature_name = self.GEN3_NATURE_NAMES[personality % len(self.GEN3_NATURE_NAMES)]
                 gender_name = self._resolve_gen3_gender_label(int(normalized_species), int(personality))
-                is_shiny = self._is_gen3_shiny(int(personality), int(ot_id))
+                shiny_xor = ((int(ot_id) >> 16) ^ (int(ot_id) & 0xFFFF) ^ (int(personality) >> 16) ^ (int(personality) & 0xFFFF)) & 0xFFFF
+                is_shiny = int(shiny_xor) < 8
 
                 held_item_id = read_u16(decrypted, growth_offset + 2)
                 experience = read_u32(decrypted, growth_offset + 4)
@@ -1940,6 +1967,7 @@ class PokemonMemoryReader:
                 if checksum_matches:
                     plausibility += 50
                 plausibility += 10
+                plausibility += int(header_plausibility)
                 plausibility += int(plausible_move_count) * 2
                 plausibility -= int(invalid_move_count) * 4
                 if isinstance(ability_name, str) and ability_name.strip():
@@ -1970,6 +1998,9 @@ class PokemonMemoryReader:
                     "moves": move_names[:4],
                     "shiny": bool(is_shiny),
                     "_score": int(plausibility),
+                    "_personality": int(personality),
+                    "_ot_id": int(ot_id),
+                    "_shiny_xor": int(shiny_xor),
                 }
 
             best_details: Optional[Dict[str, object]] = None
@@ -2012,6 +2043,7 @@ class PokemonMemoryReader:
         def _choose_best(candidates: List[List[int]], allow_mismatch: bool) -> Optional[Dict[str, object]]:
             best_details: Optional[Dict[str, object]] = None
             best_score_key: Optional[Tuple[int, int]] = None
+
             for idx, variant in enumerate(candidates):
                 details = _decode_once(variant, allow_checksum_mismatch_local=allow_mismatch)
                 if details is None:
@@ -2021,10 +2053,8 @@ class PokemonMemoryReader:
                 if best_score_key is None or score_key > best_score_key:
                     best_score_key = score_key
                     best_details = details
-            if isinstance(best_details, dict):
-                best_details.pop("_score", None)
-                return best_details
-            return None
+
+            return best_details
 
         # Prefer native byte order first. Only try transformed byte orders if
         # base decode fails, to avoid species drift on otherwise valid slots.
@@ -2551,7 +2581,7 @@ class PokemonMemoryReader:
                         return None
                     return int(normalized_species)
 
-                def _build_member(slot_data: List[int], normalized_species: int, slot_idx: int) -> Dict[str, object]:
+                def _build_member(slot_data: List[int], normalized_species: int, slot_idx: int, details: Optional[Dict[str, object]] = None) -> Dict[str, object]:
                     level = slot_data[84] if len(slot_data) > 84 and int(slot_data[84]) > 0 else None
                     member: Dict[str, object] = {
                         "id": int(normalized_species),
@@ -2560,24 +2590,24 @@ class PokemonMemoryReader:
                         "name": self.get_pokemon_name(int(normalized_species)),
                     }
 
-                    details = self._decode_gen3_party_slot_details(
+                    resolved_details = details if isinstance(details, dict) else self._decode_gen3_party_slot_details(
                         slot_data,
                         max_species_id=max_decode_species_id,
                         allow_checksum_mismatch=allow_relaxed_species,
                         species_hint_ids={int(normalized_species)},
                     )
-                    if isinstance(details, dict):
+                    if isinstance(resolved_details, dict):
                         try:
-                            detail_norm = int(details.get("normalized_species", 0))
+                            detail_norm = int(resolved_details.get("normalized_species", 0))
                         except (TypeError, ValueError):
                             detail_norm = 0
                         if detail_norm in (0, int(normalized_species)):
                             for key in ("gender", "nature", "ability"):
-                                value = details.get(key)
+                                value = resolved_details.get(key)
                                 if isinstance(value, str) and value.strip():
                                     member[key] = value.strip()
-                            member["shiny"] = bool(details.get("shiny", False))
-                            moves = details.get("moves")
+                            member["shiny"] = bool(resolved_details.get("shiny", False))
+                            moves = resolved_details.get("moves")
                             if isinstance(moves, list):
                                 clean_moves = [
                                     str(move).strip()
@@ -2586,9 +2616,83 @@ class PokemonMemoryReader:
                                 ]
                                 if clean_moves:
                                     member["moves"] = clean_moves[:4]
-                    return member
+                            try:
+                                member["_shiny_xor"] = int(resolved_details.get("_shiny_xor", -1))
+                            except (TypeError, ValueError):
+                                pass
+                            try:
+                                member["_personality"] = int(resolved_details.get("_personality")) & 0xFFFFFFFF
+                            except (TypeError, ValueError):
+                                pass
+                            try:
+                                member["_ot_id"] = int(resolved_details.get("_ot_id")) & 0xFFFFFFFF
+                            except (TypeError, ValueError):
+                                pass
 
-                def _select_best_slot_variant(variants: List[List[int]]) -> Tuple[Optional[List[int]], Optional[int]]:
+                    shiny_pid: Optional[int] = None
+                    shiny_ot: Optional[int] = None
+                    if isinstance(resolved_details, dict):
+                        try:
+                            shiny_pid = int(resolved_details.get("_personality")) & 0xFFFFFFFF
+                        except (TypeError, ValueError):
+                            shiny_pid = None
+                        try:
+                            shiny_ot = int(resolved_details.get("_ot_id")) & 0xFFFFFFFF
+                        except (TypeError, ValueError):
+                            shiny_ot = None
+
+                    # Fallback only if decode details did not provide PID/OTID.
+                    if shiny_pid is None or shiny_ot is None:
+                        try:
+                            if isinstance(slot_data, list) and len(slot_data) >= 8:
+                                shiny_pid = (int(slot_data[0]) | (int(slot_data[1]) << 8) | (int(slot_data[2]) << 16) | (int(slot_data[3]) << 24)) & 0xFFFFFFFF
+                                shiny_ot = (int(slot_data[4]) | (int(slot_data[5]) << 8) | (int(slot_data[6]) << 16) | (int(slot_data[7]) << 24)) & 0xFFFFFFFF
+                        except Exception:
+                            shiny_pid = None
+                            shiny_ot = None
+
+                    try:
+                        if shiny_pid is not None and shiny_ot is not None:
+                            member["_personality"] = int(shiny_pid) & 0xFFFFFFFF
+                            member["_ot_id"] = int(shiny_ot) & 0xFFFFFFFF
+                            shiny_value = self._gen3_shiny_value(shiny_pid, shiny_ot)
+                            if shiny_value is not None:
+                                member["shiny"] = int(shiny_value) < 8
+                                member["_shiny_xor"] = int(shiny_value)
+                    except Exception:
+                        pass
+
+                    return member
+                def _select_best_slot_variant(variants: List[List[int]]) -> Tuple[Optional[List[int]], Optional[int], Optional[Dict[str, object]]]:
+                    best_variant: Optional[List[int]] = None
+                    best_species: Optional[int] = None
+                    best_details: Optional[Dict[str, object]] = None
+                    best_score_key: Optional[Tuple[int, int]] = None
+
+                    for idx, variant in enumerate(variants):
+                        details = self._decode_gen3_party_slot_details(
+                            variant,
+                            max_species_id=max_decode_species_id,
+                            allow_checksum_mismatch=allow_relaxed_species,
+                        )
+                        if not isinstance(details, dict):
+                            continue
+                        try:
+                            normalized_species = int(details.get("normalized_species", 0) or 0)
+                        except (TypeError, ValueError):
+                            normalized_species = 0
+                        if normalized_species <= 0 or normalized_species > max_species_id:
+                            continue
+                        score_key = (int(details.get("_score", 0)), -int(idx))
+                        if best_score_key is None or score_key > best_score_key:
+                            best_score_key = score_key
+                            best_variant = variant
+                            best_species = int(normalized_species)
+                            best_details = details
+
+                    if best_variant is not None and best_species is not None:
+                        return best_variant, int(best_species), best_details
+
                     for variant in variants:
                         species_id = _decode_species(variant)
                         if species_id is None:
@@ -2596,8 +2700,8 @@ class PokemonMemoryReader:
                         normalized_species = _normalize_species(species_id)
                         if normalized_species is None:
                             continue
-                        return variant, int(normalized_species)
-                    return None, None
+                        return variant, int(normalized_species), None
+                    return None, None, None
 
 
                 # Fast path: read contiguous party block once.
@@ -2615,11 +2719,11 @@ class PokemonMemoryReader:
                                         decode_failures += 1
                                         continue
                                     slot_data = [int(v) & 0xFF for v in block_values[offset:offset + int(slot_size)]]
-                                    selected_slot_data, selected_species = _select_best_slot_variant([slot_data])
+                                    selected_slot_data, selected_species, selected_details = _select_best_slot_variant([slot_data])
                                     if selected_slot_data is None or selected_species is None:
                                         decode_failures += 1
                                         continue
-                                    decoded_party.append(_build_member(selected_slot_data, int(selected_species), slot_idx))
+                                    decoded_party.append(_build_member(selected_slot_data, int(selected_species), slot_idx, details=selected_details))
                                 # Only short-circuit on a complete decode; partial bulk reads can
                                 # be misleading on some cores, so fall through to per-slot recovery.
                                 if len(decoded_party) >= int(slot_count):
@@ -2646,11 +2750,11 @@ class PokemonMemoryReader:
                                             variant_failures += 1
                                             continue
                                         slot_data = variant_block[offset:offset + int(slot_size)]
-                                        selected_slot_data, selected_species = _select_best_slot_variant([slot_data])
+                                        selected_slot_data, selected_species, selected_details = _select_best_slot_variant([slot_data])
                                         if selected_slot_data is None or selected_species is None:
                                             variant_failures += 1
                                             continue
-                                        variant_party.append(_build_member(selected_slot_data, int(selected_species), slot_idx))
+                                        variant_party.append(_build_member(selected_slot_data, int(selected_species), slot_idx, details=selected_details))
                                     if len(variant_party) > len(best_variant_party):
                                         best_variant_party = variant_party
                                         best_variant_failures = variant_failures
@@ -2686,7 +2790,7 @@ class PokemonMemoryReader:
                                     odd_bytes = [int(v) & 0xFF for v in bulk_double[1:slot_size * 2:2]]
                                     slot_data_variants.append(even_bytes)
                                     slot_data_variants.append(odd_bytes)
-                    selected_slot_data, selected_species = _select_best_slot_variant(slot_data_variants)
+                    selected_slot_data, selected_species, selected_details = _select_best_slot_variant(slot_data_variants)
 
                     # If bulk reads are present but fail checksum/decode, retry with direct byte reads.
                     if (selected_slot_data is None or selected_species is None) and allow_party_byte_fallback:
@@ -2737,13 +2841,13 @@ class PokemonMemoryReader:
                             deduped_slot_data_candidates.append(slot_variant)
 
                         if selected_slot_data is None or selected_species is None:
-                            selected_slot_data, selected_species = _select_best_slot_variant(deduped_slot_data_candidates)
+                            selected_slot_data, selected_species, selected_details = _select_best_slot_variant(deduped_slot_data_candidates)
 
                     if selected_slot_data is None or selected_species is None:
                         decode_failures += 1
                         continue
 
-                    decoded_party.append(_build_member(selected_slot_data, int(selected_species), slot_idx))
+                    decoded_party.append(_build_member(selected_slot_data, int(selected_species), slot_idx, details=selected_details))
                 return decoded_party, decode_failures
 
             for count_candidate, start_candidate in ordered_pairs:
@@ -3740,7 +3844,8 @@ class AchievementTracker:
                 "level": level,
                 "slot": slot,
             }
-
+            if bool(member.get("shiny", False)):
+                normalized_member["shiny"] = True
             raw_name = member.get("name")
             if isinstance(raw_name, str) and raw_name.strip():
                 normalized_member["name"] = raw_name.strip()
@@ -3759,6 +3864,16 @@ class AchievementTracker:
                 ]
                 if clean_moves:
                     normalized_member["moves"] = clean_moves[:4]
+
+            # Preserve Gen3 shiny debug metadata for structured party_slot logging.
+            for src_key, dst_key in (("_shiny_xor", "_shiny_xor"), ("shiny_xor", "_shiny_xor"), ("_personality", "_personality"), ("personality", "_personality"), ("_ot_id", "_ot_id"), ("ot_id", "_ot_id")):
+                raw_value = member.get(src_key)
+                if raw_value is None:
+                    continue
+                try:
+                    normalized_member[dst_key] = int(raw_value)
+                except (TypeError, ValueError):
+                    continue
 
             normalized_party.append(normalized_member)
 
@@ -4670,6 +4785,10 @@ class AchievementTracker:
                     "id": dex_id,
                     "name": member.get("name") if isinstance(member.get("name"), str) else (self.pokemon_reader.get_pokemon_name(dex_id) if dex_id > 0 else f"Pokemon #{dex_id}"),
                     "level": member.get("level"),
+                    "shiny": bool(member.get("shiny", False)),
+                    "shiny_xor": member.get("_shiny_xor"),
+                    "personality": member.get("_personality"),
+                    "ot_id": member.get("_ot_id"),
                     "gender": member.get("gender"),
                     "nature": member.get("nature"),
                     "ability": member.get("ability"),
@@ -4689,7 +4808,15 @@ class AchievementTracker:
                     name_resolver=self.pokemon_reader.get_pokemon_name if self.pokemon_reader else None,
                 )
                 if line:
-                    log_event(logging.INFO, "party_slot", game=self.game_name, text=line)
+                    log_fields: Dict[str, object] = {
+                        "game": self.game_name,
+                        "text": line,
+                    }
+                    for key in ("slot", "id", "shiny", "shiny_xor", "personality", "ot_id"):
+                        value = slot_info.get(key)
+                        if value is not None:
+                            log_fields[key] = value
+                    log_event(logging.INFO, "party_slot", **log_fields)
         else:
             if not drop_pending_set and current_party == self._last_party:
                 self._pending_party_change = None
@@ -5334,17 +5461,23 @@ class PokeAchieveGUI:
             )
             gender_label.pack(side=tk.LEFT, padx=(0, 0))
 
+            sprite_frame = ttk.Frame(card)
+            sprite_frame.pack(fill=tk.X, pady=(0, 2))
+
+            sprite_anchor = ttk.Frame(sprite_frame)
+            sprite_anchor.pack(anchor=tk.CENTER)
+
+            sprite_label = ttk.Label(sprite_anchor, text="No Sprite", justify=tk.CENTER, anchor=tk.CENTER)
+            sprite_label.pack(anchor=tk.CENTER)
+
             shiny_label = ttk.Label(
-                header_frame,
+                sprite_anchor,
                 text="",
                 justify=tk.RIGHT,
-                anchor=tk.E,
+                anchor=tk.NE,
                 width=0,
             )
-            shiny_label.pack(side=tk.LEFT, padx=(1, 0))
-
-            sprite_label = ttk.Label(card, text="No Sprite", justify=tk.CENTER, anchor=tk.CENTER)
-            sprite_label.pack(fill=tk.X, pady=(0, 2))
+            shiny_label.place(in_=sprite_label, relx=1.0, x=0, y=0, anchor="ne")
 
             type_frame = ttk.Frame(card)
             type_frame.pack(anchor=tk.CENTER, pady=(0, 4))
@@ -6920,5 +7053,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
