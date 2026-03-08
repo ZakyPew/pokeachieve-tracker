@@ -201,7 +201,10 @@ class ReportingValidationTests(unittest.TestCase):
         self.assertEqual(reader._normalize_gen3_species_id(252), 201)
         self.assertEqual(reader._normalize_gen3_species_id(276), 201)
         self.assertEqual(reader._normalize_gen3_species_id(277), 252)
-        self.assertEqual(reader._normalize_gen3_species_id(411), 386)
+        self.assertEqual(reader._normalize_gen3_species_id(310), 279)
+        self.assertEqual(reader._normalize_gen3_species_id(332), 328)
+        self.assertEqual(reader._normalize_gen3_species_id(410), 386)
+        self.assertEqual(reader._normalize_gen3_species_id(411), 358)
         self.assertIsNone(reader._normalize_gen3_species_id(412))
 
     def test_gen3_party_normalizes_internal_species_output(self):
@@ -1094,5 +1097,3 @@ if __name__ == "__main__":
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(ReportingValidationTests)
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     raise SystemExit(0 if result.wasSuccessful() else 1)
-
-

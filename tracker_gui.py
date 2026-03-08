@@ -53,6 +53,70 @@ def log_event(level: int, event: str, **fields):
     else:
         LOGGER.log(level, "%s", event)
 
+
+
+def _format_party_slot_line(member: Dict[str, object], *, debug_style: bool, name_resolver: Optional[Callable[[int], str]] = None) -> Optional[str]:
+    """Render a party slot line for debug/tracker logs with optional metadata."""
+    if not isinstance(member, dict):
+        return None
+
+    try:
+        slot = int(member.get("slot", 0))
+    except (TypeError, ValueError):
+        return None
+    if slot <= 0:
+        return None
+
+    pokemon_id = 0
+    try:
+        pokemon_id = int(member.get("id", 0))
+    except (TypeError, ValueError):
+        pokemon_id = 0
+
+    name = member.get("name")
+    if not isinstance(name, str) or not name.strip():
+        if callable(name_resolver) and pokemon_id > 0:
+            try:
+                name = name_resolver(pokemon_id)
+            except Exception:
+                name = None
+    if not isinstance(name, str) or not name.strip():
+        name = f"Pokemon #{pokemon_id}" if pokemon_id > 0 else "Unknown"
+
+    level_int = None
+    level_value = member.get("level")
+    try:
+        level_candidate = int(level_value) if level_value is not None else None
+        if level_candidate is not None and level_candidate > 0:
+            level_int = level_candidate
+    except (TypeError, ValueError):
+        level_int = None
+
+    if debug_style:
+        base = f"Party Slot {slot}: {name}"
+        if level_int is not None:
+            base = f"Party Slot {slot}: {name}, Lv.{level_int}"
+    else:
+        base = f"SLOT {slot}: {name}"
+        if level_int is not None:
+            base = f"SLOT {slot}: Lv.{level_int} {name}"
+
+    details: List[str] = []
+    for label, key in (("Gender", "gender"), ("Nature", "nature"), ("Ability", "ability")):
+        value = member.get(key)
+        if isinstance(value, str) and value.strip():
+            details.append(f"{label}: {value.strip()}")
+
+    moves = member.get("moves")
+    if isinstance(moves, list):
+        for move in moves:
+            if isinstance(move, str) and move.strip():
+                details.append(move.strip())
+
+    if details:
+        base = f"{base} / {' / '.join(details)}"
+    return base
+
 # Import game configuration system
 sys.path.insert(0, str(Path(__file__).parent.parent))
 try:
@@ -1209,12 +1273,18 @@ class PokemonMemoryReader:
 
     # Gen 3 encrypted party substructure orders by personality % 24.
     # Canonical Gen 3 substructure order by personality % 24.
-    # Order tuple values: 0=Growth, 1=Attacks, 2=EVs/Condition, 3=Misc.
     GEN3_PARTY_SUBSTRUCT_ORDERS = [
         (0, 1, 2, 3), (0, 1, 3, 2), (0, 2, 1, 3), (0, 2, 3, 1), (0, 3, 1, 2), (0, 3, 2, 1),
         (1, 0, 2, 3), (1, 0, 3, 2), (1, 2, 0, 3), (1, 2, 3, 0), (1, 3, 0, 2), (1, 3, 2, 0),
         (2, 0, 1, 3), (2, 0, 3, 1), (2, 1, 0, 3), (2, 1, 3, 0), (2, 3, 0, 1), (2, 3, 1, 0),
         (3, 0, 1, 2), (3, 0, 2, 1), (3, 1, 0, 2), (3, 1, 2, 0), (3, 2, 0, 1), (3, 2, 1, 0),
+    ]
+    # Alternate sequence previously used by the tracker.
+    GEN3_PARTY_SUBSTRUCT_ORDERS_ALT = [
+        (0, 1, 2, 3), (0, 1, 3, 2), (0, 2, 1, 3), (0, 3, 1, 2), (0, 2, 3, 1), (0, 3, 2, 1),
+        (1, 0, 2, 3), (1, 0, 3, 2), (2, 0, 1, 3), (3, 0, 1, 2), (2, 0, 3, 1), (3, 0, 2, 1),
+        (1, 2, 0, 3), (1, 3, 0, 2), (2, 1, 0, 3), (3, 1, 0, 2), (2, 3, 0, 1), (3, 2, 0, 1),
+        (1, 2, 3, 0), (1, 3, 2, 0), (2, 1, 3, 0), (3, 1, 2, 0), (2, 3, 1, 0), (3, 2, 1, 0),
     ]
     GEN3_INTERNAL_SPECIES_MAX = 411
     GEN3_INTERNAL_UNOWN_START = 252
@@ -1222,6 +1292,13 @@ class PokemonMemoryReader:
     GEN3_INTERNAL_NATIONAL_OFFSET_START = 277
     GEN3_INTERNAL_TO_NATIONAL_OFFSET = 25
     GEN3_UNOWN_NATIONAL_ID = 201
+    GEN3_NATURE_NAMES = [
+        "Hardy", "Lonely", "Brave", "Adamant", "Naughty",
+        "Bold", "Docile", "Relaxed", "Impish", "Lax",
+        "Timid", "Hasty", "Serious", "Jolly", "Naive",
+        "Modest", "Mild", "Quiet", "Bashful", "Rash",
+        "Calm", "Gentle", "Sassy", "Careful", "Quirky",
+    ]
 
     def __init__(self, retroarch: RetroArchClient):
         self.retroarch = retroarch
@@ -1232,6 +1309,151 @@ class PokemonMemoryReader:
         self._pointer_unreadable_last_attempt: Dict[str, float] = {}
         self._last_gen3_party_selection: Dict[str, Dict[str, object]] = {}
         self._last_party_read_meta: Dict[str, object] = {}
+        self._gen3_gender_rates: Dict[int, int] = {}
+        self._gen3_species_ability_ids: Dict[int, Tuple[int, int]] = {}
+        self._gen3_ability_names: Dict[int, str] = {}
+        self._gen3_move_names: Dict[int, str] = {}
+        self._gen3_internal_to_national: Dict[int, int] = {}
+        self._load_gen3_reference_data()
+
+    @staticmethod
+    def _humanize_identifier(identifier: str) -> str:
+        """Convert canonical identifier names (kebab/snake) into display names."""
+        if not isinstance(identifier, str):
+            return ""
+        cleaned = identifier.strip().replace("_", "-")
+        if not cleaned:
+            return ""
+        words: List[str] = []
+        for token in cleaned.split("-"):
+            token = token.strip()
+            if not token:
+                continue
+            words.append(token[0].upper() + token[1:])
+        return " ".join(words)
+
+    def _load_gen3_reference_data(self):
+        """Load Gen 3 metadata lookup tables for party detail decoding."""
+        base_dir = Path(__file__).resolve().parent
+        gender_path = base_dir / "gen3_gender_map.json"
+        species_ability_path = base_dir / "gen3_species_abilities.json"
+        ability_name_path = base_dir / "gen3_ability_names.json"
+        move_name_path = base_dir / "gen3_move_names.json"
+        internal_species_path = base_dir / "gen3_internal_to_national.json"
+
+        def _read_json(path: Path) -> Dict[str, object]:
+            if not path.exists():
+                return {}
+            try:
+                raw = path.read_text(encoding="utf-8")
+                parsed = json.loads(raw)
+                return parsed if isinstance(parsed, dict) else {}
+            except Exception as exc:
+                log_event(
+                    logging.WARNING,
+                    "gen3_reference_data_load_failed",
+                    path=str(path),
+                    error_type=type(exc).__name__,
+                    error=str(exc),
+                )
+                return {}
+
+        raw_gender = _read_json(gender_path)
+        raw_species_abilities = _read_json(species_ability_path)
+        raw_ability_names = _read_json(ability_name_path)
+        raw_move_names = _read_json(move_name_path)
+        raw_internal_species = _read_json(internal_species_path)
+
+        gender_rates: Dict[int, int] = {}
+        for key, value in raw_gender.items():
+            try:
+                gender_rates[int(key)] = int(value)
+            except (TypeError, ValueError):
+                continue
+        self._gen3_gender_rates = gender_rates
+
+        species_ability_ids: Dict[int, Tuple[int, int]] = {}
+        for key, value in raw_species_abilities.items():
+            try:
+                species_id = int(key)
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(value, list):
+                continue
+            first = 0
+            second = 0
+            if len(value) >= 1:
+                try:
+                    first = int(value[0])
+                except (TypeError, ValueError):
+                    first = 0
+            if len(value) >= 2:
+                try:
+                    second = int(value[1])
+                except (TypeError, ValueError):
+                    second = 0
+            species_ability_ids[species_id] = (first, second)
+        self._gen3_species_ability_ids = species_ability_ids
+
+        ability_names: Dict[int, str] = {}
+        for key, value in raw_ability_names.items():
+            try:
+                ability_id = int(key)
+            except (TypeError, ValueError):
+                continue
+            rendered = self._humanize_identifier(str(value))
+            if rendered:
+                ability_names[ability_id] = rendered
+        self._gen3_ability_names = ability_names
+
+        move_names: Dict[int, str] = {}
+        for key, value in raw_move_names.items():
+            try:
+                move_id = int(key)
+            except (TypeError, ValueError):
+                continue
+            rendered = self._humanize_identifier(str(value))
+            if rendered:
+                move_names[move_id] = rendered
+        self._gen3_move_names = move_names
+
+        internal_to_national: Dict[int, int] = {}
+        for key, value in raw_internal_species.items():
+            try:
+                internal_species = int(key)
+                national_species = int(value)
+            except (TypeError, ValueError):
+                continue
+            if internal_species > 0 and national_species > 0:
+                internal_to_national[internal_species] = national_species
+        self._gen3_internal_to_national = internal_to_national
+
+        if not (
+            self._gen3_gender_rates
+            and self._gen3_species_ability_ids
+            and self._gen3_ability_names
+            and self._gen3_move_names
+            and self._gen3_internal_to_national
+        ):
+            log_event(
+                logging.WARNING,
+                "gen3_reference_data_incomplete",
+                genders=len(self._gen3_gender_rates),
+                species_abilities=len(self._gen3_species_ability_ids),
+                abilities=len(self._gen3_ability_names),
+                moves=len(self._gen3_move_names),
+                internal_species_map=len(self._gen3_internal_to_national),
+            )
+        else:
+            log_event(
+                logging.INFO,
+                "gen3_reference_data_loaded",
+                genders=len(self._gen3_gender_rates),
+                species_abilities=len(self._gen3_species_ability_ids),
+                abilities=len(self._gen3_ability_names),
+                moves=len(self._gen3_move_names),
+                internal_species_map=len(self._gen3_internal_to_national),
+            )
 
     def get_pokemon_name(self, pokemon_id: int) -> str:
         """Get Pokemon name from ID"""
@@ -1251,6 +1473,18 @@ class PokemonMemoryReader:
         if normalized <= 0 or normalized > int(self.GEN3_INTERNAL_SPECIES_MAX):
             return None
 
+        mapped_species = self._gen3_internal_to_national.get(normalized)
+        if mapped_species is not None:
+            try:
+                mapped_species_id = int(mapped_species)
+            except (TypeError, ValueError):
+                return None
+            max_national_species = max(self.POKEMON_NAMES.keys()) if self.POKEMON_NAMES else 0
+            if mapped_species_id > 0 and mapped_species_id <= int(max_national_species):
+                return int(mapped_species_id)
+            return None
+
+        # Fallback mapping for environments where the lookup table is unavailable.
         if int(self.GEN3_INTERNAL_UNOWN_START) <= normalized <= int(self.GEN3_INTERNAL_UNOWN_END):
             return int(self.GEN3_UNOWN_NATIONAL_ID)
 
@@ -1258,7 +1492,7 @@ class PokemonMemoryReader:
             normalized -= int(self.GEN3_INTERNAL_TO_NATIONAL_OFFSET)
 
         return normalized
-    
+
     def get_game_config(self, game_name: str) -> Optional[Dict]:
         """Get memory addresses for current game - uses game_configs when available"""
         # Strip ROM hack suffixes like "(Enhanced)", "(U)", etc.
@@ -1454,42 +1688,99 @@ class PokemonMemoryReader:
             streak=streak,
         )
 
-    def _decode_gen3_party_species(self, slot_bytes: List[int], max_species_id: int, allow_checksum_mismatch: bool = False) -> Optional[int]:
-        """Decode species from encrypted Gen 3 party data slot."""
-        if not isinstance(slot_bytes, list) or len(slot_bytes) < 80:
+    def _resolve_gen3_gender_label(self, species_id: int, personality: int) -> str:
+        """Resolve displayed gender from species gender rate and PID."""
+        try:
+            gender_rate = int(self._gen3_gender_rates.get(int(species_id)))
+        except (TypeError, ValueError):
+            return "Unknown"
+
+        if gender_rate < 0:
+            return "Genderless"
+        if gender_rate <= 0:
+            return "Male"
+        if gender_rate >= 8:
+            return "Female"
+
+        threshold = int(gender_rate) * 32
+        pid_low = int(personality) & 0xFF
+        return "Female" if pid_low < threshold else "Male"
+
+    def _resolve_gen3_ability_name(self, species_id: int, ability_slot: int) -> Optional[str]:
+        """Resolve ability display name for a species using Gen 3 ability slot bit."""
+        ability_pair = self._gen3_species_ability_ids.get(int(species_id))
+        if not ability_pair:
             return None
 
-        def _decode_once(candidate_bytes: List[int], allow_checksum_mismatch_local: bool = False) -> Optional[int]:
-            if len(candidate_bytes) < 80:
+        first_id = int(ability_pair[0]) if len(ability_pair) > 0 else 0
+        second_id = int(ability_pair[1]) if len(ability_pair) > 1 else 0
+
+        selected_id = second_id if int(ability_slot) == 1 and second_id > 0 else first_id
+        if selected_id <= 0:
+            return None
+
+        return self._gen3_ability_names.get(int(selected_id), f"Ability #{int(selected_id)}")
+
+    def _resolve_gen3_move_name(self, move_id: int) -> str:
+        """Resolve move display name for Gen 3 move IDs."""
+        try:
+            mid = int(move_id)
+        except (TypeError, ValueError):
+            return "Unknown Move"
+        if mid <= 0:
+            return "Unknown Move"
+        return self._gen3_move_names.get(mid, f"Move #{mid}")
+
+    def _decode_gen3_party_slot_details(self, slot_bytes: List[int], max_species_id: int, allow_checksum_mismatch: bool = False, species_hint_ids: Optional[Set[int]] = None) -> Optional[Dict[str, object]]:
+        """Decode species + metadata from encrypted Gen 3 party slot data."""
+        if not isinstance(slot_bytes, list) or len(slot_bytes) < 100:
+            return None
+
+        max_national_species = max(self.POKEMON_NAMES.keys())
+        hint_species_ids: Set[int] = set()
+        if isinstance(species_hint_ids, (set, list, tuple)):
+            for raw_id in species_hint_ids:
+                try:
+                    normalized_hint = int(raw_id)
+                except (TypeError, ValueError):
+                    continue
+                if normalized_hint > 0:
+                    hint_species_ids.add(normalized_hint)
+        try:
+            max_known_move_id = max(int(mid) for mid in self._gen3_move_names.keys())
+        except Exception:
+            max_known_move_id = 0
+        if int(max_known_move_id) <= 0:
+            max_known_move_id = 354
+
+        def _decode_once(candidate_bytes: List[int], allow_checksum_mismatch_local: bool = False) -> Optional[Dict[str, object]]:
+            if len(candidate_bytes) < 100:
                 return None
 
-            def read_u32(offset: int) -> int:
+            def read_u16(buffer: List[int], offset: int) -> int:
+                return int(buffer[offset]) | (int(buffer[offset + 1]) << 8)
+
+            def read_u32(buffer: List[int], offset: int) -> int:
                 return (
-                    int(candidate_bytes[offset])
-                    | (int(candidate_bytes[offset + 1]) << 8)
-                    | (int(candidate_bytes[offset + 2]) << 16)
-                    | (int(candidate_bytes[offset + 3]) << 24)
+                    int(buffer[offset])
+                    | (int(buffer[offset + 1]) << 8)
+                    | (int(buffer[offset + 2]) << 16)
+                    | (int(buffer[offset + 3]) << 24)
                 )
 
-            personality = read_u32(0)
-            ot_id = read_u32(4)
+            personality = read_u32(candidate_bytes, 0)
+            ot_id = read_u32(candidate_bytes, 4)
             if personality == 0 and ot_id == 0:
                 return None
-            key = personality ^ ot_id
 
+            key = personality ^ ot_id
             encrypted = candidate_bytes[32:80]
             if len(encrypted) < 48:
                 return None
 
             decrypted = [0] * 48
             for offset in range(0, 48, 4):
-                word = (
-                    int(encrypted[offset])
-                    | (int(encrypted[offset + 1]) << 8)
-                    | (int(encrypted[offset + 2]) << 16)
-                    | (int(encrypted[offset + 3]) << 24)
-                )
-                word ^= key
+                word = read_u32(encrypted, offset) ^ key
                 decrypted[offset] = word & 0xFF
                 decrypted[offset + 1] = (word >> 8) & 0xFF
                 decrypted[offset + 2] = (word >> 16) & 0xFF
@@ -1498,31 +1789,149 @@ class PokemonMemoryReader:
             stored_checksum = int(candidate_bytes[28]) | (int(candidate_bytes[29]) << 8)
             calc_checksum = 0
             for off in range(0, 48, 2):
-                word = int(decrypted[off]) | (int(decrypted[off + 1]) << 8)
-                calc_checksum = (calc_checksum + word) & 0xFFFF
-            if (calc_checksum != stored_checksum) and (not allow_checksum_mismatch_local):
+                calc_checksum = (calc_checksum + read_u16(decrypted, off)) & 0xFFFF
+            checksum_matches = int(calc_checksum) == int(stored_checksum)
+            if (not checksum_matches) and (not allow_checksum_mismatch_local):
                 return None
 
-            order = self.GEN3_PARTY_SUBSTRUCT_ORDERS[personality % 24]
-            growth_index = order.index(0)
-            growth_offset = growth_index * 12
-            species = int(decrypted[growth_offset]) | (int(decrypted[growth_offset + 1]) << 8)
+            order_candidates: List[Tuple[int, int, int, int]] = []
+            primary_order = tuple(self.GEN3_PARTY_SUBSTRUCT_ORDERS[personality % 24])
+            order_candidates.append(primary_order)
+            try:
+                alt_order = tuple(self.GEN3_PARTY_SUBSTRUCT_ORDERS_ALT[personality % 24])
+                if alt_order not in order_candidates:
+                    order_candidates.append(alt_order)
+            except Exception:
+                pass
 
-            if species <= 0 or species > max_species_id:
-                return None
+            def _decode_with_order(order_tuple: Tuple[int, int, int, int]) -> Optional[Dict[str, object]]:
+                growth_offset = order_tuple.index(0) * 12
+                attacks_offset = order_tuple.index(1) * 12
+                misc_offset = order_tuple.index(3) * 12
 
-            # Additional plausibility checks when checksum is bypassed.
-            if allow_checksum_mismatch_local:
-                level = int(candidate_bytes[84]) if len(candidate_bytes) > 84 else 0
-                if level <= 0 or level > 100:
+                species_internal = read_u16(decrypted, growth_offset)
+                if species_internal <= 0 or species_internal > int(max_species_id):
                     return None
-            return species
+
+                normalized_species = self._normalize_gen3_species_id(species_internal)
+                if normalized_species is None or normalized_species <= 0 or normalized_species > int(max_national_species):
+                    return None
+
+                level = int(candidate_bytes[84]) if len(candidate_bytes) > 84 else 0
+                level_value: Optional[int] = None
+                if 0 < level <= 100:
+                    level_value = int(level)
+                else:
+                    return None
+
+                # Party stat sanity helps reject wrong byte-order variants that can still pass checksum/species.
+                current_hp = read_u16(candidate_bytes, 86)
+                max_hp = read_u16(candidate_bytes, 88)
+                if max_hp <= 0 or max_hp > 999:
+                    return None
+                if current_hp < 0 or current_hp > max_hp:
+                    return None
+
+                derived_stats = [
+                    read_u16(candidate_bytes, 90),
+                    read_u16(candidate_bytes, 92),
+                    read_u16(candidate_bytes, 94),
+                    read_u16(candidate_bytes, 96),
+                    read_u16(candidate_bytes, 98),
+                ]
+                if any(stat <= 0 or stat > 999 for stat in derived_stats):
+                    return None
+
+                move_ids = [
+                    read_u16(decrypted, attacks_offset + 0),
+                    read_u16(decrypted, attacks_offset + 2),
+                    read_u16(decrypted, attacks_offset + 4),
+                    read_u16(decrypted, attacks_offset + 6),
+                ]
+                move_pp = [
+                    int(decrypted[attacks_offset + 8 + i]) & 0xFF
+                    for i in range(4)
+                ]
+
+                move_names: List[str] = []
+                plausible_move_count = 0
+                invalid_move_count = 0
+                for move_id, pp_value in zip(move_ids, move_pp):
+                    mid = int(move_id)
+                    if mid <= 0:
+                        continue
+                    rendered = self._resolve_gen3_move_name(mid)
+                    move_names.append(rendered)
+                    if mid > int(max_known_move_id):
+                        invalid_move_count += 1
+                        continue
+                    if int(pp_value) > 63:
+                        invalid_move_count += 1
+                        continue
+                    plausible_move_count += 1
+
+                iv_ability_word = read_u32(decrypted, misc_offset + 4)
+                ability_slot = (iv_ability_word >> 31) & 0x1
+                ability_name = self._resolve_gen3_ability_name(int(normalized_species), int(ability_slot))
+
+                nature_name = self.GEN3_NATURE_NAMES[personality % len(self.GEN3_NATURE_NAMES)]
+                gender_name = self._resolve_gen3_gender_label(int(normalized_species), int(personality))
+
+                held_item_id = read_u16(decrypted, growth_offset + 2)
+                experience = read_u32(decrypted, growth_offset + 4)
+
+                plausibility = 0
+                if checksum_matches:
+                    plausibility += 50
+                plausibility += 10
+                plausibility += int(plausible_move_count) * 2
+                plausibility -= int(invalid_move_count) * 4
+                if isinstance(ability_name, str) and ability_name.strip():
+                    plausibility += 2
+                if isinstance(gender_name, str) and gender_name not in ("", "Unknown"):
+                    plausibility += 1
+                if 0 <= int(held_item_id) <= 600:
+                    plausibility += 2
+                else:
+                    plausibility -= 6
+                if 0 <= int(experience) <= 2000000:
+                    plausibility += 3
+                else:
+                    plausibility -= 10
+                if hint_species_ids:
+                    if int(normalized_species) in hint_species_ids:
+                        plausibility += 6
+                    else:
+                        plausibility -= 3
+
+                return {
+                    "species": int(species_internal),
+                    "normalized_species": int(normalized_species),
+                    "level": level_value,
+                    "gender": gender_name,
+                    "nature": nature_name,
+                    "ability": ability_name,
+                    "moves": move_names[:4],
+                    "_score": int(plausibility),
+                }
+
+            best_details: Optional[Dict[str, object]] = None
+            best_score_key: Optional[Tuple[int, int]] = None
+            for order_idx, order_tuple in enumerate(order_candidates):
+                details = _decode_with_order(order_tuple)
+                if details is None:
+                    continue
+                score_key = (int(details.get("_score", 0)), -int(order_idx))
+                if best_score_key is None or score_key > best_score_key:
+                    best_score_key = score_key
+                    best_details = details
+
+            return best_details
 
         base_bytes = [int(v) & 0xFF for v in slot_bytes]
         transform_candidates: List[List[int]] = [base_bytes]
 
-        # Some cores expose word-swapped buffers for certain slot alignments.
-        if len(base_bytes) >= 80:
+        if len(base_bytes) >= 100:
             swapped16 = base_bytes[:]
             for idx in range(0, len(swapped16) - 1, 2):
                 swapped16[idx], swapped16[idx + 1] = swapped16[idx + 1], swapped16[idx]
@@ -1537,23 +1946,171 @@ class PokemonMemoryReader:
         seen_variants = set()
         unique_candidates: List[List[int]] = []
         for variant in transform_candidates:
-            key = bytes(variant[:96])
+            key = bytes(variant[:100])
             if key in seen_variants:
                 continue
             seen_variants.add(key)
             unique_candidates.append(variant)
 
-        for variant in unique_candidates:
-            species = _decode_once(variant, allow_checksum_mismatch_local=False)
-            if species is not None:
-                return species
+        def _choose_best(candidates: List[List[int]], allow_mismatch: bool) -> Optional[Dict[str, object]]:
+            best_details: Optional[Dict[str, object]] = None
+            best_score_key: Optional[Tuple[int, int]] = None
+            for idx, variant in enumerate(candidates):
+                details = _decode_once(variant, allow_checksum_mismatch_local=allow_mismatch)
+                if details is None:
+                    continue
+                score = int(details.get("_score", 0))
+                score_key = (score, -int(idx))
+                if best_score_key is None or score_key > best_score_key:
+                    best_score_key = score_key
+                    best_details = details
+            if isinstance(best_details, dict):
+                best_details.pop("_score", None)
+                return best_details
+            return None
+
+        # Prefer native byte order first. Only try transformed byte orders if
+        # base decode fails, to avoid species drift on otherwise valid slots.
+        base_candidates: List[List[int]] = [base_bytes]
+
+        strict_details = _choose_best(base_candidates, allow_mismatch=False)
+        if strict_details is not None:
+            return strict_details
+
+        strict_details = _choose_best(unique_candidates, allow_mismatch=False)
+        if strict_details is not None:
+            return strict_details
 
         if allow_checksum_mismatch:
-            for variant in unique_candidates:
-                species = _decode_once(variant, allow_checksum_mismatch_local=True)
-                if species is not None:
-                    return species
-        return None
+            relaxed_base = _choose_best(base_candidates, allow_mismatch=True)
+            if relaxed_base is not None:
+                return relaxed_base
+            return _choose_best(unique_candidates, allow_mismatch=True)
+
+    def _decode_gen3_party_species(self, slot_bytes: List[int], max_species_id: int, allow_checksum_mismatch: bool = False, species_hint_ids: Optional[Set[int]] = None) -> Optional[int]:
+        """Decode species from encrypted Gen 3 party data slot."""
+        details = self._decode_gen3_party_slot_details(
+            slot_bytes,
+            max_species_id=max_species_id,
+            allow_checksum_mismatch=allow_checksum_mismatch,
+            species_hint_ids=species_hint_ids,
+        )
+        if not isinstance(details, dict):
+            return None
+        try:
+            species_value = int(details.get("species", 0))
+        except (TypeError, ValueError):
+            return None
+        return species_value if species_value > 0 else None
+
+    def _read_gen3_slot_bytes_for_details(self, slot_addr: int, size: int) -> Optional[List[int]]:
+        """Read slot bytes required for details decode without heavy per-byte overhead."""
+        try:
+            bulk = self.retroarch.read_memory(hex(int(slot_addr)), int(size))
+        except Exception:
+            bulk = None
+        if isinstance(bulk, list) and len(bulk) >= size:
+            if all(isinstance(v, int) and 0 <= int(v) <= 0xFF for v in bulk[:size]):
+                return [int(v) & 0xFF for v in bulk[:size]]
+
+        required = list(range(0, 8)) + [28, 29] + list(range(32, 80)) + [84]
+        buffer = [0] * max(size, 85)
+        for offset in required:
+            abs_addr = int(slot_addr) + int(offset)
+            value = self.retroarch.read_memory(hex(abs_addr))
+            if not isinstance(value, int):
+                return None
+            buffer[int(offset)] = int(value) & 0xFF
+        return buffer
+
+    def _enrich_gen3_party_members(self, party_members: List[Dict], start_addr: str, slot_stride: int, slot_size: int) -> List[Dict]:
+        """Attach gender/nature/ability/moves metadata to decoded Gen 3 party members."""
+        if not isinstance(party_members, list) or not party_members:
+            return party_members
+
+        try:
+            base_addr = int(str(start_addr), 16)
+            stride = int(slot_stride)
+            size = int(slot_size)
+        except (TypeError, ValueError):
+            return party_members
+
+        if stride <= 0 or size <= 0:
+            return party_members
+
+        enriched: List[Dict] = []
+        for member in party_members:
+            if not isinstance(member, dict):
+                enriched.append(member)
+                continue
+
+            row = dict(member)
+            species_id = 0
+            try:
+                species_id = int(row.get("id", 0))
+            except (TypeError, ValueError):
+                species_id = 0
+
+            if species_id > 0:
+                row.setdefault("name", self.get_pokemon_name(species_id))
+
+            try:
+                slot = int(row.get("slot", 0))
+            except (TypeError, ValueError):
+                slot = 0
+            if slot <= 0:
+                enriched.append(row)
+                continue
+
+            slot_addr = int(base_addr) + ((int(slot) - 1) * int(stride))
+            slot_bytes = self._read_gen3_slot_bytes_for_details(slot_addr, size)
+            if not slot_bytes:
+                enriched.append(row)
+                continue
+
+            details = self._decode_gen3_party_slot_details(
+                slot_bytes,
+                max_species_id=int(self.GEN3_INTERNAL_SPECIES_MAX),
+                allow_checksum_mismatch=True,
+            )
+            if not isinstance(details, dict):
+                enriched.append(row)
+                continue
+
+            try:
+                detail_species = int(details.get("normalized_species", 0))
+            except (TypeError, ValueError):
+                detail_species = 0
+            if species_id > 0 and detail_species > 0 and detail_species != species_id:
+                enriched.append(row)
+                continue
+
+            level_value = details.get("level")
+            try:
+                level_int = int(level_value) if level_value is not None else None
+            except (TypeError, ValueError):
+                level_int = None
+            if level_int is not None and level_int > 0:
+                row["level"] = int(level_int)
+
+            for key in ("gender", "nature", "ability"):
+                value = details.get(key)
+                if isinstance(value, str) and value.strip():
+                    row[key] = value.strip()
+
+            moves_value = details.get("moves")
+            if isinstance(moves_value, list):
+                clean_moves = [
+                    str(move).strip()
+                    for move in moves_value
+                    if isinstance(move, str) and str(move).strip()
+                ]
+                if clean_moves:
+                    row["moves"] = clean_moves[:4]
+
+            enriched.append(row)
+
+        return enriched
 
     def _read_pokedex_flags(self, start_addr: str, max_pokemon: int, allow_byte_fallback: bool = True) -> List[int]:
         """Read Pokedex bitflags from a start address."""
@@ -1638,19 +2195,30 @@ class PokemonMemoryReader:
         caught = _safe_read_pokedex_flags(caught_addr)
 
         if gen == 3 and used_pointer_layout and not caught and static_caught_addr and static_caught_addr != caught_addr:
-            fallback_caught = _safe_read_pokedex_flags(static_caught_addr)
-            if fallback_caught:
+            allow_static_fallback = bool(config.get("pokedex_allow_static_fallback", 0))
+            if allow_static_fallback:
+                fallback_caught = _safe_read_pokedex_flags(static_caught_addr)
+                if fallback_caught:
+                    log_event(
+                        logging.INFO,
+                        "gen3_pointer_fallback_static",
+                        game=game_name,
+                        kind="pokedex",
+                        pointer_addr=caught_addr,
+                        static_addr=static_caught_addr,
+                        count=len(fallback_caught),
+                    )
+                    caught = fallback_caught
+                    seen_addr = static_seen_addr
+            else:
                 log_event(
                     logging.INFO,
-                    "gen3_pointer_fallback_static",
+                    "gen3_pointer_fallback_skipped",
                     game=game_name,
                     kind="pokedex",
                     pointer_addr=caught_addr,
                     static_addr=static_caught_addr,
-                    count=len(fallback_caught),
                 )
-                caught = fallback_caught
-                seen_addr = static_seen_addr
 
         # For Gen 3, always trust the caught bitset for unlock checks.
         # Count hints in achievement JSON can represent seen counts and cause false unlocks.
@@ -1893,15 +2461,30 @@ class PokemonMemoryReader:
                 decode_failures = 0
 
                 def _decode_species(slot_data: List[int]) -> Optional[int]:
-                    try:
-                        return self._decode_gen3_party_species(
+                    decoder = self._decode_gen3_party_species
+                    call_variants = (
+                        lambda: decoder(
                             slot_data,
                             max_species_id=max_decode_species_id,
                             allow_checksum_mismatch=allow_relaxed_species,
-                        )
-                    except TypeError:
-                        # Compatibility for tests/overrides using legacy signature.
-                        return self._decode_gen3_party_species(slot_data, max_species_id=max_decode_species_id)
+                        ),
+                        lambda: decoder(
+                            slot_data,
+                            max_species_id=max_decode_species_id,
+                            allow_checksum_mismatch=allow_relaxed_species,
+                        ),
+                        lambda: decoder(
+                            slot_data,
+                            max_species_id=max_decode_species_id,
+                        ),
+                        lambda: decoder(slot_data, max_decode_species_id),
+                    )
+                    for call in call_variants:
+                        try:
+                            return call()
+                        except TypeError:
+                            continue
+                    return None
 
                 def _normalize_species(species_value: int) -> Optional[int]:
                     normalized_species = self._normalize_gen3_species_id(species_value)
@@ -1910,6 +2493,54 @@ class PokemonMemoryReader:
                     if normalized_species <= 0 or normalized_species > max_species_id:
                         return None
                     return int(normalized_species)
+
+                def _build_member(slot_data: List[int], normalized_species: int, slot_idx: int) -> Dict[str, object]:
+                    level = slot_data[84] if len(slot_data) > 84 and int(slot_data[84]) > 0 else None
+                    member: Dict[str, object] = {
+                        "id": int(normalized_species),
+                        "level": int(level) if level is not None else None,
+                        "slot": int(slot_idx) + 1,
+                        "name": self.get_pokemon_name(int(normalized_species)),
+                    }
+
+                    details = self._decode_gen3_party_slot_details(
+                        slot_data,
+                        max_species_id=max_decode_species_id,
+                        allow_checksum_mismatch=allow_relaxed_species,
+                        species_hint_ids={int(normalized_species)},
+                    )
+                    if isinstance(details, dict):
+                        try:
+                            detail_norm = int(details.get("normalized_species", 0))
+                        except (TypeError, ValueError):
+                            detail_norm = 0
+                        if detail_norm in (0, int(normalized_species)):
+                            for key in ("gender", "nature", "ability"):
+                                value = details.get(key)
+                                if isinstance(value, str) and value.strip():
+                                    member[key] = value.strip()
+                            moves = details.get("moves")
+                            if isinstance(moves, list):
+                                clean_moves = [
+                                    str(move).strip()
+                                    for move in moves
+                                    if isinstance(move, str) and str(move).strip()
+                                ]
+                                if clean_moves:
+                                    member["moves"] = clean_moves[:4]
+                    return member
+
+                def _select_best_slot_variant(variants: List[List[int]]) -> Tuple[Optional[List[int]], Optional[int]]:
+                    for variant in variants:
+                        species_id = _decode_species(variant)
+                        if species_id is None:
+                            continue
+                        normalized_species = _normalize_species(species_id)
+                        if normalized_species is None:
+                            continue
+                        return variant, int(normalized_species)
+                    return None, None
+
 
                 # Fast path: read contiguous party block once.
                 if not force_gen3_party_byte_reads and slot_count > 0 and slot_stride > 0:
@@ -1926,20 +2557,11 @@ class PokemonMemoryReader:
                                         decode_failures += 1
                                         continue
                                     slot_data = [int(v) & 0xFF for v in block_values[offset:offset + int(slot_size)]]
-                                    species_id = _decode_species(slot_data)
-                                    if species_id is None:
+                                    selected_slot_data, selected_species = _select_best_slot_variant([slot_data])
+                                    if selected_slot_data is None or selected_species is None:
                                         decode_failures += 1
                                         continue
-                                    normalized_species = _normalize_species(species_id)
-                                    if normalized_species is None:
-                                        decode_failures += 1
-                                        continue
-                                    level = slot_data[84] if len(slot_data) > 84 and int(slot_data[84]) > 0 else None
-                                    decoded_party.append({
-                                        "id": normalized_species,
-                                        "level": int(level) if level is not None else None,
-                                        "slot": slot_idx + 1,
-                                    })
+                                    decoded_party.append(_build_member(selected_slot_data, int(selected_species), slot_idx))
                                 # Only short-circuit on a complete decode; partial bulk reads can
                                 # be misleading on some cores, so fall through to per-slot recovery.
                                 if len(decoded_party) >= int(slot_count):
@@ -1966,20 +2588,11 @@ class PokemonMemoryReader:
                                             variant_failures += 1
                                             continue
                                         slot_data = variant_block[offset:offset + int(slot_size)]
-                                        species_id = _decode_species(slot_data)
-                                        if species_id is None:
+                                        selected_slot_data, selected_species = _select_best_slot_variant([slot_data])
+                                        if selected_slot_data is None or selected_species is None:
                                             variant_failures += 1
                                             continue
-                                        normalized_species = _normalize_species(species_id)
-                                        if normalized_species is None:
-                                            variant_failures += 1
-                                            continue
-                                        level = slot_data[84] if len(slot_data) > 84 and int(slot_data[84]) > 0 else None
-                                        variant_party.append({
-                                            "id": normalized_species,
-                                            "level": int(level) if level is not None else None,
-                                            "slot": slot_idx + 1,
-                                        })
+                                        variant_party.append(_build_member(selected_slot_data, int(selected_species), slot_idx))
                                     if len(variant_party) > len(best_variant_party):
                                         best_variant_party = variant_party
                                         best_variant_failures = variant_failures
@@ -2015,17 +2628,7 @@ class PokemonMemoryReader:
                                     odd_bytes = [int(v) & 0xFF for v in bulk_double[1:slot_size * 2:2]]
                                     slot_data_variants.append(even_bytes)
                                     slot_data_variants.append(odd_bytes)
-                    selected_slot_data: Optional[List[int]] = None
-                    selected_species: Optional[int] = None
-                    for variant in slot_data_variants:
-                        species_id = _decode_species(variant)
-                        if species_id is not None:
-                            normalized_species = _normalize_species(species_id)
-                            if normalized_species is None:
-                                continue
-                            selected_slot_data = variant
-                            selected_species = int(normalized_species)
-                            break
+                    selected_slot_data, selected_species = _select_best_slot_variant(slot_data_variants)
 
                     # If bulk reads are present but fail checksum/decode, retry with direct byte reads.
                     if (selected_slot_data is None or selected_species is None) and allow_party_byte_fallback:
@@ -2066,32 +2669,23 @@ class PokemonMemoryReader:
                             if saw_wide_values:
                                 slot_data_candidates.extend([slot_data_addrle, slot_data_high, slot_data_addrbe])
 
+                        deduped_slot_data_candidates: List[List[int]] = []
                         seen_variant_keys = set()
                         for slot_variant in slot_data_candidates:
                             variant_key = bytes(int(v) & 0xFF for v in slot_variant[:85])
                             if variant_key in seen_variant_keys:
                                 continue
                             seen_variant_keys.add(variant_key)
+                            deduped_slot_data_candidates.append(slot_variant)
 
-                            species_id = _decode_species(slot_variant)
-                            if species_id is not None:
-                                normalized_species = _normalize_species(species_id)
-                                if normalized_species is None:
-                                    continue
-                                selected_slot_data = slot_variant
-                                selected_species = int(normalized_species)
-                                break
+                        if selected_slot_data is None or selected_species is None:
+                            selected_slot_data, selected_species = _select_best_slot_variant(deduped_slot_data_candidates)
 
                     if selected_slot_data is None or selected_species is None:
                         decode_failures += 1
                         continue
 
-                    level = selected_slot_data[84] if len(selected_slot_data) > 84 and int(selected_slot_data[84]) > 0 else None
-                    decoded_party.append({
-                        "id": selected_species,
-                        "level": int(level) if level is not None else None,
-                        "slot": slot_idx + 1,
-                    })
+                    decoded_party.append(_build_member(selected_slot_data, int(selected_species), slot_idx))
                 return decoded_party, decode_failures
 
             for count_candidate, start_candidate in ordered_pairs:
@@ -2542,6 +3136,26 @@ class PokemonMemoryReader:
                 "budget_hit": bool(budget_exceeded),
                 "reason": None,
             })
+            metadata_slots = sum(
+                1
+                for member in best_party
+                if isinstance(member, dict) and (
+                    (isinstance(member.get("gender"), str) and member.get("gender"))
+                    or (isinstance(member.get("nature"), str) and member.get("nature"))
+                    or (isinstance(member.get("ability"), str) and member.get("ability"))
+                    or (isinstance(member.get("moves"), list) and len(member.get("moves")) > 0)
+                )
+            )
+            if best_party and metadata_slots == 0:
+                log_event(
+                    logging.WARNING,
+                    "gen3_party_metadata_missing",
+                    game=game_name,
+                    decoded=len(best_party),
+                    expected=expected_count_value,
+                    start_addr=str(best_start_addr),
+                    stride=int(best_stride),
+                )
             return best_party
 
         if not count_valid:
@@ -3012,11 +3626,32 @@ class AchievementTracker:
                 if 1 <= level_candidate <= 100:
                     level = level_candidate
 
-            normalized_party.append({
+            normalized_member: Dict[str, object] = {
                 "id": pokemon_id,
                 "level": level,
                 "slot": slot,
-            })
+            }
+
+            raw_name = member.get("name")
+            if isinstance(raw_name, str) and raw_name.strip():
+                normalized_member["name"] = raw_name.strip()
+
+            for key in ("gender", "nature", "ability"):
+                value = member.get(key)
+                if isinstance(value, str) and value.strip():
+                    normalized_member[key] = value.strip()
+
+            raw_moves = member.get("moves")
+            if isinstance(raw_moves, list):
+                clean_moves = [
+                    str(move).strip()
+                    for move in raw_moves
+                    if isinstance(move, str) and str(move).strip()
+                ]
+                if clean_moves:
+                    normalized_member["moves"] = clean_moves[:4]
+
+            normalized_party.append(normalized_member)
 
         if party and not normalized_party:
             self._record_anomaly("party_read_invalid", game=self.game_name, reason="no_valid_slots")
@@ -3724,9 +4359,6 @@ class AchievementTracker:
                 )
                 self._collection_wait_streak = 0
 
-            if len(current_pokedex) >= 10 and not self._last_pokedex:
-                baseline_confirmations = 1
-
             if current_pokedex == self._collection_baseline_candidate:
                 self._collection_baseline_candidate_streak += 1
             else:
@@ -3932,8 +4564,13 @@ class AchievementTracker:
                 dex_id = int(member.get("id", 0))
                 slots.append({
                     "slot": int(member.get("slot", 0)),
-                    "name": self.pokemon_reader.get_pokemon_name(dex_id) if dex_id > 0 else f"Pokemon #{dex_id}",
+                    "id": dex_id,
+                    "name": member.get("name") if isinstance(member.get("name"), str) else (self.pokemon_reader.get_pokemon_name(dex_id) if dex_id > 0 else f"Pokemon #{dex_id}"),
                     "level": member.get("level"),
+                    "gender": member.get("gender"),
+                    "nature": member.get("nature"),
+                    "ability": member.get("ability"),
+                    "moves": member.get("moves") if isinstance(member.get("moves"), list) else [],
                 })
             log_event(
                 logging.INFO,
@@ -3943,18 +4580,13 @@ class AchievementTracker:
                 current_count=len(current_party),
             )
             for slot_info in sorted(slots, key=lambda s: int(s.get("slot", 0))):
-                slot_num = int(slot_info.get("slot", 0))
-                slot_name = str(slot_info.get("name") or "Unknown")
-                level_value = slot_info.get("level")
-                try:
-                    level_int = int(level_value) if level_value is not None else None
-                except (TypeError, ValueError):
-                    level_int = None
-                if level_int is not None and level_int > 0:
-                    line = f"Party Slot {slot_num}: {slot_name}, Lv.{level_int}"
-                else:
-                    line = f"Party Slot {slot_num}: {slot_name}"
-                log_event(logging.INFO, "party_slot", game=self.game_name, text=line)
+                line = _format_party_slot_line(
+                    slot_info,
+                    debug_style=True,
+                    name_resolver=self.pokemon_reader.get_pokemon_name if self.pokemon_reader else None,
+                )
+                if line:
+                    log_event(logging.INFO, "party_slot", game=self.game_name, text=line)
         else:
             if not drop_pending_set and current_party == self._last_party:
                 self._pending_party_change = None
@@ -5093,22 +5725,13 @@ class PokeAchieveGUI:
                                 (m for m in party if isinstance(m, dict)),
                                 key=lambda p: int(p.get("slot", 0))
                             ):
-                                slot = member.get("slot")
-                                pokemon_id = member.get("id")
-                                if not isinstance(slot, int) or not isinstance(pokemon_id, int):
-                                    continue
-                                name = member.get("name")
-                                if not isinstance(name, str) or not name.strip():
-                                    name = self.tracker.pokemon_reader.get_pokemon_name(pokemon_id)
-                                level = member.get("level")
-                                try:
-                                    level_int = int(level) if level is not None else 0
-                                except (TypeError, ValueError):
-                                    level_int = 0
-                                if level_int > 0:
-                                    self._log(f"SLOT {slot}: Lv.{level_int} {name}", "party")
-                                else:
-                                    self._log(f"SLOT {slot}: {name}", "party")
+                                line = _format_party_slot_line(
+                                    member,
+                                    debug_style=False,
+                                    name_resolver=self.tracker.pokemon_reader.get_pokemon_name if self.tracker and self.tracker.pokemon_reader else None,
+                                )
+                                if line:
+                                    self._log(line, "party")
                 
                 # Post to API
                 if self.api:
@@ -5154,58 +5777,69 @@ class PokeAchieveGUI:
                 print(f"[COLLECTION SYNC] Failed: {error_msg}")
                 return False
         
-        # Update party (additions, removals, and slot moves).
+        # Update party using Pokemon-ID deltas (fewer requests than slot-by-slot diffs).
         previous_party = previous_party or []
-        previous_by_slot = {}
-        previous_details_by_slot = {}
+        previous_by_id: Dict[int, int] = {}
         for member in previous_party:
             slot = member.get("slot")
             pokemon_id = member.get("id")
             if isinstance(slot, int) and 1 <= slot <= 6 and isinstance(pokemon_id, int) and pokemon_id > 0:
-                previous_by_slot[slot] = pokemon_id
-                previous_details_by_slot[slot] = {
-                    "id": pokemon_id,
-                    "name": member.get("name"),
-                    "level": member.get("level"),
-                }
+                previous_by_id[pokemon_id] = slot
 
-        current_by_slot = {}
-        current_details_by_slot = {}
+        current_by_id: Dict[int, int] = {}
         for member in party:
             slot = member.get("slot")
             pokemon_id = member.get("id")
             if isinstance(slot, int) and 1 <= slot <= 6 and isinstance(pokemon_id, int) and pokemon_id > 0:
-                current_by_slot[slot] = pokemon_id
-                current_details_by_slot[slot] = {
-                    "id": pokemon_id,
-                    "name": member.get("name"),
-                    "level": member.get("level"),
-                }
+                current_by_id[pokemon_id] = slot
 
-        for slot in range(1, 7):
-            previous_id = previous_by_slot.get(slot)
-            current_id = current_by_slot.get(slot)
+        party_updates: List[Dict[str, object]] = []
 
-            if previous_id and previous_id != current_id:
-                log_event(logging.DEBUG, "collection_sync_party_update", action="remove", slot=slot, pokemon_id=previous_id)
-                success, data = self.api.post_party_update(previous_id, False, slot)
-                if not success:
-                    error_msg = data.get("error", "Unknown error")
-                    self._last_api_error = error_msg
-                    self.root.after(0, self._update_sync_meta_labels)
-                    self._threadsafe_log(f"Failed to update party: {error_msg}", "error")
-                    return False
+        for pokemon_id in sorted(previous_by_id.keys()):
+            if pokemon_id in current_by_id:
+                continue
+            party_updates.append({
+                "pokemon_id": int(pokemon_id),
+                "pokemon_name": self._get_pokemon_name(int(pokemon_id)),
+                "caught": True,
+                "shiny": False,
+                "game": game,
+                "in_party": False,
+                "party_slot": None,
+            })
 
-            if current_id and current_id != previous_id:
-                log_event(logging.DEBUG, "collection_sync_party_update", action="add", slot=slot, pokemon_id=current_id)
-                success, data = self.api.post_party_update(current_id, True, slot)
-                if not success:
-                    error_msg = data.get("error", "Unknown error")
-                    self._last_api_error = error_msg
-                    self.root.after(0, self._update_sync_meta_labels)
-                    self._threadsafe_log(f"Failed to update party: {error_msg}", "error")
-                    return False
+        for pokemon_id in sorted(current_by_id.keys()):
+            current_slot = current_by_id[pokemon_id]
+            previous_slot = previous_by_id.get(pokemon_id)
+            if previous_slot == current_slot:
+                continue
+            party_updates.append({
+                "pokemon_id": int(pokemon_id),
+                "pokemon_name": self._get_pokemon_name(int(pokemon_id)),
+                "caught": True,
+                "shiny": False,
+                "game": game,
+                "in_party": True,
+                "party_slot": int(current_slot),
+            })
 
+        if party_updates:
+            log_event(logging.INFO, "collection_sync_party_batch_send", count=len(party_updates))
+            success, data = self.api.post_collection_batch(party_updates)
+            if not success:
+                log_event(logging.WARNING, "collection_sync_party_batch_fallback", count=len(party_updates))
+                for update in party_updates:
+                    success, data = self.api.post_party_update(
+                        int(update["pokemon_id"]),
+                        bool(update.get("in_party", False)),
+                        update.get("party_slot"),
+                    )
+                    if not success:
+                        error_msg = data.get("error", "Unknown error")
+                        self._last_api_error = error_msg
+                        self.root.after(0, self._update_sync_meta_labels)
+                        self._threadsafe_log(f"Failed to update party: {error_msg}", "error")
+                        return False
         return True
 
     def _get_pokemon_name(self, pokemon_id: int) -> str:
@@ -5460,16 +6094,5 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
-
-
-
-
-
 
 
