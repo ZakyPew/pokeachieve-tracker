@@ -67,10 +67,10 @@ GEN2_CONFIG = GameMemoryConfig(
     have_starter_address="0xDA22",
 )
 
-# === GENERATION 3 - RSE (Ruby, Sapphire, Emerald) ===
+# === GENERATION 3 - RSE (Ruby, Sapphire) ===
 # Hoenn region games - different memory layout than FRLG
 RSE_CONFIG = GameMemoryConfig(
-    name="Generation 3 - RSE (Ruby/Sapphire/Emerald)",
+    name="Generation 3 - RSE (Ruby/Sapphire)",
     platform="gba",
     generation=3,
     pokedex_caught_start="0x02024D0C",  # RSE - using verified working address
@@ -79,10 +79,28 @@ RSE_CONFIG = GameMemoryConfig(
     badge_address="0x02024A6C",         # RSE badge flags
     badge_count=8,
     party_count_address="0x02024284",   # RSE party count
-    party_start_address="0x02024284",   # RSE party start
+    party_start_address="0x02024288",   # RSE party start
     party_slot_size=100,
     hall_of_fame_address="0x02024A70",  # RSE Hall of Fame
     have_starter_address="0x02024284",  # RSE starter check
+)
+
+# === GENERATION 3 - Emerald ===
+# Emerald has distinct party RAM addresses from Ruby/Sapphire.
+EMERALD_CONFIG = GameMemoryConfig(
+    name="Generation 3 - Emerald",
+    platform="gba",
+    generation=3,
+    pokedex_caught_start="0x02024D0C",
+    pokedex_seen_start="0x02024C0C",
+    max_pokemon=386,
+    badge_address="0x02024A6C",
+    badge_count=8,
+    party_count_address="0x020244E9",
+    party_start_address="0x020244EC",
+    party_slot_size=100,
+    hall_of_fame_address="0x02024A70",
+    have_starter_address="0x020244E9",
 )
 
 # === GENERATION 3 - FRLG (FireRed, LeafGreen) ===
@@ -97,7 +115,7 @@ FRLG_CONFIG = GameMemoryConfig(
     badge_address="0x02024A6C",         # FRLG badge flags (same as RSE)
     badge_count=8,
     party_count_address="0x02024284",   # FRLG party count (same as RSE)
-    party_start_address="0x02024284",   # FRLG party start (same as RSE)
+    party_start_address="0x02024288",   # FRLG party start (same as RSE)
     party_slot_size=100,
     hall_of_fame_address="0x02024A70",  # FRLG Hall of Fame (same as RSE)
     have_starter_address="0x02024284",  # FRLG starter check (same as RSE)
@@ -114,10 +132,10 @@ GAME_CONFIGS: Dict[str, GameMemoryConfig] = {
     "Pokemon Silver": GEN2_CONFIG,
     "Pokemon Crystal": GEN2_CONFIG,
 
-    # Gen 3 - RSE (Ruby, Sapphire, Emerald)
+    # Gen 3 - RSE (Ruby, Sapphire)
     "Pokemon Ruby": RSE_CONFIG,
     "Pokemon Sapphire": RSE_CONFIG,
-    "Pokemon Emerald": RSE_CONFIG,
+    "Pokemon Emerald": EMERALD_CONFIG,
     
     # Gen 3 - FRLG (FireRed, LeafGreen) - separate config with different addresses
     "Pokemon FireRed": FRLG_CONFIG,
