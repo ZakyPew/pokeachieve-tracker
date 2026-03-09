@@ -54,12 +54,12 @@ def _format_log_fields(fields: Dict[str, object]) -> str:
     return " | ".join(parts)
 
 
-def log_event(level: int, event: str, **fields):
+def log_event(log_level: int, event: str, **fields):
     """Structured logging helper."""
     if fields:
-        LOGGER.log(level, "%s | %s", event, _format_log_fields(fields))
+        LOGGER.log(log_level, "%s | %s", event, _format_log_fields(fields))
     else:
-        LOGGER.log(level, "%s", event)
+        LOGGER.log(log_level, "%s", event)
 
 
 
@@ -864,7 +864,8 @@ class RetroArchClient:
         return None
     
     def read_memory(self, address: str, num_bytes: int = 1) -> Optional[int]:
-        """Read memory from the emulator"""
+        """Read memory from the emulator."""
+
         def _parse_response(response: Optional[str]) -> Optional[List[int]]:
             if response and response.startswith("READ_CORE_MEMORY"):
                 parts = response.split()
@@ -873,6 +874,14 @@ class RetroArchClient:
                         return [int(x, 16) for x in parts[2:]]
                     except ValueError:
                         return None
+            return None
+
+        def _read_chunk_with_retry(read_addr: str, read_len: int) -> Optional[List[int]]:
+            attempts = 2
+            for _ in range(attempts):
+                parsed = _parse_response(self.send_command(f"READ_CORE_MEMORY {read_addr} {read_len}"))
+                if isinstance(parsed, list) and len(parsed) >= int(read_len):
+                    return parsed
             return None
 
         try:
@@ -888,7 +897,7 @@ class RetroArchClient:
             try:
                 base_addr = int(str(address), 16)
             except (TypeError, ValueError):
-                parsed = _parse_response(self.send_command(f"READ_CORE_MEMORY {address} {total_bytes}"))
+                parsed = _read_chunk_with_retry(str(address), int(total_bytes))
                 if parsed is None:
                     return None
                 return parsed[0] if len(parsed) == 1 else parsed
@@ -899,15 +908,15 @@ class RetroArchClient:
             while remaining > 0:
                 chunk = min(max_chunk_bytes, remaining)
                 chunk_addr = hex(base_addr + offset)
-                parsed = _parse_response(self.send_command(f"READ_CORE_MEMORY {chunk_addr} {chunk}"))
-                if not parsed or len(parsed) < chunk:
+                parsed = _read_chunk_with_retry(chunk_addr, int(chunk))
+                if not parsed:
                     return None
                 values.extend(parsed[:chunk])
                 remaining -= chunk
                 offset += chunk
             return values
 
-        parsed = _parse_response(self.send_command(f"READ_CORE_MEMORY {address} {total_bytes}"))
+        parsed = _read_chunk_with_retry(str(address), int(total_bytes))
         if parsed is None:
             return None
         return parsed[0] if len(parsed) == 1 else parsed
@@ -996,6 +1005,7 @@ class PokemonMemoryReader:
             "pokedex_caught": "0x02024ECC",
             "party_count": "0x02025968",
             "party_start": "0x0202596C",
+            "enemy_party_start": "0x02025BC4",
             "party_slot_size": 100,
             "party_count_offset": 0x234,
             "party_start_offset": 0x238,
@@ -1024,6 +1034,7 @@ class PokemonMemoryReader:
             "pokedex_caught": "0x02024ECC",
             "party_count": "0x02025968",
             "party_start": "0x0202596C",
+            "enemy_party_start": "0x02025BC4",
             "party_slot_size": 100,
             "party_count_offset": 0x234,
             "party_start_offset": 0x238,
@@ -1052,6 +1063,7 @@ class PokemonMemoryReader:
             # Emerald uses a different live party block than Ruby/Sapphire.
             "party_count": "0x020244E9",
             "party_start": "0x020244EC",
+            "enemy_party_start": "0x02024744",
             "party_slot_size": 100,
             "party_force_byte_reads": 0,
             "party_allow_byte_fallback": 0,
@@ -1086,6 +1098,7 @@ class PokemonMemoryReader:
             "pokedex_caught": "0x02024D0C",
             "party_count": "0x02024284",
             "party_start": "0x02024288",
+            "enemy_party_start": "0x020244E0",
             "party_slot_size": 100,
             "saveblock1_ptr": "0x03005008",
             "saveblock2_ptr": "0x0300500C",
@@ -1108,6 +1121,7 @@ class PokemonMemoryReader:
             "pokedex_caught": "0x02024D0C",
             "party_count": "0x02024284",
             "party_start": "0x02024288",
+            "enemy_party_start": "0x020244E0",
             "party_slot_size": 100,
             "saveblock1_ptr": "0x03005008",
             "saveblock2_ptr": "0x0300500C",
@@ -1375,10 +1389,12 @@ class PokemonMemoryReader:
         self._saveblock_ptr_fail_count: Dict[str, int] = {}
         self._pointer_unreadable_last_log: Dict[str, float] = {}
         self._pointer_fallback_last_log: Dict[str, float] = {}
+        self._pokedex_seen_less_last_log: Dict[str, float] = {}
         self._pointer_unreadable_streak: Dict[str, int] = {}
         self._pointer_unreadable_last_attempt: Dict[str, float] = {}
         self._last_gen3_party_selection: Dict[str, Dict[str, object]] = {}
         self._last_party_read_meta: Dict[str, object] = {}
+        self._last_wild_read_meta: Dict[str, object] = {}
         self._gen3_gender_rates: Dict[int, int] = {}
         self._gen3_species_ability_ids: Dict[int, Tuple[int, int]] = {}
         self._gen3_ability_names: Dict[int, str] = {}
@@ -1532,6 +1548,10 @@ class PokemonMemoryReader:
     def get_last_party_read_meta(self) -> Dict[str, object]:
         """Return metadata from the most recent party read attempt."""
         return dict(self._last_party_read_meta)
+
+    def get_last_wild_read_meta(self) -> Dict[str, object]:
+        """Return metadata from the most recent wild encounter read attempt."""
+        return dict(self._last_wild_read_meta)
 
     def _normalize_gen3_species_id(self, species_id: int) -> Optional[int]:
         """Map Gen 3 internal species IDs to National Dex IDs."""
@@ -2379,14 +2399,26 @@ class PokemonMemoryReader:
             if seen_addr:
                 seen = _safe_read_pokedex_flags(seen_addr)
                 if seen and len(caught) > len(seen):
-                    log_event(
-                        logging.WARNING,
-                        "pokedex_seen_less_than_caught",
-                        game=game_name,
-                        layout=config.get("layout_id"),
-                        caught_count=len(caught),
-                        seen_count=len(seen),
-                    )
+                    gap = len(caught) - len(seen)
+                    try:
+                        warning_gap = max(10, int(config.get("pokedex_seen_warning_gap", 10)))
+                    except (TypeError, ValueError):
+                        warning_gap = 10
+                    if gap >= warning_gap:
+                        key = str(game_name or "").strip().lower() or "unknown"
+                        now = time.monotonic()
+                        last = float(self._pokedex_seen_less_last_log.get(key, 0.0))
+                        if (now - last) >= 60.0:
+                            self._pokedex_seen_less_last_log[key] = now
+                            log_event(
+                                logging.WARNING,
+                                "pokedex_seen_less_than_caught",
+                                game=game_name,
+                                layout=config.get("layout_id"),
+                                caught_count=len(caught),
+                                seen_count=len(seen),
+                                gap=gap,
+                            )
             return caught
 
         if count_hint is None or not seen_addr or seen_addr == caught_addr:
@@ -3535,8 +3567,45 @@ class PokemonMemoryReader:
 
     def read_wild_encounter(self, game_name: str) -> Optional[Dict[str, object]]:
         """Read current enemy lead encounter when battle party memory is available."""
+
+        def _set_meta(reason: str, **extra):
+            payload: Dict[str, object] = {"game": game_name, "reason": str(reason)}
+            payload.update(extra)
+            self._last_wild_read_meta = payload
+
+        def _parse_hex_addr(value: object) -> Optional[int]:
+            try:
+                return int(str(value), 16)
+            except (TypeError, ValueError):
+                return None
+
+        def _dedupe_ints(values: List[int]) -> List[int]:
+            seen: Set[int] = set()
+            ordered: List[int] = []
+            for value in values:
+                try:
+                    parsed = int(value)
+                except (TypeError, ValueError):
+                    continue
+                if parsed in seen:
+                    continue
+                seen.add(parsed)
+                ordered.append(parsed)
+            return ordered
+
+        def _as_hex_list(values: List[int]) -> List[str]:
+            rendered: List[str] = []
+            for value in values:
+                try:
+                    rendered.append(hex(int(value)))
+                except (TypeError, ValueError):
+                    continue
+            return rendered
+
+        _set_meta("start")
         config = self.get_game_config(game_name)
         if not config:
+            _set_meta("missing_game_config")
             return None
 
         try:
@@ -3544,6 +3613,7 @@ class PokemonMemoryReader:
         except (TypeError, ValueError):
             gen = 1
         if gen != 3:
+            _set_meta("unsupported_generation", gen=gen)
             return None
 
         party_count_addr = config.get("party_count")
@@ -3554,6 +3624,7 @@ class PokemonMemoryReader:
             slot_size = 100
 
         if not party_count_addr or not party_start_addr or slot_size <= 0:
+            _set_meta("missing_party_addresses", slot_size=slot_size)
             return None
 
         if (
@@ -3567,32 +3638,141 @@ class PokemonMemoryReader:
                 party_count_addr = hex(saveblock1_ptr + int(config.get("party_count_offset")))
                 party_start_addr = hex(saveblock1_ptr + int(config.get("party_start_offset")))
             elif not bool(config.get("party_allow_static_when_pointer_missing", 1)):
+                _set_meta("pointer_layout_unavailable")
                 return None
 
-        try:
-            player_count_addr_int = int(str(party_count_addr), 16)
-            player_start_addr_int = int(str(party_start_addr), 16)
-        except (TypeError, ValueError):
+        player_count_candidates: List[int] = []
+        player_start_candidates: List[int] = []
+
+        parsed_count_addr = _parse_hex_addr(party_count_addr)
+        parsed_start_addr = _parse_hex_addr(party_start_addr)
+        if parsed_count_addr is not None:
+            player_count_candidates.append(parsed_count_addr)
+        if parsed_start_addr is not None:
+            player_start_candidates.append(parsed_start_addr)
+
+        raw_count_candidates = config.get("party_count_candidates")
+        if isinstance(raw_count_candidates, list):
+            for candidate in raw_count_candidates:
+                parsed = _parse_hex_addr(candidate)
+                if parsed is not None:
+                    player_count_candidates.append(parsed)
+
+        raw_start_candidates = config.get("party_start_candidates")
+        if isinstance(raw_start_candidates, list):
+            for candidate in raw_start_candidates:
+                parsed = _parse_hex_addr(candidate)
+                if parsed is not None:
+                    player_start_candidates.append(parsed)
+
+        meta = self._last_party_read_meta if isinstance(self._last_party_read_meta, dict) else {}
+        meta_count_addr = _parse_hex_addr(meta.get("count_addr"))
+        meta_start_addr = _parse_hex_addr(meta.get("start_addr"))
+        if meta_count_addr is not None:
+            player_count_candidates.append(meta_count_addr)
+        if meta_start_addr is not None:
+            player_start_candidates.append(meta_start_addr)
+
+        player_count_candidates = _dedupe_ints(player_count_candidates)
+        player_start_candidates = _dedupe_ints(player_start_candidates)
+        if not player_count_candidates or not player_start_candidates:
+            _set_meta(
+                "missing_player_candidates",
+                player_count_candidates=_as_hex_list(player_count_candidates),
+                player_start_candidates=_as_hex_list(player_start_candidates),
+            )
             return None
 
-        enemy_count_addr = hex(player_count_addr_int + 1)
-        enemy_start_addr_int = player_start_addr_int + (slot_size * 6)
+        enemy_count_reads: List[Tuple[int, int, int, int]] = []
+        count_addr_candidates: List[int] = []
+        for base_count_addr in player_count_candidates:
+            for offset in (1, 2, 3):
+                count_addr_candidates.append(int(base_count_addr + offset))
+        configured_enemy_count_addr = _parse_hex_addr(config.get("enemy_party_count"))
+        if configured_enemy_count_addr is not None:
+            count_addr_candidates.append(configured_enemy_count_addr)
 
-        enemy_count = self.retroarch.read_memory(enemy_count_addr)
-        if not isinstance(enemy_count, int) or int(enemy_count) <= 0 or int(enemy_count) > 6:
+        count_addr_candidates = _dedupe_ints(count_addr_candidates)
+        for addr_idx, count_addr_int in enumerate(count_addr_candidates):
+            count_value = self.retroarch.read_memory(hex(count_addr_int))
+            if not isinstance(count_value, int):
+                continue
+            parsed_count = int(count_value)
+            if 1 <= parsed_count <= 6:
+                wild_rank = 0 if parsed_count == 1 else 1
+                enemy_count_reads.append((wild_rank, int(addr_idx), parsed_count, int(count_addr_int)))
+
+        enemy_count = 0
+        enemy_count_addr: Optional[int] = None
+        enemy_count_source = "unavailable"
+        if enemy_count_reads:
+            enemy_count_reads.sort(key=lambda item: (item[0], item[1], item[2]))
+            enemy_count = int(enemy_count_reads[0][2])
+            enemy_count_addr = int(enemy_count_reads[0][3])
+            enemy_count_source = "count_addr"
+
+        enemy_start_candidates: List[int] = []
+        for player_start_addr_int in player_start_candidates:
+            enemy_start_candidates.append(int(player_start_addr_int + (slot_size * 6)))
+        configured_enemy_start_addr = _parse_hex_addr(config.get("enemy_party_start"))
+        if configured_enemy_start_addr is not None:
+            enemy_start_candidates.append(configured_enemy_start_addr)
+        raw_enemy_start_candidates = config.get("enemy_party_start_candidates")
+        if isinstance(raw_enemy_start_candidates, list):
+            for candidate in raw_enemy_start_candidates:
+                parsed = _parse_hex_addr(candidate)
+                if parsed is not None:
+                    enemy_start_candidates.append(parsed)
+
+        enemy_start_candidates = _dedupe_ints(enemy_start_candidates)
+        if not enemy_start_candidates:
+            _set_meta(
+                "missing_enemy_start_candidates",
+                player_start_candidates=_as_hex_list(player_start_candidates),
+                enemy_count_source=enemy_count_source,
+            )
             return None
 
-        slot_bytes = self._read_gen3_slot_bytes_for_details(enemy_start_addr_int, int(slot_size))
-        if not isinstance(slot_bytes, list) or len(slot_bytes) < int(slot_size):
-            return None
+        details: Optional[Dict[str, object]] = None
+        selected_enemy_start: Optional[int] = None
+        decode_attempts = 0
+        for enemy_start_addr_int in enemy_start_candidates:
+            slot_bytes = self._read_gen3_slot_bytes_for_details(enemy_start_addr_int, int(slot_size))
+            if not isinstance(slot_bytes, list) or len(slot_bytes) < int(slot_size):
+                continue
 
-        details = self._decode_gen3_party_slot_details(
-            slot_bytes,
-            max_species_id=int(self.GEN3_INTERNAL_SPECIES_MAX),
-            allow_checksum_mismatch=True,
-            species_hint_ids=None,
-        )
+            decode_attempts += 1
+            decoded = self._decode_gen3_party_slot_details(
+                slot_bytes,
+                max_species_id=int(self.GEN3_INTERNAL_SPECIES_MAX),
+                allow_checksum_mismatch=True,
+                species_hint_ids=None,
+            )
+            if not isinstance(decoded, dict):
+                continue
+
+            try:
+                decoded_species = int(decoded.get("normalized_species", 0))
+            except (TypeError, ValueError):
+                decoded_species = 0
+            if decoded_species <= 0:
+                continue
+
+            details = decoded
+            selected_enemy_start = int(enemy_start_addr_int)
+            break
+
         if not isinstance(details, dict):
+            _set_meta(
+                "enemy_decode_failed",
+                player_count_candidates=_as_hex_list(player_count_candidates),
+                player_start_candidates=_as_hex_list(player_start_candidates),
+                enemy_count_addr=hex(enemy_count_addr) if enemy_count_addr is not None else None,
+                enemy_count=enemy_count,
+                enemy_count_source=enemy_count_source,
+                enemy_start_candidates=_as_hex_list(enemy_start_candidates),
+                decode_attempts=int(decode_attempts),
+            )
             return None
 
         try:
@@ -3600,6 +3780,10 @@ class PokemonMemoryReader:
         except (TypeError, ValueError):
             species_id = 0
         if species_id <= 0:
+            _set_meta(
+                "invalid_species",
+                enemy_start=hex(selected_enemy_start) if selected_enemy_start is not None else None,
+            )
             return None
 
         try:
@@ -3610,6 +3794,18 @@ class PokemonMemoryReader:
         personality = details.get("_personality")
         ot_id = details.get("_ot_id")
         signature = f"{species_id}:{level_val}:{personality}:{ot_id}"
+        is_wild = bool(enemy_count == 1) if enemy_count > 0 else True
+
+        _set_meta(
+            "ok",
+            species_id=int(species_id),
+            level=int(level_val) if int(level_val) > 0 else None,
+            enemy_count=int(enemy_count) if enemy_count > 0 else None,
+            enemy_count_source=enemy_count_source,
+            enemy_count_addr=hex(enemy_count_addr) if enemy_count_addr is not None else None,
+            enemy_start=hex(selected_enemy_start) if selected_enemy_start is not None else None,
+            is_wild=bool(is_wild),
+        )
 
         return {
             "species_id": int(species_id),
@@ -3618,11 +3814,10 @@ class PokemonMemoryReader:
             "shiny": bool(details.get("shiny", False)),
             "personality": int(personality) if isinstance(personality, int) else personality,
             "ot_id": int(ot_id) if isinstance(ot_id, int) else ot_id,
-            "enemy_count": int(enemy_count),
-            "is_wild": int(enemy_count) == 1,
+            "enemy_count": int(enemy_count) if int(enemy_count) > 0 else 0,
+            "is_wild": bool(is_wild),
             "signature": signature,
         }
-
 class AchievementTracker:
     """Tracks achievements and reports unlocks"""
     
@@ -3674,6 +3869,8 @@ class AchievementTracker:
         self._warmup_logged = False
         self._startup_baseline_captured = False
         self._startup_lockout_ids: set[str] = set()
+        self._last_bad_read_reconnect_at = 0.0
+        self._bad_read_reconnect_cooldown_s = 30.0
         self.validation_profiles: Dict[str, object] = {}
         self.recent_anomalies: List[Dict] = []
         self._derived_checker: Optional[DerivedAchievementChecker] = None
@@ -3755,6 +3952,13 @@ class AchievementTracker:
         self._record_anomaly("memory_read_suspicious", game=self.game_name, reason=reason, streak=self._bad_read_streak)
         self._log_warning_throttled("memory_read_suspicious", cooldown_s=5.0, throttle_key=f"memory_read_suspicious:{self.game_name}:{reason}", game=self.game_name, reason=reason, streak=self._bad_read_streak)
         if self._bad_read_streak >= 3:
+            now = time.monotonic()
+            reconnect_cooldown = max(5.0, float(getattr(self, "_bad_read_reconnect_cooldown_s", 30.0)))
+            last_reconnect = float(getattr(self, "_last_bad_read_reconnect_at", 0.0))
+            if (now - last_reconnect) < reconnect_cooldown:
+                self._bad_read_streak = 2
+                return
+            self._last_bad_read_reconnect_at = now
             self._record_anomaly("memory_read_reconnect", game=self.game_name)
             self._log_warning_throttled("memory_read_reconnect", cooldown_s=5.0, throttle_key=f"memory_read_reconnect:{self.game_name}", game=self.game_name)
             self.retroarch.disconnect()
@@ -4974,6 +5178,7 @@ class AchievementTracker:
 
         # Find new catches.
         new_catches = [p for p in effective_pokedex if p not in self._last_pokedex]
+        lost_catches = [p for p in self._last_pokedex if p not in effective_pokedex]
 
         # Guard against bad memory reads causing impossible bulk catch spikes.
         if len(new_catches) > profile["max_new_catches_per_poll"]:
@@ -4999,11 +5204,40 @@ class AchievementTracker:
                 self._last_party = list(current_party)
                 self._bad_read_streak = 0
                 return
-            self._record_anomaly("collection_spike_ignored", game=self.game_name, spike_count=len(new_catches), threshold=profile["max_new_catches_per_poll"])
-            self._log_warning_throttled("collection_spike_ignored", cooldown_s=15.0, throttle_key=f"collection_spike_ignored:{self.game_name}", game=self.game_name, spike_count=len(new_catches), threshold=profile["max_new_catches_per_poll"])
-            self._handle_bad_read("bulk_catch_spike")
-            effective_pokedex = list(self._last_pokedex)
-            new_catches = []
+
+            # If the read both adds and removes many IDs at once, treat it as churn/noise.
+            if lost_catches and self._last_pokedex and effective_pokedex:
+                self._record_anomaly(
+                    "collection_churn_ignored",
+                    game=self.game_name,
+                    added_count=len(new_catches),
+                    removed_count=len(lost_catches),
+                    previous_count=len(self._last_pokedex),
+                    observed_count=len(effective_pokedex),
+                )
+                churn_key = f"collection_churn_ignored:{self.game_name}"
+                now = time.monotonic()
+                last = float(self._warning_last_log.get(churn_key, 0.0))
+                if (now - last) >= 20.0:
+                    self._warning_last_log[churn_key] = now
+                    log_event(
+                        logging.INFO,
+                        "collection_churn_ignored",
+                        game=self.game_name,
+                        added_count=len(new_catches),
+                        removed_count=len(lost_catches),
+                        previous_count=len(self._last_pokedex),
+                        observed_count=len(effective_pokedex),
+                    )
+                effective_pokedex = list(self._last_pokedex)
+                new_catches = []
+                self._bad_read_streak = 0
+            else:
+                self._record_anomaly("collection_spike_ignored", game=self.game_name, spike_count=len(new_catches), threshold=profile["max_new_catches_per_poll"])
+                self._log_warning_throttled("collection_spike_ignored", cooldown_s=15.0, throttle_key=f"collection_spike_ignored:{self.game_name}", game=self.game_name, spike_count=len(new_catches), threshold=profile["max_new_catches_per_poll"])
+                self._handle_bad_read("bulk_catch_spike")
+                effective_pokedex = list(self._last_pokedex)
+                new_catches = []
         else:
             self._bad_read_streak = 0
 
@@ -5487,6 +5721,8 @@ class PokeAchieveGUI:
         self._hunt_counter = 0
         self._hunt_last_enemy_signature: Optional[str] = None
         self._hunt_last_target_signature: Optional[str] = None
+        self._hunt_enemy_present = False
+        self._hunt_last_enemy_seen_at = 0.0
         self._hunt_target_present = False
         self._hunt_recent_other_species: deque[int] = deque(maxlen=24)
         self._hunt_last_waiting_state = bool(self.retroarch.is_waiting_for_launch())
@@ -5496,6 +5732,10 @@ class PokeAchieveGUI:
         self._hunt_alerted_signatures: Set[str] = set()
         self._hunt_last_party_snapshot: Dict[int, Dict[str, object]] = {}
         self._hunt_initialized = False
+        self._hunt_species_counts: Dict[int, int] = {}
+        self._hunt_species_count_labels: Dict[int, ttk.Label] = {}
+        self._hunt_last_raw_log_key: Optional[str] = None
+        self._hunt_last_raw_none_log_at = 0.0
         self._hunt_target_sprite_label: Optional[ttk.Label] = None
         self._hunt_target_name_label: Optional[ttk.Label] = None
         self._hunt_target_type_frame: Optional[ttk.Frame] = None
@@ -6701,20 +6941,32 @@ class PokeAchieveGUI:
         return options
 
     def _on_hunt_mode_selected(self, _event=None):
+        keep_active = bool(self._hunt_active)
         self._update_hunt_mode_controls()
-        self._load_saved_hunt_for_current_selection(auto_start=False)
+        self._load_saved_hunt_for_current_selection(auto_start=keep_active)
+        if keep_active and not self._hunt_active:
+            self._start_hunt(silent=True, emit_log=False, persist=True)
 
     def _on_hunt_game_selected(self, _event=None):
+        keep_active = bool(self._hunt_active)
         selected_game = self.hunt_game_var.get().strip()
-        self._load_last_hunt_for_game(selected_game, auto_start=False)
+        self._load_last_hunt_for_game(selected_game, auto_start=keep_active)
+        if keep_active and not self._hunt_active:
+            self._start_hunt(silent=True, emit_log=False, persist=True)
 
     def _on_hunt_route_selected(self, _event=None):
+        keep_active = bool(self._hunt_active)
         self._refresh_hunt_targets()
-        self._load_saved_hunt_for_current_selection(auto_start=False)
+        self._load_saved_hunt_for_current_selection(auto_start=keep_active)
+        if keep_active and not self._hunt_active:
+            self._start_hunt(silent=True, emit_log=False, persist=True)
 
     def _on_hunt_target_selected(self, _event=None):
+        keep_active = bool(self._hunt_active)
         self._update_hunt_target_display()
-        self._load_saved_hunt_for_current_selection(auto_start=False)
+        self._load_saved_hunt_for_current_selection(auto_start=keep_active)
+        if keep_active and not self._hunt_active:
+            self._start_hunt(silent=True, emit_log=False, persist=True)
 
     def _capture_current_hunt_profile(self) -> Optional[Tuple[str, str, Dict[str, Any]]]:
         game_name = self.hunt_game_var.get().strip() or (self.tracker.game_name or "")
@@ -6730,12 +6982,13 @@ class PokeAchieveGUI:
             "route": route_name,
             "target_id": target_id,
             "counter": int(max(0, self._hunt_counter)),
+            "species_counts": {str(int(pid)): int(max(0, count)) for pid, count in self._hunt_species_counts.items() if int(count) > 0},
             "active": bool(self._hunt_active),
             "updated_at": int(time.time()),
         }
         return game_name, profile_key, profile
 
-    def _save_current_hunt_profile(self, *, active_override: Optional[bool] = None):
+    def _save_current_hunt_profile(self, *, active_override: Optional[bool] = None, set_last_profile_key: bool = True):
         if self._hunt_profile_applying:
             return
 
@@ -6762,7 +7015,8 @@ class PokeAchieveGUI:
                     existing["active"] = False
 
         profiles[profile_key] = profile
-        game_store["last_profile_key"] = profile_key
+        if set_last_profile_key:
+            game_store["last_profile_key"] = profile_key
         self._save_hunt_profiles()
 
     def _resolve_hunt_target_display(self, game_name: str, target_id: int) -> str:
@@ -6791,6 +7045,17 @@ class PokeAchieveGUI:
         except (TypeError, ValueError):
             counter_value = 0
         profile_active = bool(profile.get("active", False))
+        species_counts_raw = profile.get("species_counts")
+        parsed_species_counts: Dict[int, int] = {}
+        if isinstance(species_counts_raw, dict):
+            for raw_pid, raw_count in species_counts_raw.items():
+                try:
+                    pid_int = int(raw_pid)
+                    count_int = int(raw_count)
+                except (TypeError, ValueError):
+                    continue
+                if pid_int > 0 and count_int > 0:
+                    parsed_species_counts[pid_int] = count_int
 
         self._hunt_profile_applying = True
         try:
@@ -6813,13 +7078,25 @@ class PokeAchieveGUI:
             target_display = self._resolve_hunt_target_display(game_name, target_id)
             if target_display:
                 self.hunt_target_var.set(target_display)
+            self._hunt_species_counts = dict(parsed_species_counts)
             self._update_hunt_target_display()
             self._set_hunt_counter(counter_value)
         finally:
             self._hunt_profile_applying = False
 
-        if auto_start and profile_active:
-            self._start_hunt(silent=True, emit_log=False, persist=False)
+        if auto_start:
+            started = self._start_hunt(silent=True, emit_log=False, persist=False)
+            if not started:
+                self._pause_hunt(emit_log=False, persist=False)
+                log_event(
+                    logging.WARNING,
+                    "hunt_auto_start_failed",
+                    game=game_name,
+                    mode=profile_mode,
+                    route=self.hunt_route_var.get().strip(),
+                    target=self.hunt_target_var.get().strip(),
+                    profile_active=bool(profile_active),
+                )
         else:
             self._pause_hunt(emit_log=False, persist=False)
 
@@ -6848,12 +7125,14 @@ class PokeAchieveGUI:
 
         self._hunt_profile_applying = True
         try:
+            self._hunt_species_counts = {}
             self._set_hunt_counter(0)
         finally:
             self._hunt_profile_applying = False
 
+        self._update_hunt_other_species_display()
         self._pause_hunt(emit_log=False, persist=False)
-        self._save_current_hunt_profile(active_override=False)
+        self._save_current_hunt_profile(active_override=False, set_last_profile_key=False)
         return False
 
     def _load_last_hunt_for_game(self, game_name: str, *, auto_start: bool):
@@ -6862,9 +7141,11 @@ class PokeAchieveGUI:
             self._refresh_hunt_targets()
             self._hunt_profile_applying = True
             try:
+                self._hunt_species_counts = {}
                 self._set_hunt_counter(0)
             finally:
                 self._hunt_profile_applying = False
+            self._update_hunt_other_species_display()
             self._pause_hunt(emit_log=False, persist=False)
             return
 
@@ -6877,11 +7158,25 @@ class PokeAchieveGUI:
             profiles = {}
 
         profile: Optional[Dict[str, Any]] = None
-        last_key = game_store.get("last_profile_key") if isinstance(game_store, dict) else ""
-        if isinstance(last_key, str) and last_key:
-            candidate = profiles.get(last_key)
-            if isinstance(candidate, dict):
-                profile = candidate
+        if auto_start and profiles:
+            active_profiles = sorted(
+                (
+                    item
+                    for item in profiles.values()
+                    if isinstance(item, dict) and bool(item.get("active", False))
+                ),
+                key=lambda item: int(item.get("updated_at", 0)) if isinstance(item.get("updated_at", 0), int) else 0,
+                reverse=True,
+            )
+            if active_profiles:
+                profile = active_profiles[0]
+
+        if profile is None:
+            last_key = game_store.get("last_profile_key") if isinstance(game_store, dict) else ""
+            if isinstance(last_key, str) and last_key:
+                candidate = profiles.get(last_key)
+                if isinstance(candidate, dict):
+                    profile = candidate
 
         if profile is None and profiles:
             sorted_profiles = sorted(
@@ -6900,11 +7195,13 @@ class PokeAchieveGUI:
         self._update_hunt_mode_controls()
         self._hunt_profile_applying = True
         try:
+            self._hunt_species_counts = {}
             self._set_hunt_counter(0)
         finally:
             self._hunt_profile_applying = False
+        self._update_hunt_other_species_display()
         self._pause_hunt(emit_log=False, persist=False)
-        self._save_current_hunt_profile(active_override=False)
+        self._save_current_hunt_profile(active_override=False, set_last_profile_key=False)
 
     def _refresh_hunt_targets(self, _event=None):
         game_name = self.hunt_game_var.get().strip()
@@ -6947,6 +7244,27 @@ class PokeAchieveGUI:
             self._hunt_counter_label.configure(text=f"Encounters: {self._hunt_counter:,}")
         if not self._hunt_profile_applying:
             self._save_current_hunt_profile()
+
+    def _get_hunt_species_count(self, species_id: int) -> int:
+        try:
+            key = int(species_id)
+        except (TypeError, ValueError):
+            return 0
+        if key <= 0:
+            return 0
+        return int(self._hunt_species_counts.get(key, 0))
+
+    def _record_hunt_species_encounter(self, species_id: int):
+        try:
+            key = int(species_id)
+        except (TypeError, ValueError):
+            return
+        if key <= 0:
+            return
+        self._hunt_species_counts[key] = self._get_hunt_species_count(key) + 1
+        label = self._hunt_species_count_labels.get(key)
+        if isinstance(label, ttk.Label):
+            label.configure(text=f"Encounters: {self._hunt_species_counts[key]:,}")
 
     def _update_hunt_target_display(self, _event=None):
         target_id = self._get_hunt_target_pokemon_id()
@@ -7090,6 +7408,7 @@ class PokeAchieveGUI:
 
         for child in self._hunt_other_sprites_frame.winfo_children():
             child.destroy()
+        self._hunt_species_count_labels = {}
 
         game_name = self.hunt_game_var.get().strip() or (self.tracker.game_name or "")
         mode = self.hunt_mode_var.get().strip()
@@ -7152,6 +7471,10 @@ class PokeAchieveGUI:
                             icon_label.configure(text=type_name.title())
                         icon_label.pack(side=tk.LEFT, padx=2)
 
+                count_label = ttk.Label(card, text=f"Encounters: {self._get_hunt_species_count(pid):,}", style="Subtle.TLabel")
+                count_label.pack(anchor=tk.CENTER, pady=(0, 4))
+                self._hunt_species_count_labels[int(pid)] = count_label
+
                 details: List[str] = []
                 location = item.get("location")
                 if isinstance(location, str) and location.strip():
@@ -7191,6 +7514,9 @@ class PokeAchieveGUI:
             sprite_label.pack(anchor=tk.CENTER)
 
             ttk.Label(item_frame, text=self._get_pokemon_name(int(pid)), wraplength=100, justify=tk.CENTER).pack(anchor=tk.CENTER)
+            count_label = ttk.Label(item_frame, text=f"Encounters: {self._get_hunt_species_count(int(pid)):,}", style="Subtle.TLabel", justify=tk.CENTER)
+            count_label.pack(anchor=tk.CENTER)
+            self._hunt_species_count_labels[int(pid)] = count_label
 
         self._on_hunt_available_frame_configure()
 
@@ -7229,7 +7555,11 @@ class PokeAchieveGUI:
         game_for_hunt = self.hunt_game_var.get().strip() or (self.tracker.game_name if self.tracker else "") or ""
         self._hunt_last_party_snapshot = self._snapshot_party_for_hunt(self.tracker._last_party if self.tracker else [])
         self._hunt_last_enemy_signature = None
+        self._hunt_last_enemy_seen_at = 0.0
+        self._hunt_last_raw_log_key = None
+        self._hunt_last_raw_none_log_at = 0.0
         self._hunt_last_target_signature = None
+        self._hunt_enemy_present = False
         self._hunt_target_present = False
         self._hunt_soft_reset_reset_pending = False
         self._hunt_soft_reset_seen_in_pokedex = False
@@ -7239,11 +7569,18 @@ class PokeAchieveGUI:
             self._hunt_initialized = True
             return
 
+        if mode in {"Wild Encounter Hunt", "Fishing Encounter Hunt"}:
+            # Count the next observed battle as an encounter, even when hunt starts mid-battle.
+            self._hunt_initialized = True
+            return
+
         encounter = self.tracker.pokemon_reader.read_wild_encounter(game_for_hunt) if self.tracker and self.tracker.pokemon_reader else None
         if isinstance(encounter, dict):
             signature = str(encounter.get("signature", "")).strip()
             if signature:
                 self._hunt_last_enemy_signature = signature
+            self._hunt_enemy_present = bool(encounter.get("is_wild", True))
+            self._hunt_last_enemy_seen_at = time.monotonic()
 
         if mode == "Soft Reset Hunt":
             present, target_signature, _, _, _ = self._get_soft_reset_target_state(encounter, game_for_hunt)
@@ -7300,6 +7637,7 @@ class PokeAchieveGUI:
 
     def _reset_hunt_counter(self, emit_log: bool = True, persist: bool = True):
         self._set_hunt_counter(0)
+        self._hunt_species_counts = {}
         self._hunt_recent_other_species.clear()
         self._hunt_alerted_signatures.clear()
         self._update_hunt_other_species_display()
@@ -7336,6 +7674,140 @@ class PokeAchieveGUI:
             messagebox.showinfo(title, message, parent=self.root)
         except Exception:
             pass
+
+    def _log_hunt_raw_encounter(self, encounter: Dict[str, object], game_name: str, mode: str):
+        if not isinstance(encounter, dict):
+            return
+
+        try:
+            species_id = int(encounter.get("species_id", 0))
+        except (TypeError, ValueError):
+            species_id = 0
+        species_name_raw = encounter.get("species_name")
+        if isinstance(species_name_raw, str) and species_name_raw.strip():
+            species_name = species_name_raw.strip()
+        elif self.tracker and self.tracker.pokemon_reader:
+            species_name = self.tracker.pokemon_reader.get_pokemon_name(species_id)
+        else:
+            species_name = f"Pokemon #{species_id}"
+
+        try:
+            level_val = int(encounter.get("level", 0) or 0)
+        except (TypeError, ValueError):
+            level_val = 0
+
+        try:
+            enemy_count = int(encounter.get("enemy_count", 0) or 0)
+        except (TypeError, ValueError):
+            enemy_count = 0
+
+        reader_meta: Dict[str, object] = {}
+        if self.tracker and self.tracker.pokemon_reader:
+            try:
+                reader_meta = self.tracker.pokemon_reader.get_last_wild_read_meta()
+            except Exception:
+                reader_meta = {}
+        read_reason = str(reader_meta.get("reason", "unknown"))
+        enemy_count_source = str(reader_meta.get("enemy_count_source", ""))
+        enemy_start = reader_meta.get("enemy_start")
+
+        is_wild = bool(encounter.get("is_wild", True))
+        is_shiny = bool(encounter.get("shiny", False))
+        signature = str(encounter.get("signature", "")).strip()
+        if not signature:
+            signature = f"{species_id}:{level_val}:{encounter.get('personality')}:{encounter.get('ot_id')}"
+
+        route_value = self.hunt_route_var.get().strip()
+        target_id = self._get_hunt_target_pokemon_id()
+        log_key = f"{game_name}|{mode}|{route_value}|{signature}|{enemy_count}|{int(is_wild)}"
+        if log_key == self._hunt_last_raw_log_key:
+            return
+
+        self._hunt_last_raw_log_key = log_key
+        self._hunt_last_raw_none_log_at = 0.0
+
+        log_event(
+            logging.INFO,
+            "hunt_wild_read",
+            game=game_name,
+            mode=mode,
+            route=route_value,
+            target_id=target_id,
+            species_id=species_id,
+            species=species_name,
+            level=level_val,
+            shiny=is_shiny,
+            enemy_count=enemy_count,
+            is_wild=is_wild,
+            signature=signature,
+            reader_reason=read_reason,
+            enemy_count_source=(enemy_count_source or None),
+            enemy_start=(str(enemy_start) if enemy_start is not None else None),
+        )
+
+        mode_label = "FISHING" if mode == "Fishing Encounter Hunt" else "WILD"
+        form_text = "Shiny" if is_shiny else "Normal"
+        level_text = f"Lv.{level_val}" if level_val > 0 else "Lv.?"
+        source_text = enemy_count_source if enemy_count_source else "unknown"
+        self._log(
+            f"RAW {mode_label} READ: {species_name} (#{species_id}) / {level_text} / {form_text} / wild={is_wild} / enemy_count={enemy_count} / source={source_text} / reason={read_reason}",
+            "hunt",
+        )
+
+    def _log_hunt_raw_no_encounter(self, game_name: str, mode: str):
+        if bool(getattr(self.retroarch, "is_waiting_for_launch", lambda: False)()):
+            return
+        if not bool(getattr(self.retroarch, "connected", False)):
+            return
+
+        now_ts = time.monotonic()
+        if (now_ts - float(self._hunt_last_raw_none_log_at)) < 15.0:
+            return
+
+        self._hunt_last_raw_none_log_at = now_ts
+        self._hunt_last_raw_log_key = None
+
+        route_value = self.hunt_route_var.get().strip()
+        target_id = self._get_hunt_target_pokemon_id()
+
+        reader_meta: Dict[str, object] = {}
+        if self.tracker and self.tracker.pokemon_reader:
+            try:
+                reader_meta = self.tracker.pokemon_reader.get_last_wild_read_meta()
+            except Exception:
+                reader_meta = {}
+        read_reason = str(reader_meta.get("reason", "unknown"))
+        enemy_count_source = str(reader_meta.get("enemy_count_source", ""))
+        decode_attempts_raw = reader_meta.get("decode_attempts", 0)
+        try:
+            decode_attempts = int(decode_attempts_raw)
+        except (TypeError, ValueError):
+            decode_attempts = 0
+
+        log_event(
+            logging.INFO,
+            "hunt_wild_read_none",
+            game=game_name,
+            mode=mode,
+            route=route_value,
+            target_id=target_id,
+            reason=read_reason,
+            enemy_count_source=(enemy_count_source or None),
+            decode_attempts=decode_attempts,
+            enemy_count=reader_meta.get("enemy_count"),
+            enemy_count_addr=reader_meta.get("enemy_count_addr"),
+            enemy_start=reader_meta.get("enemy_start"),
+            enemy_start_candidates=reader_meta.get("enemy_start_candidates"),
+            player_start_candidates=reader_meta.get("player_start_candidates"),
+            player_count_candidates=reader_meta.get("player_count_candidates"),
+        )
+
+        mode_label = "FISHING" if mode == "Fishing Encounter Hunt" else "WILD"
+        source_text = enemy_count_source if enemy_count_source else "unknown"
+        self._log(
+            f"RAW {mode_label} READ: no encounter data / Route: {route_value or '-'} / Target: #{target_id if target_id > 0 else 0} / reason={read_reason} / source={source_text} / decode_attempts={decode_attempts}",
+            "hunt",
+        )
 
     def _is_hunt_target_in_pokedex(self) -> bool:
         """Return True when the selected hunt target currently exists in tracked Pokedex state."""
@@ -7425,6 +7897,7 @@ class PokeAchieveGUI:
             self._hunt_soft_reset_target_id = current_target_id
             self._hunt_target_present = False
             self._hunt_last_target_signature = None
+            self._hunt_enemy_present = False
             self._hunt_soft_reset_seen_in_pokedex = bool(target_in_pokedex)
 
         if not self._hunt_initialized:
@@ -7459,6 +7932,7 @@ class PokeAchieveGUI:
 
             self._hunt_target_present = False
             self._hunt_last_target_signature = None
+            self._hunt_enemy_present = False
             return
 
         normalized_signature = signature if isinstance(signature, str) and signature else None
@@ -7497,34 +7971,125 @@ class PokeAchieveGUI:
             return
 
         mode = self.hunt_mode_var.get().strip()
-        signature = str(encounter.get("signature", "")).strip()
-        if not signature:
+        if mode not in {"Wild Encounter Hunt", "Fishing Encounter Hunt"}:
             return
 
+        if not bool(encounter.get("is_wild", True)):
+            self._hunt_enemy_present = False
+            self._hunt_last_enemy_seen_at = 0.0
+            log_event(
+                logging.INFO,
+                "hunt_encounter_skipped_non_wild",
+                game=game_name,
+                mode=mode,
+                species_id=encounter.get("species_id"),
+                enemy_count=encounter.get("enemy_count"),
+            )
+            return
+
+        try:
+            species_id = int(encounter.get("species_id", 0))
+        except (TypeError, ValueError):
+            species_id = 0
+        if species_id <= 0:
+            return
+
+        try:
+            level_val = int(encounter.get("level", 0) or 0)
+        except (TypeError, ValueError):
+            level_val = 0
+        personality = encounter.get("personality")
+        ot_id = encounter.get("ot_id")
+        signature = str(encounter.get("signature", "")).strip()
+        if not signature:
+            signature = f"{species_id}:{level_val}:{personality}:{ot_id}"
+
+        now_ts = time.monotonic()
         if not self._hunt_initialized:
             self._hunt_last_enemy_signature = signature
+            self._hunt_enemy_present = True
+            self._hunt_last_enemy_seen_at = now_ts
             self._hunt_initialized = True
             return
 
-        if signature == self._hunt_last_enemy_signature:
-            return
+        same_signature = bool(signature) and signature == self._hunt_last_enemy_signature
+        is_new_encounter = (not self._hunt_enemy_present) or (not same_signature)
 
+        self._hunt_enemy_present = True
         self._hunt_last_enemy_signature = signature
-
-        if not bool(encounter.get("is_wild", True)):
+        self._hunt_last_enemy_seen_at = now_ts
+        if not is_new_encounter:
             return
 
-        species_id = int(encounter.get("species_id", 0)) if isinstance(encounter.get("species_id"), int) else 0
+        allowed_species = set(
+            self._get_hunt_species_ids_for_selection(
+                game_name,
+                mode=mode,
+                route_name=self.hunt_route_var.get().strip(),
+            )
+        )
+        if allowed_species and species_id not in allowed_species:
+            log_event(
+                logging.INFO,
+                "hunt_encounter_skipped_route_filter",
+                game=game_name,
+                mode=mode,
+                route=self.hunt_route_var.get().strip(),
+                species_id=species_id,
+                allowed_count=len(allowed_species),
+            )
+            return
+
+        self._record_hunt_species_encounter(species_id)
+        species_counter = self._get_hunt_species_count(species_id)
+        target_id = self._get_hunt_target_pokemon_id()
+        target_match = target_id <= 0 or species_id == target_id
+        if target_match:
+            self._set_hunt_counter(self._hunt_counter + 1)
+            log_event(
+                logging.INFO,
+                "hunt_encounter_counted",
+                game=game_name,
+                mode=mode,
+                route=self.hunt_route_var.get().strip(),
+                species_id=species_id,
+                counter=self._hunt_counter,
+                species_counter=species_counter,
+                signature=signature,
+                target_id=target_id,
+            )
+        else:
+            log_event(
+                logging.INFO,
+                "hunt_encounter_non_target",
+                game=game_name,
+                mode=mode,
+                route=self.hunt_route_var.get().strip(),
+                species_id=species_id,
+                species_counter=species_counter,
+                counter=self._hunt_counter,
+                signature=signature,
+                target_id=target_id,
+            )
+
         species_name = str(encounter.get("species_name") or self.tracker.pokemon_reader.get_pokemon_name(species_id))
         is_shiny = bool(encounter.get("shiny", False))
-
-        if mode in {"Wild Encounter Hunt", "Fishing Encounter Hunt"}:
-            self._set_hunt_counter(self._hunt_counter + 1)
+        form_text = "Shiny" if is_shiny else "Normal"
+        encounter_label = "FISHING" if mode == "Fishing Encounter Hunt" else "WILD"
+        if target_match:
+            self._log(
+                f"{encounter_label} TARGET ENCOUNTER #{self._hunt_counter}: {species_name} (#{species_id}) [{game_name}] / {form_text}",
+                "hunt",
+            )
         else:
-            return
+            target_name = self.tracker.pokemon_reader.get_pokemon_name(target_id) if target_id > 0 else "Any"
+            self._log(
+                f"{encounter_label} ENCOUNTER (non-target): {species_name} (#{species_id}) [{game_name}] / {form_text} / Species Count: {species_counter:,} / Target: {target_name} (#{target_id})",
+                "hunt",
+            )
 
         if is_shiny:
-            alert_key = f"{mode}:{signature}"
+            alert_key = f"{mode}:{signature or species_id}:{self._hunt_counter}"
             if alert_key in self._hunt_alerted_signatures:
                 return
             self._hunt_alerted_signatures.add(alert_key)
@@ -7583,24 +8148,28 @@ class PokeAchieveGUI:
             if self._hunt_active:
                 mode = self.hunt_mode_var.get().strip()
                 # On reset/reconnect, clear encounter + target signatures so repeated
-                # identical PIDs after resets still count as new attempts.
-                # Also count one attempt on reconnect and mark pending so we don't
-                # double-count when memory-derived encounter state arrives.
+                # identical encounter signatures can still count as new attempts.
                 if mode == "Soft Reset Hunt":
                     if waiting_now and not self._hunt_last_waiting_state:
                         self._hunt_last_enemy_signature = None
+                        self._hunt_last_enemy_seen_at = 0.0
                         self._hunt_last_target_signature = None
+                        self._hunt_enemy_present = False
                         self._hunt_target_present = False
                         self._hunt_initialized = True
                         self._hunt_soft_reset_reset_pending = False
                     elif (not waiting_now) and self._hunt_last_waiting_state:
                         self._hunt_last_enemy_signature = None
+                        self._hunt_last_enemy_seen_at = 0.0
                         self._hunt_last_target_signature = None
+                        self._hunt_enemy_present = False
                         self._hunt_target_present = False
                         self._hunt_initialized = True
                         self._set_hunt_counter(self._hunt_counter + 1)
                         self._hunt_soft_reset_reset_pending = True
-                game_for_hunt = self.hunt_game_var.get().strip() or current_game
+
+                selected_hunt_game = self.hunt_game_var.get().strip()
+                game_for_hunt = current_game if current_game in self._hunt_game_options else selected_hunt_game
 
                 if mode == "Hatching Egg Hunt":
                     party = list(self.tracker._last_party) if isinstance(self.tracker._last_party, list) else []
@@ -7609,12 +8178,28 @@ class PokeAchieveGUI:
                     encounter = self.tracker.pokemon_reader.read_wild_encounter(game_for_hunt) if self.tracker and self.tracker.pokemon_reader else None
                     if mode == "Soft Reset Hunt":
                         self._handle_hunt_soft_reset_progress(encounter, game_for_hunt)
+                    elif mode in {"Wild Encounter Hunt", "Fishing Encounter Hunt"}:
+                        if isinstance(encounter, dict):
+                            self._log_hunt_raw_encounter(encounter, game_for_hunt, mode)
+                            self._handle_hunt_enemy_encounter(encounter, game_for_hunt)
+                        else:
+                            if waiting_now or not bool(getattr(self.retroarch, "connected", False)):
+                                self._hunt_last_raw_log_key = None
+                            else:
+                                self._log_hunt_raw_no_encounter(game_for_hunt, mode)
+                            self._hunt_enemy_present = False
+                            self._hunt_last_enemy_seen_at = 0.0
                     elif isinstance(encounter, dict):
                         self._handle_hunt_enemy_encounter(encounter, game_for_hunt)
+                    else:
+                        self._hunt_enemy_present = False
+                        self._hunt_last_enemy_seen_at = 0.0
 
                 if isinstance(self.hunt_status_label, ttk.Label):
                     self.hunt_status_label.configure(text=f"Hunt active ({mode})")
             else:
+                self._hunt_enemy_present = False
+                self._hunt_last_enemy_seen_at = 0.0
                 if isinstance(self.hunt_status_label, ttk.Label):
                     self.hunt_status_label.configure(text="Hunt idle")
 
@@ -7622,7 +8207,14 @@ class PokeAchieveGUI:
         except Exception as exc:
             log_event(logging.WARNING, "hunt_poll_exception", error=str(exc), error_type=type(exc).__name__)
 
-        self.root.after(1000, self._process_hunt_updates)
+        next_delay_ms = 1000
+        if self._hunt_active:
+            active_mode = self.hunt_mode_var.get().strip()
+            if active_mode in {"Wild Encounter Hunt", "Fishing Encounter Hunt"}:
+                next_delay_ms = 250
+            elif active_mode == "Soft Reset Hunt":
+                next_delay_ms = 400
+        self.root.after(next_delay_ms, self._process_hunt_updates)
 
     def _build_log_tab(self):
         """Build log tab"""
@@ -9054,10 +9646,16 @@ class PokeAchieveGUI:
                 self._hunt_active = False
                 self._set_hunt_counter(0)
                 self._hunt_profile_applying = False
+                self._hunt_species_counts = {}
+                self._hunt_species_count_labels = {}
                 self._hunt_recent_other_species.clear()
                 self._hunt_alerted_signatures.clear()
                 self._hunt_last_enemy_signature = None
+                self._hunt_last_enemy_seen_at = 0.0
                 self._hunt_last_target_signature = None
+                self._hunt_last_raw_log_key = None
+                self._hunt_last_raw_none_log_at = 0.0
+                self._hunt_enemy_present = False
                 self._hunt_target_present = False
                 self._hunt_soft_reset_reset_pending = False
                 self._hunt_soft_reset_seen_in_pokedex = False
@@ -9202,21 +9800,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
