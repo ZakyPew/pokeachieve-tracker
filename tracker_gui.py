@@ -991,21 +991,57 @@ class PokemonMemoryReader:
             "gen": 3,
             "max_pokemon": 386,
             "layout_id": "gen3_ruby",
-            "pokedex_seen": "0x02024C0C",
-            "pokedex_caught": "0x02024D0C",
-            "party_count": "0x02024284",
-            "party_start": "0x02024288",
+            # Ruby uses static SaveBlock layouts (no Emerald-style saveblock pointers).
+            "pokedex_seen": "0x02024F00",
+            "pokedex_caught": "0x02024ECC",
+            "party_count": "0x02025968",
+            "party_start": "0x0202596C",
             "party_slot_size": 100,
+            "party_count_offset": 0x234,
+            "party_start_offset": 0x238,
+            "pokedex_caught_offset": 0x28,
+            "pokedex_seen_offset": 0x5C,
+            "party_count_candidates": ["0x02025968", "0x02024284", "0x020244E9"],
+            "party_start_candidates": ["0x0202596C", "0x02024288", "0x020244EC"],
+            "party_stride_candidates": [100, 200],
+            "party_use_pointer_layout": 0,
+            "party_max_pairs": 8,
+            "party_enable_offset_scan": 0,
+            "party_allow_double_stride": 0,
+            "party_skip_scan_on_invalid_count": 1,
+            "party_skip_scan_on_zero_count": 1,
+            "party_allow_static_when_pointer_missing": 1,
+            "pokedex_allow_static_when_pointer_missing": 1,
+            "pokedex_allow_static_fallback": 0,
+            "pokedex_allow_byte_fallback": 0,
         },
         "pokemon_sapphire": {
             "gen": 3,
             "max_pokemon": 386,
             "layout_id": "gen3_sapphire",
-            "pokedex_seen": "0x02024C0C",
-            "pokedex_caught": "0x02024D0C",
-            "party_count": "0x02024284",
-            "party_start": "0x02024288",
+            # Sapphire uses static SaveBlock layouts (no Emerald-style saveblock pointers).
+            "pokedex_seen": "0x02024F00",
+            "pokedex_caught": "0x02024ECC",
+            "party_count": "0x02025968",
+            "party_start": "0x0202596C",
             "party_slot_size": 100,
+            "party_count_offset": 0x234,
+            "party_start_offset": 0x238,
+            "pokedex_caught_offset": 0x28,
+            "pokedex_seen_offset": 0x5C,
+            "party_count_candidates": ["0x02025968", "0x02024284", "0x020244E9"],
+            "party_start_candidates": ["0x0202596C", "0x02024288", "0x020244EC"],
+            "party_stride_candidates": [100, 200],
+            "party_use_pointer_layout": 0,
+            "party_max_pairs": 8,
+            "party_enable_offset_scan": 0,
+            "party_allow_double_stride": 0,
+            "party_skip_scan_on_invalid_count": 1,
+            "party_skip_scan_on_zero_count": 1,
+            "party_allow_static_when_pointer_missing": 1,
+            "pokedex_allow_static_when_pointer_missing": 1,
+            "pokedex_allow_static_fallback": 0,
+            "pokedex_allow_byte_fallback": 0,
         },
         "pokemon_emerald": {
             "gen": 3,
@@ -1051,6 +1087,18 @@ class PokemonMemoryReader:
             "party_count": "0x02024284",
             "party_start": "0x02024288",
             "party_slot_size": 100,
+            "saveblock1_ptr": "0x03005008",
+            "saveblock2_ptr": "0x0300500C",
+            "party_count_offset": 0x234,
+            "party_start_offset": 0x238,
+            "pokedex_caught_offset": 0x28,
+            "pokedex_seen_offset": 0x5C,
+            "party_use_pointer_layout": 1,
+            "party_skip_scan_on_invalid_count": 1,
+            "party_allow_static_when_pointer_missing": 0,
+            "pokedex_allow_static_when_pointer_missing": 0,
+            "pokedex_allow_static_fallback": 0,
+            "pokedex_allow_byte_fallback": 0,
         },
         "pokemon_leafgreen": {
             "gen": 3,
@@ -1061,6 +1109,18 @@ class PokemonMemoryReader:
             "party_count": "0x02024284",
             "party_start": "0x02024288",
             "party_slot_size": 100,
+            "saveblock1_ptr": "0x03005008",
+            "saveblock2_ptr": "0x0300500C",
+            "party_count_offset": 0x234,
+            "party_start_offset": 0x238,
+            "pokedex_caught_offset": 0x28,
+            "pokedex_seen_offset": 0x5C,
+            "party_use_pointer_layout": 1,
+            "party_skip_scan_on_invalid_count": 1,
+            "party_allow_static_when_pointer_missing": 0,
+            "pokedex_allow_static_when_pointer_missing": 0,
+            "pokedex_allow_static_fallback": 0,
+            "pokedex_allow_byte_fallback": 0,
         },
     }
     
@@ -2270,8 +2330,8 @@ class PokemonMemoryReader:
                 return self._read_pokedex_flags(addr, max_pokemon, allow_byte_fallback=allow_byte_fallback)
             except TypeError:
                 return self._read_pokedex_flags(addr, max_pokemon)
-        # Emerald-specific pointer-based reads prevent cross-title address bleed in Gen 3.
-        if gen == 3 and str(config.get("layout_id", "")).lower() == "gen3_emerald" and config.get("saveblock2_ptr") and config.get("pokedex_caught_offset") is not None:
+        # Gen 3 should prefer saveblock-pointer reads to avoid static-address cross-layout bleed.
+        if gen == 3 and config.get("saveblock2_ptr") and config.get("pokedex_caught_offset") is not None:
             saveblock2_ptr = self._resolve_gen3_saveblock_ptr(config.get("saveblock2_ptr"), game_name=game_name)
             if saveblock2_ptr is not None:
                 used_pointer_layout = True
@@ -2284,6 +2344,8 @@ class PokemonMemoryReader:
                     pointer=str(config.get("saveblock2_ptr")),
                     layout=config.get("layout_id"),
                 )
+                if not bool(config.get("pokedex_allow_static_when_pointer_missing", 1)):
+                    return []
 
         caught = _safe_read_pokedex_flags(caught_addr)
 
@@ -2403,8 +2465,8 @@ class PokemonMemoryReader:
         slot_size = int(config["party_slot_size"])
         used_pointer_layout = False
 
-        # Emerald-specific pointer-based party addresses.
-        if gen == 3 and str(config.get("layout_id", "")).lower() == "gen3_emerald" and bool(config.get("party_use_pointer_layout", 0)) and config.get("saveblock1_ptr") and config.get("party_count_offset") is not None and config.get("party_start_offset") is not None:
+        # Gen 3 should prefer saveblock-pointer party addresses across all layouts.
+        if gen == 3 and bool(config.get("party_use_pointer_layout", 0)) and config.get("saveblock1_ptr") and config.get("party_count_offset") is not None and config.get("party_start_offset") is not None:
             saveblock1_ptr = self._resolve_gen3_saveblock_ptr(config.get("saveblock1_ptr"), game_name=game_name)
             if saveblock1_ptr is not None:
                 used_pointer_layout = True
@@ -2416,6 +2478,18 @@ class PokemonMemoryReader:
                     pointer=str(config.get("saveblock1_ptr")),
                     layout=config.get("layout_id"),
                 )
+                if not bool(config.get("party_allow_static_when_pointer_missing", 1)):
+                    self._last_party_read_meta.update({
+                        "expected_count": None,
+                        "decoded_count": 0,
+                        "incomplete": False,
+                        "count_addr": str(party_count_addr),
+                        "start_addr": str(party_start_addr),
+                        "stride": int(slot_size),
+                        "budget_hit": False,
+                        "reason": "saveblock_pointer_unreadable",
+                    })
+                    return []
 
         # Read party count from selected layout.
         count = self.retroarch.read_memory(party_count_addr)
@@ -2438,6 +2512,19 @@ class PokemonMemoryReader:
         count_valid = isinstance(count, int) and 0 <= int(count) <= 6
         max_species_id = max(self.POKEMON_NAMES.keys())
         max_decode_species_id = int(self.GEN3_INTERNAL_SPECIES_MAX) if gen == 3 else max_species_id
+
+        if gen == 3 and not count_valid and bool(config.get("party_skip_scan_on_invalid_count", 0)):
+            self._last_party_read_meta.update({
+                "expected_count": None,
+                "decoded_count": 0,
+                "incomplete": False,
+                "count_addr": str(party_count_addr),
+                "start_addr": str(party_start_addr),
+                "stride": int(slot_size),
+                "budget_hit": False,
+                "reason": "invalid_party_count",
+            })
+            return []
 
         if gen == 3:
             force_gen3_party_byte_reads = bool(config.get("party_force_byte_reads", 0))
@@ -2532,6 +2619,37 @@ class PokemonMemoryReader:
             except (TypeError, ValueError):
                 max_pairs = len(ordered_pairs)
             ordered_pairs = ordered_pairs[:max_pairs]
+
+            count_cache: Dict[str, object] = {}
+            def _read_count_candidate(candidate_addr: str) -> object:
+                cached = count_cache.get(candidate_addr, None)
+                if cached is not None:
+                    return cached
+                if candidate_addr == primary_count_addr and count_valid:
+                    value = int(count)
+                else:
+                    value = self.retroarch.read_memory(candidate_addr)
+                count_cache[candidate_addr] = value
+                return value
+
+            if bool(config.get("party_skip_scan_on_zero_count", 0)) and not ignore_party_count:
+                valid_counts: List[int] = []
+                for candidate_count_addr, _ in ordered_pairs:
+                    candidate_value = _read_count_candidate(candidate_count_addr)
+                    if isinstance(candidate_value, int) and 0 <= int(candidate_value) <= 6:
+                        valid_counts.append(int(candidate_value))
+                if valid_counts and max(valid_counts) == 0:
+                    self._last_party_read_meta.update({
+                        "expected_count": 0,
+                        "decoded_count": 0,
+                        "incomplete": False,
+                        "count_addr": str(primary_count_addr),
+                        "start_addr": str(primary_start_addr),
+                        "stride": int(slot_size),
+                        "budget_hit": False,
+                        "reason": "zero_party_count",
+                    })
+                    return []
 
             best_party: List[Dict] = []
             best_raw_party_len = 0
@@ -2860,7 +2978,7 @@ class PokemonMemoryReader:
                     budget_exceeded = True
                     break
 
-                local_count = count if (count_candidate == primary_count_addr and count_valid) else self.retroarch.read_memory(count_candidate)
+                local_count = _read_count_candidate(count_candidate)
                 local_count_valid = isinstance(local_count, int) and 0 <= int(local_count) <= 6
 
                 if ignore_party_count:
@@ -2869,7 +2987,15 @@ class PokemonMemoryReader:
                     else:
                         slots_to_scan = 6
                 else:
-                    slots_to_scan = int(local_count) if (local_count_valid and int(local_count) > 0) else 6
+                    if local_count_valid:
+                        if int(local_count) > 0:
+                            slots_to_scan = int(local_count)
+                        elif bool(config.get("party_skip_scan_on_zero_count", 0)):
+                            slots_to_scan = 0
+                        else:
+                            slots_to_scan = 6
+                    else:
+                        slots_to_scan = 6
 
                 if int(slots_to_scan) <= 0:
                     continue
@@ -3431,8 +3557,7 @@ class PokemonMemoryReader:
             return None
 
         if (
-            str(config.get("layout_id", "")).lower() == "gen3_emerald"
-            and bool(config.get("party_use_pointer_layout", 0))
+            bool(config.get("party_use_pointer_layout", 0))
             and config.get("saveblock1_ptr")
             and config.get("party_count_offset") is not None
             and config.get("party_start_offset") is not None
@@ -3441,6 +3566,8 @@ class PokemonMemoryReader:
             if saveblock1_ptr is not None:
                 party_count_addr = hex(saveblock1_ptr + int(config.get("party_count_offset")))
                 party_start_addr = hex(saveblock1_ptr + int(config.get("party_start_offset")))
+            elif not bool(config.get("party_allow_static_when_pointer_missing", 1)):
+                return None
 
         try:
             player_count_addr_int = int(str(party_count_addr), 16)
@@ -3536,6 +3663,7 @@ class AchievementTracker:
         self._bad_read_streak = 0
         self._achievement_poll_count = 0
         self._collection_wait_streak = 0
+        self._empty_pokedex_streak = 0
         self._poll_heartbeat_count = 0
         self._poll_disconnected_streak = 0
         self._party_skip_streak = 0
@@ -3592,6 +3720,9 @@ class AchievementTracker:
             "unlock_confirmations_legendary": 3,
             "unlock_confirmations_gym_gen3": 2,
             "collection_baseline_confirmations": 2,
+            "collection_empty_baseline_wait_polls": 10,
+            "collection_first_nonempty_confirmations": 2,
+            "collection_empty_drop_confirmations": 3,
             "startup_lockout_enabled": 0,
             "startup_snapshot_window_polls": 30,
             "startup_max_unlocks_per_poll": 12,
@@ -4011,6 +4142,7 @@ class AchievementTracker:
             self._bad_read_streak = 0
             self._achievement_poll_count = 0
             self._collection_wait_streak = 0
+            self._empty_pokedex_streak = 0
             self._poll_heartbeat_count = 0
             self._poll_disconnected_streak = 0
             self._party_skip_streak = 0
@@ -4618,7 +4750,7 @@ class AchievementTracker:
         # Keep party reads separate from catch/achievement responsiveness.
         current_party = list(self._last_party)
         retroarch_unstable = bool(getattr(self.retroarch, "is_unstable_io", lambda: False)())
-        allow_live_party = self._collection_baseline_initialized and bool(current_pokedex) and not retroarch_unstable
+        allow_live_party = self._collection_baseline_initialized and not retroarch_unstable
         if allow_live_party:
             live_party = self._read_current_party()
             if live_party or not self._last_party:
@@ -4664,8 +4796,43 @@ class AchievementTracker:
                         baseline_confirmations=baseline_confirmations,
                         last_known=len(self._last_pokedex),
                     )
+
                 self._collection_baseline_candidate = []
                 self._collection_baseline_candidate_streak = 0
+
+                empty_wait_polls = max(2, int(self._get_validation_profile().get("collection_empty_baseline_wait_polls", 10)))
+                if self._collection_wait_streak >= empty_wait_polls:
+                    baseline_party: List[Dict] = []
+                    if not retroarch_unstable:
+                        baseline_party = self._read_current_party()
+
+                    self._last_pokedex = []
+                    self._last_party = list(baseline_party)
+                    self._collection_baseline_initialized = True
+                    self._collection_wait_streak = 0
+                    self._baseline_snapshot_pending = False
+                    self._baseline_snapshot_wait_polls = 0
+
+                    log_event(
+                        logging.INFO,
+                        "collection_baseline_established",
+                        game=self.game_name,
+                        catches=0,
+                        party=len(baseline_party),
+                        party_sync_deferred=False,
+                        reason="empty_timeout",
+                    )
+
+                    if baseline_party:
+                        self._collection_queue.put({
+                            "catches": [],
+                            "party": baseline_party,
+                            "previous_party": [],
+                            "game": self.game_name,
+                            "catch_event_type": "caught",
+                        })
+                    return
+
                 return
 
             if self._collection_wait_streak:
@@ -4762,10 +4929,48 @@ class AchievementTracker:
                     polls=self._baseline_snapshot_wait_polls,
                 )
 
-        # Detect suspicious empty reads after we already had a populated baseline.
-        if not current_pokedex and len(self._last_pokedex) >= 10:
-            self._handle_bad_read("empty_pokedex_after_non_empty")
-            effective_pokedex = list(self._last_pokedex)
+        # Avoid dropping a non-empty Pokedex state on transient empty reads.
+        if current_pokedex:
+            self._empty_pokedex_streak = 0
+        elif self._last_pokedex:
+            self._empty_pokedex_streak += 1
+            empty_drop_confirmations = max(2, int(profile.get("collection_empty_drop_confirmations", 3)))
+            if self._empty_pokedex_streak < empty_drop_confirmations:
+                if len(self._last_pokedex) >= 10:
+                    self._handle_bad_read("empty_pokedex_after_non_empty")
+                else:
+                    self._log_warning_throttled(
+                        "pokedex_empty_read_ignored",
+                        cooldown_s=10.0,
+                        throttle_key=f"pokedex_empty_read_ignored:{self.game_name}",
+                        game=self.game_name,
+                        streak=self._empty_pokedex_streak,
+                        held_count=len(self._last_pokedex),
+                    )
+                effective_pokedex = list(self._last_pokedex)
+            else:
+                self._empty_pokedex_streak = 0
+        else:
+            self._empty_pokedex_streak = 0
+
+        # When transitioning from an empty baseline, require a stable non-empty read.
+        if not self._last_pokedex and effective_pokedex:
+            first_nonempty_confirmations = max(2, int(profile.get("collection_first_nonempty_confirmations", 2)))
+            if effective_pokedex == self._collection_baseline_candidate:
+                self._collection_baseline_candidate_streak += 1
+            else:
+                self._collection_baseline_candidate = list(effective_pokedex)
+                self._collection_baseline_candidate_streak = 1
+
+            if self._collection_baseline_candidate_streak < first_nonempty_confirmations:
+                effective_pokedex = []
+            else:
+                effective_pokedex = list(self._collection_baseline_candidate)
+                self._collection_baseline_candidate = []
+                self._collection_baseline_candidate_streak = 0
+        elif not effective_pokedex:
+            self._collection_baseline_candidate = []
+            self._collection_baseline_candidate_streak = 0
 
         # Find new catches.
         new_catches = [p for p in effective_pokedex if p not in self._last_pokedex]
@@ -5278,8 +5483,13 @@ class PokeAchieveGUI:
         self._hunt_active = False
         self._hunt_counter = 0
         self._hunt_last_enemy_signature: Optional[str] = None
+        self._hunt_last_target_signature: Optional[str] = None
+        self._hunt_target_present = False
         self._hunt_recent_other_species: deque[int] = deque(maxlen=24)
         self._hunt_last_waiting_state = bool(self.retroarch.is_waiting_for_launch())
+        self._hunt_soft_reset_reset_pending = False
+        self._hunt_soft_reset_seen_in_pokedex = False
+        self._hunt_soft_reset_target_id = 0
         self._hunt_alerted_signatures: Set[str] = set()
         self._hunt_last_party_snapshot: Dict[int, Dict[str, object]] = {}
         self._hunt_initialized = False
@@ -6746,6 +6956,11 @@ class PokeAchieveGUI:
         game_for_hunt = self.hunt_game_var.get().strip() or (self.tracker.game_name if self.tracker else "") or ""
         self._hunt_last_party_snapshot = self._snapshot_party_for_hunt(self.tracker._last_party if self.tracker else [])
         self._hunt_last_enemy_signature = None
+        self._hunt_last_target_signature = None
+        self._hunt_target_present = False
+        self._hunt_soft_reset_reset_pending = False
+        self._hunt_soft_reset_seen_in_pokedex = False
+        self._hunt_soft_reset_target_id = 0
 
         if mode == "Hatching Egg Hunt":
             self._hunt_initialized = True
@@ -6756,6 +6971,14 @@ class PokeAchieveGUI:
             signature = str(encounter.get("signature", "")).strip()
             if signature:
                 self._hunt_last_enemy_signature = signature
+
+        if mode == "Soft Reset Hunt":
+            present, target_signature, _, _, _ = self._get_soft_reset_target_state(encounter, game_for_hunt)
+            self._hunt_target_present = bool(present)
+            self._hunt_last_target_signature = str(target_signature).strip() if isinstance(target_signature, str) and str(target_signature).strip() else None
+            self._hunt_soft_reset_seen_in_pokedex = self._is_hunt_target_in_pokedex()
+            self._hunt_soft_reset_target_id = self._get_hunt_target_pokemon_id()
+
         self._hunt_initialized = True
 
     def _start_hunt(self):
@@ -6771,6 +6994,7 @@ class PokeAchieveGUI:
         self._hunt_active = True
         self._hunt_alerted_signatures = set()
         self._hunt_last_waiting_state = bool(self.retroarch.is_waiting_for_launch())
+        self._hunt_soft_reset_reset_pending = False
         self._hunt_recent_other_species.clear()
         self._update_hunt_other_species_display()
         self._prime_hunt_baseline()
@@ -6828,6 +7052,161 @@ class PokeAchieveGUI:
         except Exception:
             pass
 
+    def _is_hunt_target_in_pokedex(self) -> bool:
+        """Return True when the selected hunt target currently exists in tracked Pokedex state."""
+        if not self.tracker:
+            return False
+        target_id = self._get_hunt_target_pokemon_id()
+        if target_id <= 0:
+            return False
+        pokedex = self.tracker._last_pokedex if isinstance(self.tracker._last_pokedex, list) else []
+        for pid in pokedex:
+            try:
+                if int(pid) == int(target_id):
+                    return True
+            except (TypeError, ValueError):
+                continue
+        return False
+
+    def _get_soft_reset_target_state(self, encounter: Optional[Dict[str, object]], game_name: str) -> Tuple[bool, Optional[str], bool, str, int]:
+        """Resolve current soft-reset target visibility from enemy encounter or party state."""
+        target_id = self._get_hunt_target_pokemon_id()
+        if target_id <= 0 or not self.tracker or not self.tracker.pokemon_reader:
+            return False, None, False, "", 0
+
+        if isinstance(encounter, dict):
+            try:
+                encounter_species_id = int(encounter.get("species_id", 0))
+            except (TypeError, ValueError):
+                encounter_species_id = 0
+            if encounter_species_id == target_id and bool(encounter.get("is_wild", True)):
+                species_name = str(encounter.get("species_name") or self.tracker.pokemon_reader.get_pokemon_name(encounter_species_id))
+                encounter_signature = str(encounter.get("signature", "")).strip()
+                marker = f"enemy:{encounter_signature}" if encounter_signature else f"enemy:{encounter_species_id}"
+                return True, marker, bool(encounter.get("shiny", False)), species_name, encounter_species_id
+
+        def _resolve_target_from_party(party_data: object) -> Tuple[bool, Optional[str], bool, str, int]:
+            if not isinstance(party_data, list):
+                return False, None, False, "", 0
+            for member in party_data:
+                if not isinstance(member, dict):
+                    continue
+                try:
+                    member_species_id = int(member.get("id", 0))
+                except (TypeError, ValueError):
+                    continue
+                if member_species_id != target_id:
+                    continue
+
+                try:
+                    slot = int(member.get("slot", 0))
+                except (TypeError, ValueError):
+                    slot = 0
+                species_name = str(member.get("name") or self.tracker.pokemon_reader.get_pokemon_name(member_species_id))
+
+                personality = member.get("_personality")
+                ot_id = member.get("_ot_id")
+                level = member.get("level")
+                sig_parts = ["party", str(slot), str(member_species_id)]
+                if isinstance(personality, int) and isinstance(ot_id, int):
+                    sig_parts.extend([str(int(personality) & 0xFFFFFFFF), str(int(ot_id) & 0xFFFFFFFF)])
+                elif isinstance(level, int):
+                    sig_parts.append(str(int(level)))
+                signature = ":".join(sig_parts)
+                return True, signature, bool(member.get("shiny", False)), species_name, member_species_id
+            return False, None, False, "", 0
+
+        cached_party = self.tracker._last_party if isinstance(self.tracker._last_party, list) else []
+        present, signature, is_shiny, species_name, species_id = _resolve_target_from_party(cached_party)
+        if present:
+            return present, signature, is_shiny, species_name, species_id
+
+        # Soft-reset hunts on fresh saves can happen before collection baseline captures party;
+        # do a direct live read so attempts are still counted.
+        try:
+            live_party = self.tracker.pokemon_reader.read_party(game_name)
+        except Exception:
+            live_party = []
+
+        return _resolve_target_from_party(live_party)
+
+    def _handle_hunt_soft_reset_progress(self, encounter: Optional[Dict[str, object]], game_name: str):
+        """Track soft-reset attempts for both stationary encounters and party-based targets."""
+        present, signature, is_shiny, species_name, species_id = self._get_soft_reset_target_state(encounter, game_name)
+        target_in_pokedex = self._is_hunt_target_in_pokedex()
+        current_target_id = self._get_hunt_target_pokemon_id()
+
+        if current_target_id != self._hunt_soft_reset_target_id:
+            self._hunt_soft_reset_target_id = current_target_id
+            self._hunt_target_present = False
+            self._hunt_last_target_signature = None
+            self._hunt_soft_reset_seen_in_pokedex = bool(target_in_pokedex)
+
+        if not self._hunt_initialized:
+            self._hunt_target_present = bool(present)
+            self._hunt_last_target_signature = signature if isinstance(signature, str) and signature else None
+            self._hunt_soft_reset_seen_in_pokedex = bool(target_in_pokedex)
+            self._hunt_initialized = True
+            return
+
+        if not present:
+            if self._hunt_target_present:
+                # Transitioned from visible target to not visible; record current dex state
+                # so fallback counting does not double count the same attempt.
+                self._hunt_soft_reset_seen_in_pokedex = bool(target_in_pokedex)
+            else:
+                fallback_new_attempt = (not self._hunt_soft_reset_seen_in_pokedex) and bool(target_in_pokedex)
+                if fallback_new_attempt:
+                    if self._hunt_soft_reset_reset_pending:
+                        self._hunt_soft_reset_reset_pending = False
+                    else:
+                        self._set_hunt_counter(self._hunt_counter + 1)
+
+                    resolved_species_id = species_id if species_id > 0 else self._get_hunt_target_pokemon_id()
+                    if resolved_species_id > 0:
+                        resolved_species_name = species_name or self.tracker.pokemon_reader.get_pokemon_name(resolved_species_id)
+                        self._log(
+                            f"SOFT RESET ENCOUNTER #{self._hunt_counter}: {resolved_species_name} (#{resolved_species_id}) [{game_name}] / State: Pokedex",
+                            "hunt",
+                        )
+
+                self._hunt_soft_reset_seen_in_pokedex = bool(target_in_pokedex)
+
+            self._hunt_target_present = False
+            self._hunt_last_target_signature = None
+            return
+
+        normalized_signature = signature if isinstance(signature, str) and signature else None
+        is_new_attempt = (not self._hunt_target_present) or (normalized_signature is not None and normalized_signature != self._hunt_last_target_signature)
+        if is_new_attempt:
+            if self._hunt_soft_reset_reset_pending:
+                self._hunt_soft_reset_reset_pending = False
+            else:
+                self._set_hunt_counter(self._hunt_counter + 1)
+
+            if species_id > 0:
+                form_text = "Shiny" if is_shiny else "Normal"
+                self._log(
+                    f"SOFT RESET ENCOUNTER #{self._hunt_counter}: {species_name} (#{species_id}) [{game_name}] / {form_text}",
+                    "hunt",
+                )
+            # Prevent duplicate fallback counting when Pokedex updates after a counted attempt.
+            self._hunt_soft_reset_seen_in_pokedex = True
+
+        self._hunt_target_present = True
+        if normalized_signature is not None:
+            self._hunt_last_target_signature = normalized_signature
+
+        if is_shiny and species_id > 0:
+            alert_key = f"Soft Reset Hunt:{normalized_signature or species_id}"
+            if alert_key in self._hunt_alerted_signatures:
+                return
+            self._hunt_alerted_signatures.add(alert_key)
+            self._show_shiny_hunt_popup(
+                "Shiny Found!",
+                f"Shiny found: {species_name} (#{species_id}) in {game_name}.",
+            )
+
     def _handle_hunt_enemy_encounter(self, encounter: Dict[str, object], game_name: str):
         if not isinstance(encounter, dict):
             return
@@ -6853,14 +7232,11 @@ class PokeAchieveGUI:
         species_id = int(encounter.get("species_id", 0)) if isinstance(encounter.get("species_id"), int) else 0
         species_name = str(encounter.get("species_name") or self.tracker.pokemon_reader.get_pokemon_name(species_id))
         is_shiny = bool(encounter.get("shiny", False))
-        target_id = self._get_hunt_target_pokemon_id()
 
-        if mode == "Soft Reset Hunt":
-            if target_id > 0 and species_id != target_id:
-                return
+        if mode in {"Wild Encounter Hunt", "Fishing Encounter Hunt"}:
             self._set_hunt_counter(self._hunt_counter + 1)
-        elif mode in {"Wild Encounter Hunt", "Fishing Encounter Hunt"}:
-            self._set_hunt_counter(self._hunt_counter + 1)
+        else:
+            return
 
         if is_shiny:
             alert_key = f"{mode}:{signature}"
@@ -6922,23 +7298,24 @@ class PokeAchieveGUI:
             waiting_now = bool(self.retroarch.is_waiting_for_launch())
             if self._hunt_active:
                 mode = self.hunt_mode_var.get().strip()
-                encounter_supported = False
-                if self.tracker and self.tracker.pokemon_reader:
-                    cfg = self.tracker.pokemon_reader.get_game_config(current_game or self.hunt_game_var.get().strip())
-                    try:
-                        encounter_supported = int(cfg.get("gen", 1)) == 3 if isinstance(cfg, dict) else False
-                    except (TypeError, ValueError):
-                        encounter_supported = False
-
-                # Fallback path for non-Gen3 games where encounter structs are not yet decoded.
-                if (
-                    mode == "Soft Reset Hunt"
-                    and not encounter_supported
-                    and self._hunt_last_waiting_state
-                    and not waiting_now
-                ):
-                    self._set_hunt_counter(self._hunt_counter + 1)
-
+                # On reset/reconnect, clear encounter + target signatures so repeated
+                # identical PIDs after resets still count as new attempts.
+                # Also count one attempt on reconnect and mark pending so we don't
+                # double-count when memory-derived encounter state arrives.
+                if mode == "Soft Reset Hunt":
+                    if waiting_now and not self._hunt_last_waiting_state:
+                        self._hunt_last_enemy_signature = None
+                        self._hunt_last_target_signature = None
+                        self._hunt_target_present = False
+                        self._hunt_initialized = True
+                        self._hunt_soft_reset_reset_pending = False
+                    elif (not waiting_now) and self._hunt_last_waiting_state:
+                        self._hunt_last_enemy_signature = None
+                        self._hunt_last_target_signature = None
+                        self._hunt_target_present = False
+                        self._hunt_initialized = True
+                        self._set_hunt_counter(self._hunt_counter + 1)
+                        self._hunt_soft_reset_reset_pending = True
                 game_for_hunt = self.hunt_game_var.get().strip() or current_game
 
                 if mode == "Hatching Egg Hunt":
@@ -6946,7 +7323,9 @@ class PokeAchieveGUI:
                     self._handle_hunt_egg_progress(party, game_for_hunt)
                 else:
                     encounter = self.tracker.pokemon_reader.read_wild_encounter(game_for_hunt) if self.tracker and self.tracker.pokemon_reader else None
-                    if isinstance(encounter, dict):
+                    if mode == "Soft Reset Hunt":
+                        self._handle_hunt_soft_reset_progress(encounter, game_for_hunt)
+                    elif isinstance(encounter, dict):
                         self._handle_hunt_enemy_encounter(encounter, game_for_hunt)
 
                 if isinstance(self.hunt_status_label, ttk.Label):
@@ -7406,7 +7785,25 @@ class PokeAchieveGUI:
                 previous_party = update.get("previous_party", [])
                 game = update["game"]
                 catch_event_type = str(update.get("catch_event_type", "new_addition")).strip().lower()
-                catch_action = "CAUGHT" if catch_event_type == "caught" else "NEW ADDITION"
+                catches_int: List[int] = []
+                for pokemon_id in catches:
+                    try:
+                        catches_int.append(int(pokemon_id))
+                    except (TypeError, ValueError):
+                        continue
+
+                if catch_event_type == "new_addition":
+                    soft_reset_active = bool(self._hunt_active and self.hunt_mode_var.get().strip() == "Soft Reset Hunt")
+                    target_id = self._get_hunt_target_pokemon_id()
+                    if soft_reset_active and target_id > 0 and catches_int and all(pid == target_id for pid in catches_int):
+                        catch_event_type = "new_encounter"
+
+                if catch_event_type == "caught":
+                    catch_action = "CAUGHT"
+                elif catch_event_type == "new_encounter":
+                    catch_action = "NEW ENCOUNTER"
+                else:
+                    catch_action = "NEW ADDITION"
 
                 # Log Pokedex entries
                 for pokemon_id in catches:
@@ -7517,7 +7914,12 @@ class PokeAchieveGUI:
                 
                 # Post to API
                 if self.api:
-                    self.tracker.post_collection_to_platform(catches, party, game, previous_party=previous_party)                
+                    catches_for_api = catches
+                    if catch_event_type == "new_encounter":
+                        catches_for_api = []
+
+                    if catches_for_api or party != previous_party:
+                        self.tracker.post_collection_to_platform(catches_for_api, party, game, previous_party=previous_party)
             except queue.Empty:
                 break
         
@@ -7637,7 +8039,7 @@ class PokeAchieveGUI:
         timestamp = datetime.now().strftime("%H:%M:%S")
         game_info = f" [{game}]" if game else ""
         action = str(event_action).strip().upper()
-        if action not in {"CAUGHT", "NEW ADDITION"}:
+        if action not in {"CAUGHT", "NEW ADDITION", "NEW ENCOUNTER"}:
             action = "NEW ADDITION"
         mobile_icon = "[POKEDEX]"
         self.catches_list.insert('1.0', f"[{timestamp}] {mobile_icon} {action}: {pokemon_name} (#{pokemon_id}){game_info}\n")
@@ -8365,6 +8767,11 @@ class PokeAchieveGUI:
                 self._hunt_recent_other_species.clear()
                 self._hunt_alerted_signatures.clear()
                 self._hunt_last_enemy_signature = None
+                self._hunt_last_target_signature = None
+                self._hunt_target_present = False
+                self._hunt_soft_reset_reset_pending = False
+                self._hunt_soft_reset_seen_in_pokedex = False
+                self._hunt_soft_reset_target_id = 0
                 self._hunt_initialized = False
                 self._update_hunt_other_species_display()
 
@@ -8505,43 +8912,6 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
