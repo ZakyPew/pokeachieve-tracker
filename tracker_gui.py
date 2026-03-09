@@ -5719,6 +5719,7 @@ class PokeAchieveGUI:
         self._hunt_profile_applying = False
         self._hunt_active = False
         self._hunt_counter = 0
+        self._hunt_phase_count = 0
         self._hunt_last_enemy_signature: Optional[str] = None
         self._hunt_last_target_signature: Optional[str] = None
         self._hunt_enemy_present = False
@@ -5742,6 +5743,7 @@ class PokeAchieveGUI:
         self._hunt_target_type_labels: List[ttk.Label] = []
         self._hunt_target_meta_label: Optional[ttk.Label] = None
         self._hunt_counter_label: Optional[ttk.Label] = None
+        self._hunt_phase_label: Optional[ttk.Label] = None
         self._hunt_mode_hint_label: Optional[ttk.Label] = None
         self._hunt_other_sprites_frame: Optional[ttk.Frame] = None
         self._hunt_other_sprite_labels: List[ttk.Label] = []
@@ -6881,14 +6883,26 @@ class PokeAchieveGUI:
         )
         self._hunt_target_meta_label.pack(pady=(0, 6))
 
+        counter_row = ttk.Frame(target_inner)
+        counter_row.pack()
+
         self._hunt_counter_label = ttk.Label(
-            target_inner,
+            counter_row,
             text="Encounters: 0",
             font=("Segoe UI", 12, "bold"),
             anchor="center",
             justify=tk.CENTER,
         )
-        self._hunt_counter_label.pack()
+        self._hunt_counter_label.pack(side=tk.LEFT, padx=(0, 10))
+
+        self._hunt_phase_label = ttk.Label(
+            counter_row,
+            text="Phases: 0",
+            font=("Segoe UI", 12, "bold"),
+            anchor="center",
+            justify=tk.CENTER,
+        )
+        self._hunt_phase_label.pack(side=tk.LEFT, padx=(10, 0))
 
         self._hunt_mode_hint_label = ttk.Label(
             target_inner,
@@ -6982,6 +6996,7 @@ class PokeAchieveGUI:
             "route": route_name,
             "target_id": target_id,
             "counter": int(max(0, self._hunt_counter)),
+            "phase_count": int(max(0, self._hunt_phase_count)),
             "species_counts": {str(int(pid)): int(max(0, count)) for pid, count in self._hunt_species_counts.items() if int(count) > 0},
             "active": bool(self._hunt_active),
             "updated_at": int(time.time()),
@@ -7044,6 +7059,10 @@ class PokeAchieveGUI:
             counter_value = int(profile.get("counter", 0))
         except (TypeError, ValueError):
             counter_value = 0
+        try:
+            phase_value = int(profile.get("phase_count", 0))
+        except (TypeError, ValueError):
+            phase_value = 0
         profile_active = bool(profile.get("active", False))
         species_counts_raw = profile.get("species_counts")
         parsed_species_counts: Dict[int, int] = {}
@@ -7081,6 +7100,7 @@ class PokeAchieveGUI:
             self._hunt_species_counts = dict(parsed_species_counts)
             self._update_hunt_target_display()
             self._set_hunt_counter(counter_value)
+            self._set_hunt_phase_count(phase_value)
         finally:
             self._hunt_profile_applying = False
 
@@ -7127,6 +7147,7 @@ class PokeAchieveGUI:
         try:
             self._hunt_species_counts = {}
             self._set_hunt_counter(0)
+            self._set_hunt_phase_count(0)
         finally:
             self._hunt_profile_applying = False
 
@@ -7143,6 +7164,7 @@ class PokeAchieveGUI:
             try:
                 self._hunt_species_counts = {}
                 self._set_hunt_counter(0)
+                self._set_hunt_phase_count(0)
             finally:
                 self._hunt_profile_applying = False
             self._update_hunt_other_species_display()
@@ -7197,6 +7219,7 @@ class PokeAchieveGUI:
         try:
             self._hunt_species_counts = {}
             self._set_hunt_counter(0)
+            self._set_hunt_phase_count(0)
         finally:
             self._hunt_profile_applying = False
         self._update_hunt_other_species_display()
@@ -7242,6 +7265,13 @@ class PokeAchieveGUI:
         self._hunt_counter = max(0, int(value))
         if isinstance(self._hunt_counter_label, ttk.Label):
             self._hunt_counter_label.configure(text=f"Encounters: {self._hunt_counter:,}")
+        if not self._hunt_profile_applying:
+            self._save_current_hunt_profile()
+
+    def _set_hunt_phase_count(self, value: int):
+        self._hunt_phase_count = max(0, int(value))
+        if isinstance(self._hunt_phase_label, ttk.Label):
+            self._hunt_phase_label.configure(text=f"Phases: {self._hunt_phase_count:,}")
         if not self._hunt_profile_applying:
             self._save_current_hunt_profile()
 
@@ -7637,13 +7667,14 @@ class PokeAchieveGUI:
 
     def _reset_hunt_counter(self, emit_log: bool = True, persist: bool = True):
         self._set_hunt_counter(0)
+        self._set_hunt_phase_count(0)
         self._hunt_species_counts = {}
         self._hunt_recent_other_species.clear()
         self._hunt_alerted_signatures.clear()
         self._update_hunt_other_species_display()
         self._prime_hunt_baseline()
         if emit_log:
-            self._log("[HUNT] Counter reset", "info")
+            self._log("[HUNT] Counter and phases reset", "info")
         if persist and not self._hunt_profile_applying:
             self._save_current_hunt_profile(active_override=bool(self._hunt_active))
 
@@ -8085,6 +8116,25 @@ class PokeAchieveGUI:
             target_name = self.tracker.pokemon_reader.get_pokemon_name(target_id) if target_id > 0 else "Any"
             self._log(
                 f"{encounter_label} ENCOUNTER (non-target): {species_name} (#{species_id}) [{game_name}] / {form_text} / Species Count: {species_counter:,} / Target: {target_name} (#{target_id})",
+                "hunt",
+            )
+
+        if is_shiny and target_id > 0 and not target_match:
+            self._set_hunt_phase_count(self._hunt_phase_count + 1)
+            target_name = self.tracker.pokemon_reader.get_pokemon_name(target_id)
+            log_event(
+                logging.INFO,
+                "hunt_phase_advanced",
+                game=game_name,
+                mode=mode,
+                route=self.hunt_route_var.get().strip(),
+                phase=self._hunt_phase_count,
+                species_id=species_id,
+                target_id=target_id,
+                signature=signature,
+            )
+            self._log(
+                f"{encounter_label} PHASE #{self._hunt_phase_count}: Shiny non-target {species_name} (#{species_id}) [{game_name}] / Target: {target_name} (#{target_id})",
                 "hunt",
             )
 
@@ -9645,6 +9695,7 @@ class PokeAchieveGUI:
                 self._hunt_profile_applying = True
                 self._hunt_active = False
                 self._set_hunt_counter(0)
+                self._set_hunt_phase_count(0)
                 self._hunt_profile_applying = False
                 self._hunt_species_counts = {}
                 self._hunt_species_count_labels = {}
