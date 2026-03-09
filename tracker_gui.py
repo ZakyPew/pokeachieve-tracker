@@ -5480,6 +5480,9 @@ class PokeAchieveGUI:
         self.hunt_game_var = tk.StringVar(value=self._hunt_game_options[0] if self._hunt_game_options else "")
         self.hunt_route_var = tk.StringVar(value="Any Soft Reset")
         self.hunt_target_var = tk.StringVar(value="")
+        self.hunt_profiles_file = self.data_dir / "hunt_profiles.json"
+        self._hunt_profiles = self._load_hunt_profiles()
+        self._hunt_profile_applying = False
         self._hunt_active = False
         self._hunt_counter = 0
         self._hunt_last_enemy_signature: Optional[str] = None
@@ -5551,6 +5554,69 @@ class PokeAchieveGUI:
         except OSError as exc:
             log_event(logging.WARNING, "config_save_failed", file=str(self.config_file), error=str(exc))
     
+    def _load_hunt_profiles(self) -> Dict[str, Any]:
+        default_data: Dict[str, Any] = {"version": 1, "games": {}}
+        if not self.hunt_profiles_file.exists():
+            return default_data
+        try:
+            with open(self.hunt_profiles_file, "r") as f:
+                data = json.load(f)
+            if isinstance(data, dict) and isinstance(data.get("games"), dict):
+                data.setdefault("version", 1)
+                return data
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            log_event(logging.WARNING, "hunt_profiles_load_failed", file=str(self.hunt_profiles_file), error=str(exc))
+        return default_data
+
+    def _save_hunt_profiles(self):
+        self._hunt_profiles.setdefault("version", 1)
+        self._hunt_profiles.setdefault("games", {})
+        try:
+            with open(self.hunt_profiles_file, "w") as f:
+                json.dump(self._hunt_profiles, f, indent=2)
+        except OSError as exc:
+            log_event(logging.WARNING, "hunt_profiles_save_failed", file=str(self.hunt_profiles_file), error=str(exc))
+
+    def _get_hunt_profile_store_for_game(self, game_name: str, *, create: bool = False) -> Optional[Dict[str, Any]]:
+        game_key = (game_name or "").strip()
+        if not game_key:
+            return None
+
+        games = self._hunt_profiles.get("games")
+        if not isinstance(games, dict):
+            if not create:
+                return None
+            games = {}
+            self._hunt_profiles["games"] = games
+
+        game_store = games.get(game_key)
+        if not isinstance(game_store, dict):
+            if not create:
+                return None
+            game_store = {"last_profile_key": "", "profiles": {}}
+            games[game_key] = game_store
+
+        profiles = game_store.get("profiles")
+        if not isinstance(profiles, dict):
+            if not create:
+                return None
+            game_store["profiles"] = {}
+
+        if not isinstance(game_store.get("last_profile_key"), str):
+            game_store["last_profile_key"] = ""
+
+        return game_store
+
+    def _build_hunt_profile_key(self, mode: str, route_name: str, target_id: int) -> str:
+        safe_mode = (mode or "").strip()
+        safe_route = (route_name or "").strip()
+        try:
+            safe_target_id = int(target_id)
+        except (TypeError, ValueError):
+            safe_target_id = 0
+        if safe_target_id < 0:
+            safe_target_id = 0
+        return f"{safe_mode}|{safe_route}|{safe_target_id}"
     def _load_validation_profiles(self):
         profile_path = self.script_dir / "profiles.json"
         if not profile_path.exists():
@@ -6493,7 +6559,7 @@ class PokeAchieveGUI:
             width=24,
         )
         self._hunt_mode_combo.grid(row=0, column=1, sticky="ew", padx=4, pady=4)
-        self._hunt_mode_combo.bind("<<ComboboxSelected>>", self._update_hunt_mode_controls)
+        self._hunt_mode_combo.bind("<<ComboboxSelected>>", self._on_hunt_mode_selected)
 
         ttk.Label(controls, text="Game:").grid(row=0, column=2, sticky="w", padx=4, pady=4)
         self._hunt_game_combo = ttk.Combobox(
@@ -6504,7 +6570,7 @@ class PokeAchieveGUI:
             width=18,
         )
         self._hunt_game_combo.grid(row=0, column=3, sticky="ew", padx=4, pady=4)
-        self._hunt_game_combo.bind("<<ComboboxSelected>>", self._refresh_hunt_targets)
+        self._hunt_game_combo.bind("<<ComboboxSelected>>", self._on_hunt_game_selected)
 
         self._hunt_route_label = ttk.Label(controls, text="Route:")
         self._hunt_route_label.grid(row=0, column=4, sticky="w", padx=4, pady=4)
@@ -6516,7 +6582,7 @@ class PokeAchieveGUI:
             width=24,
         )
         self._hunt_route_combo.grid(row=0, column=5, sticky="ew", padx=4, pady=4)
-        self._hunt_route_combo.bind("<<ComboboxSelected>>", self._refresh_hunt_targets)
+        self._hunt_route_combo.bind("<<ComboboxSelected>>", self._on_hunt_route_selected)
 
         ttk.Label(controls, text="Target:").grid(row=1, column=0, sticky="w", padx=4, pady=4)
         self._hunt_target_combo = ttk.Combobox(
@@ -6527,7 +6593,7 @@ class PokeAchieveGUI:
             width=36,
         )
         self._hunt_target_combo.grid(row=1, column=1, columnspan=3, sticky="ew", padx=4, pady=4)
-        self._hunt_target_combo.bind("<<ComboboxSelected>>", self._update_hunt_target_display)
+        self._hunt_target_combo.bind("<<ComboboxSelected>>", self._on_hunt_target_selected)
 
         self._hunt_start_btn = ttk.Button(controls, text="Start Hunt", command=self._start_hunt)
         self._hunt_start_btn.grid(row=1, column=4, sticky="ew", padx=4, pady=4)
@@ -6618,9 +6684,8 @@ class PokeAchieveGUI:
         self.hunt_status_label = ttk.Label(container, text="Hunt idle", style="Subtle.TLabel")
         self.hunt_status_label.pack(anchor=tk.W)
 
-        self._refresh_hunt_targets()
         self._update_hunt_mode_controls()
-        self._set_hunt_counter(0)
+        self._load_last_hunt_for_game(self.hunt_game_var.get().strip(), auto_start=False)
 
     def _get_hunt_species_options(self, game_name: str) -> List[Tuple[int, str]]:
         reader = self.tracker.pokemon_reader if self.tracker else None
@@ -6634,6 +6699,212 @@ class PokeAchieveGUI:
             if isinstance(name, str) and name.strip():
                 options.append((int(pid), name.strip()))
         return options
+
+    def _on_hunt_mode_selected(self, _event=None):
+        self._update_hunt_mode_controls()
+        self._load_saved_hunt_for_current_selection(auto_start=False)
+
+    def _on_hunt_game_selected(self, _event=None):
+        selected_game = self.hunt_game_var.get().strip()
+        self._load_last_hunt_for_game(selected_game, auto_start=False)
+
+    def _on_hunt_route_selected(self, _event=None):
+        self._refresh_hunt_targets()
+        self._load_saved_hunt_for_current_selection(auto_start=False)
+
+    def _on_hunt_target_selected(self, _event=None):
+        self._update_hunt_target_display()
+        self._load_saved_hunt_for_current_selection(auto_start=False)
+
+    def _capture_current_hunt_profile(self) -> Optional[Tuple[str, str, Dict[str, Any]]]:
+        game_name = self.hunt_game_var.get().strip() or (self.tracker.game_name or "")
+        if game_name not in self._hunt_game_options:
+            return None
+
+        mode = self.hunt_mode_var.get().strip()
+        route_name = self.hunt_route_var.get().strip()
+        target_id = self._get_hunt_target_pokemon_id()
+        profile_key = self._build_hunt_profile_key(mode, route_name, target_id)
+        profile: Dict[str, Any] = {
+            "mode": mode,
+            "route": route_name,
+            "target_id": target_id,
+            "counter": int(max(0, self._hunt_counter)),
+            "active": bool(self._hunt_active),
+            "updated_at": int(time.time()),
+        }
+        return game_name, profile_key, profile
+
+    def _save_current_hunt_profile(self, *, active_override: Optional[bool] = None):
+        if self._hunt_profile_applying:
+            return
+
+        captured = self._capture_current_hunt_profile()
+        if not captured:
+            return
+
+        game_name, profile_key, profile = captured
+        if active_override is not None:
+            profile["active"] = bool(active_override)
+
+        game_store = self._get_hunt_profile_store_for_game(game_name, create=True)
+        if not isinstance(game_store, dict):
+            return
+
+        profiles = game_store.get("profiles")
+        if not isinstance(profiles, dict):
+            profiles = {}
+            game_store["profiles"] = profiles
+
+        if bool(profile.get("active")):
+            for existing in profiles.values():
+                if isinstance(existing, dict):
+                    existing["active"] = False
+
+        profiles[profile_key] = profile
+        game_store["last_profile_key"] = profile_key
+        self._save_hunt_profiles()
+
+    def _resolve_hunt_target_display(self, game_name: str, target_id: int) -> str:
+        if int(target_id or 0) <= 0:
+            return ""
+        for pid, name in self._get_hunt_species_options(game_name):
+            if int(pid) == int(target_id):
+                return f"{int(pid):03d} {name}"
+        return ""
+
+    def _apply_hunt_profile(self, game_name: str, profile: Dict[str, Any], *, auto_start: bool):
+        if game_name not in self._hunt_game_options or not isinstance(profile, dict):
+            return
+
+        profile_mode = str(profile.get("mode") or "").strip()
+        if profile_mode not in self._hunt_modes:
+            profile_mode = self._hunt_modes[0]
+
+        route_name = str(profile.get("route") or "").strip()
+        try:
+            target_id = int(profile.get("target_id", 0))
+        except (TypeError, ValueError):
+            target_id = 0
+        try:
+            counter_value = int(profile.get("counter", 0))
+        except (TypeError, ValueError):
+            counter_value = 0
+        profile_active = bool(profile.get("active", False))
+
+        self._hunt_profile_applying = True
+        try:
+            if self.hunt_game_var.get().strip() != game_name:
+                self.hunt_game_var.set(game_name)
+
+            self.hunt_mode_var.set(profile_mode)
+            self._update_hunt_mode_controls()
+
+            route_values = self._get_hunt_route_values(game_name, profile_mode)
+            if route_name and route_name in route_values:
+                self.hunt_route_var.set(route_name)
+            elif route_values:
+                self.hunt_route_var.set(route_values[0])
+            else:
+                self.hunt_route_var.set("")
+
+            self._refresh_hunt_targets()
+
+            target_display = self._resolve_hunt_target_display(game_name, target_id)
+            if target_display:
+                self.hunt_target_var.set(target_display)
+            self._update_hunt_target_display()
+            self._set_hunt_counter(counter_value)
+        finally:
+            self._hunt_profile_applying = False
+
+        if auto_start and profile_active:
+            self._start_hunt(silent=True, emit_log=False, persist=False)
+        else:
+            self._pause_hunt(emit_log=False, persist=False)
+
+    def _load_saved_hunt_for_current_selection(self, *, auto_start: bool = False) -> bool:
+        game_name = self.hunt_game_var.get().strip() or (self.tracker.game_name or "")
+        if game_name not in self._hunt_game_options:
+            return False
+
+        game_store = self._get_hunt_profile_store_for_game(game_name, create=False)
+        profiles = game_store.get("profiles") if isinstance(game_store, dict) else None
+        if not isinstance(profiles, dict):
+            profiles = {}
+
+        profile_key = self._build_hunt_profile_key(
+            self.hunt_mode_var.get().strip(),
+            self.hunt_route_var.get().strip(),
+            self._get_hunt_target_pokemon_id(),
+        )
+        profile = profiles.get(profile_key)
+        if isinstance(profile, dict):
+            self._apply_hunt_profile(game_name, profile, auto_start=auto_start)
+            if isinstance(game_store, dict):
+                game_store["last_profile_key"] = profile_key
+                self._save_hunt_profiles()
+            return True
+
+        self._hunt_profile_applying = True
+        try:
+            self._set_hunt_counter(0)
+        finally:
+            self._hunt_profile_applying = False
+
+        self._pause_hunt(emit_log=False, persist=False)
+        self._save_current_hunt_profile(active_override=False)
+        return False
+
+    def _load_last_hunt_for_game(self, game_name: str, *, auto_start: bool):
+        game_key = (game_name or "").strip()
+        if game_key not in self._hunt_game_options:
+            self._refresh_hunt_targets()
+            self._hunt_profile_applying = True
+            try:
+                self._set_hunt_counter(0)
+            finally:
+                self._hunt_profile_applying = False
+            self._pause_hunt(emit_log=False, persist=False)
+            return
+
+        if self.hunt_game_var.get().strip() != game_key:
+            self.hunt_game_var.set(game_key)
+
+        game_store = self._get_hunt_profile_store_for_game(game_key, create=False)
+        profiles = game_store.get("profiles") if isinstance(game_store, dict) else None
+        if not isinstance(profiles, dict):
+            profiles = {}
+
+        profile: Optional[Dict[str, Any]] = None
+        last_key = game_store.get("last_profile_key") if isinstance(game_store, dict) else ""
+        if isinstance(last_key, str) and last_key:
+            candidate = profiles.get(last_key)
+            if isinstance(candidate, dict):
+                profile = candidate
+
+        if profile is None and profiles:
+            sorted_profiles = sorted(
+                (item for item in profiles.values() if isinstance(item, dict)),
+                key=lambda item: int(item.get("updated_at", 0)) if isinstance(item.get("updated_at", 0), int) else 0,
+                reverse=True,
+            )
+            if sorted_profiles:
+                profile = sorted_profiles[0]
+
+        if isinstance(profile, dict):
+            self._apply_hunt_profile(game_key, profile, auto_start=auto_start)
+            self._save_current_hunt_profile(active_override=bool(profile.get("active", False)))
+            return
+
+        self._update_hunt_mode_controls()
+        self._hunt_profile_applying = True
+        try:
+            self._set_hunt_counter(0)
+        finally:
+            self._hunt_profile_applying = False
+        self._pause_hunt(emit_log=False, persist=False)
+        self._save_current_hunt_profile(active_override=False)
 
     def _refresh_hunt_targets(self, _event=None):
         game_name = self.hunt_game_var.get().strip()
@@ -6674,6 +6945,8 @@ class PokeAchieveGUI:
         self._hunt_counter = max(0, int(value))
         if isinstance(self._hunt_counter_label, ttk.Label):
             self._hunt_counter_label.configure(text=f"Encounters: {self._hunt_counter:,}")
+        if not self._hunt_profile_applying:
+            self._save_current_hunt_profile()
 
     def _update_hunt_target_display(self, _event=None):
         target_id = self._get_hunt_target_pokemon_id()
@@ -6981,15 +7254,17 @@ class PokeAchieveGUI:
 
         self._hunt_initialized = True
 
-    def _start_hunt(self):
+    def _start_hunt(self, *, silent: bool = False, emit_log: bool = True, persist: bool = True) -> bool:
         game_name = self.hunt_game_var.get().strip()
         if game_name not in self._hunt_game_options:
-            messagebox.showwarning("Unsupported Game", "Shiny Hunt supports Gen 2/3 games only.")
-            return
+            if not silent:
+                messagebox.showwarning("Unsupported Game", "Shiny Hunt supports Gen 2/3 games only.")
+            return False
 
         if self.hunt_mode_var.get().strip() != "Hatching Egg Hunt" and self._get_hunt_target_pokemon_id() <= 0:
-            messagebox.showwarning("No Target", "Select a hunt target before starting.")
-            return
+            if not silent:
+                messagebox.showwarning("No Target", "Select a hunt target before starting.")
+            return False
 
         self._hunt_active = True
         self._hunt_alerted_signatures = set()
@@ -7004,9 +7279,13 @@ class PokeAchieveGUI:
             self._hunt_pause_btn.configure(state="normal")
         if isinstance(self.hunt_status_label, ttk.Label):
             self.hunt_status_label.configure(text="Hunt active")
-        self._log(f"[HUNT] Started {self.hunt_mode_var.get()}", "info")
+        if emit_log:
+            self._log(f"[HUNT] Started {self.hunt_mode_var.get()}", "info")
+        if persist and not self._hunt_profile_applying:
+            self._save_current_hunt_profile(active_override=True)
+        return True
 
-    def _pause_hunt(self):
+    def _pause_hunt(self, emit_log: bool = True, persist: bool = True):
         self._hunt_active = False
         if isinstance(self._hunt_start_btn, ttk.Button):
             self._hunt_start_btn.configure(state="normal")
@@ -7014,15 +7293,21 @@ class PokeAchieveGUI:
             self._hunt_pause_btn.configure(state="disabled")
         if isinstance(self.hunt_status_label, ttk.Label):
             self.hunt_status_label.configure(text="Hunt paused")
-        self._log("[HUNT] Hunt paused", "info")
+        if emit_log:
+            self._log("[HUNT] Hunt paused", "info")
+        if persist and not self._hunt_profile_applying:
+            self._save_current_hunt_profile(active_override=False)
 
-    def _reset_hunt_counter(self):
+    def _reset_hunt_counter(self, emit_log: bool = True, persist: bool = True):
         self._set_hunt_counter(0)
         self._hunt_recent_other_species.clear()
         self._hunt_alerted_signatures.clear()
         self._update_hunt_other_species_display()
         self._prime_hunt_baseline()
-        self._log("[HUNT] Counter reset", "info")
+        if emit_log:
+            self._log("[HUNT] Counter reset", "info")
+        if persist and not self._hunt_profile_applying:
+            self._save_current_hunt_profile(active_override=bool(self._hunt_active))
 
     def _snapshot_party_for_hunt(self, party: List[Dict]) -> Dict[int, Dict[str, object]]:
         snapshot: Dict[int, Dict[str, object]] = {}
@@ -7292,8 +7577,7 @@ class PokeAchieveGUI:
         try:
             current_game = (self.tracker.game_name or "").strip()
             if current_game and current_game in self._hunt_game_options and self.hunt_game_var.get().strip() != current_game:
-                self.hunt_game_var.set(current_game)
-                self._refresh_hunt_targets()
+                self._load_last_hunt_for_game(current_game, auto_start=True)
 
             waiting_now = bool(self.retroarch.is_waiting_for_launch())
             if self._hunt_active:
@@ -7504,8 +7788,7 @@ class PokeAchieveGUI:
                 
                 self.game_label.configure(text=f"Game: {display_name}")
                 if display_name in self._hunt_game_options:
-                    self.hunt_game_var.set(display_name)
-                    self._refresh_hunt_targets()
+                    self._load_last_hunt_for_game(display_name, auto_start=True)
                 self._log(f"Loaded {len(self.tracker.achievements)} achievements for {display_name}", "success")
                 
                 if not self.is_running:
@@ -8737,7 +9020,12 @@ class PokeAchieveGUI:
                 # Clear config file
                 if self.config_file.exists():
                     self.config_file.unlink()
-                
+
+                # Clear hunt profiles
+                if self.hunt_profiles_file.exists():
+                    self.hunt_profiles_file.unlink()
+                self._hunt_profiles = {"version": 1, "games": {}}
+
                 # Clear tracker state
                 self.tracker.achievements = []
                 self.tracker.game_name = None
@@ -8762,8 +9050,10 @@ class PokeAchieveGUI:
                 self.progress_bar["value"] = 0
                 self.collection_label.configure(text="Caught: 0 | Shiny: 0 | Party: 0")
                 self._update_party_display([], "")
+                self._hunt_profile_applying = True
                 self._hunt_active = False
                 self._set_hunt_counter(0)
+                self._hunt_profile_applying = False
                 self._hunt_recent_other_species.clear()
                 self._hunt_alerted_signatures.clear()
                 self._hunt_last_enemy_signature = None
@@ -8912,6 +9202,19 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
