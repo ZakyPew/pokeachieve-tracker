@@ -13,13 +13,13 @@ import queue
 import re
 import os
 import sys
-from collections import Counter
+from collections import Counter, deque
 import urllib.request
 import urllib.error
 from urllib.parse import urlparse, urlunparse
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Callable, Tuple, Set
+from typing import Any, Dict, List, Optional, Callable, Tuple, Set
 from datetime import datetime
 from hashlib import sha256
 from dataclasses import dataclass, asdict
@@ -54,12 +54,12 @@ def _format_log_fields(fields: Dict[str, object]) -> str:
     return " | ".join(parts)
 
 
-def log_event(level: int, event: str, **fields):
+def log_event(log_level: int, event: str, **fields):
     """Structured logging helper."""
     if fields:
-        LOGGER.log(level, "%s | %s", event, _format_log_fields(fields))
+        LOGGER.log(log_level, "%s | %s", event, _format_log_fields(fields))
     else:
-        LOGGER.log(level, "%s", event)
+        LOGGER.log(log_level, "%s", event)
 
 
 
@@ -110,8 +110,7 @@ def _format_party_slot_line(member: Dict[str, object], *, debug_style: bool, nam
             base = f"SLOT {slot}: Lv.{level_int} {name}"
 
     details: List[str] = []
-    if bool(member.get("shiny")):
-        details.append("Shiny")
+    details.append("Shiny" if bool(member.get("shiny")) else "Normal")
     for label, key in (("Gender", "gender"), ("Nature", "nature"), ("Ability", "ability")):
         value = member.get(key)
         if isinstance(value, str) and value.strip():
@@ -865,7 +864,8 @@ class RetroArchClient:
         return None
     
     def read_memory(self, address: str, num_bytes: int = 1) -> Optional[int]:
-        """Read memory from the emulator"""
+        """Read memory from the emulator."""
+
         def _parse_response(response: Optional[str]) -> Optional[List[int]]:
             if response and response.startswith("READ_CORE_MEMORY"):
                 parts = response.split()
@@ -874,6 +874,14 @@ class RetroArchClient:
                         return [int(x, 16) for x in parts[2:]]
                     except ValueError:
                         return None
+            return None
+
+        def _read_chunk_with_retry(read_addr: str, read_len: int) -> Optional[List[int]]:
+            attempts = 2
+            for _ in range(attempts):
+                parsed = _parse_response(self.send_command(f"READ_CORE_MEMORY {read_addr} {read_len}"))
+                if isinstance(parsed, list) and len(parsed) >= int(read_len):
+                    return parsed
             return None
 
         try:
@@ -889,7 +897,7 @@ class RetroArchClient:
             try:
                 base_addr = int(str(address), 16)
             except (TypeError, ValueError):
-                parsed = _parse_response(self.send_command(f"READ_CORE_MEMORY {address} {total_bytes}"))
+                parsed = _read_chunk_with_retry(str(address), int(total_bytes))
                 if parsed is None:
                     return None
                 return parsed[0] if len(parsed) == 1 else parsed
@@ -900,15 +908,15 @@ class RetroArchClient:
             while remaining > 0:
                 chunk = min(max_chunk_bytes, remaining)
                 chunk_addr = hex(base_addr + offset)
-                parsed = _parse_response(self.send_command(f"READ_CORE_MEMORY {chunk_addr} {chunk}"))
-                if not parsed or len(parsed) < chunk:
+                parsed = _read_chunk_with_retry(chunk_addr, int(chunk))
+                if not parsed:
                     return None
                 values.extend(parsed[:chunk])
                 remaining -= chunk
                 offset += chunk
             return values
 
-        parsed = _parse_response(self.send_command(f"READ_CORE_MEMORY {address} {total_bytes}"))
+        parsed = _read_chunk_with_retry(str(address), int(total_bytes))
         if parsed is None:
             return None
         return parsed[0] if len(parsed) == 1 else parsed
@@ -992,21 +1000,59 @@ class PokemonMemoryReader:
             "gen": 3,
             "max_pokemon": 386,
             "layout_id": "gen3_ruby",
-            "pokedex_seen": "0x02024C0C",
-            "pokedex_caught": "0x02024D0C",
-            "party_count": "0x02024284",
-            "party_start": "0x02024288",
+            # Ruby uses static SaveBlock layouts (no Emerald-style saveblock pointers).
+            "pokedex_seen": "0x02024F00",
+            "pokedex_caught": "0x02024ECC",
+            "party_count": "0x02025968",
+            "party_start": "0x0202596C",
+            "enemy_party_start": "0x02025BC4",
             "party_slot_size": 100,
+            "party_count_offset": 0x234,
+            "party_start_offset": 0x238,
+            "pokedex_caught_offset": 0x28,
+            "pokedex_seen_offset": 0x5C,
+            "party_count_candidates": ["0x02025968", "0x02024284", "0x020244E9"],
+            "party_start_candidates": ["0x0202596C", "0x02024288", "0x020244EC"],
+            "party_stride_candidates": [100, 200],
+            "party_use_pointer_layout": 0,
+            "party_max_pairs": 8,
+            "party_enable_offset_scan": 0,
+            "party_allow_double_stride": 0,
+            "party_skip_scan_on_invalid_count": 1,
+            "party_skip_scan_on_zero_count": 1,
+            "party_allow_static_when_pointer_missing": 1,
+            "pokedex_allow_static_when_pointer_missing": 1,
+            "pokedex_allow_static_fallback": 0,
+            "pokedex_allow_byte_fallback": 0,
         },
         "pokemon_sapphire": {
             "gen": 3,
             "max_pokemon": 386,
             "layout_id": "gen3_sapphire",
-            "pokedex_seen": "0x02024C0C",
-            "pokedex_caught": "0x02024D0C",
-            "party_count": "0x02024284",
-            "party_start": "0x02024288",
+            # Sapphire uses static SaveBlock layouts (no Emerald-style saveblock pointers).
+            "pokedex_seen": "0x02024F00",
+            "pokedex_caught": "0x02024ECC",
+            "party_count": "0x02025968",
+            "party_start": "0x0202596C",
+            "enemy_party_start": "0x02025BC4",
             "party_slot_size": 100,
+            "party_count_offset": 0x234,
+            "party_start_offset": 0x238,
+            "pokedex_caught_offset": 0x28,
+            "pokedex_seen_offset": 0x5C,
+            "party_count_candidates": ["0x02025968", "0x02024284", "0x020244E9"],
+            "party_start_candidates": ["0x0202596C", "0x02024288", "0x020244EC"],
+            "party_stride_candidates": [100, 200],
+            "party_use_pointer_layout": 0,
+            "party_max_pairs": 8,
+            "party_enable_offset_scan": 0,
+            "party_allow_double_stride": 0,
+            "party_skip_scan_on_invalid_count": 1,
+            "party_skip_scan_on_zero_count": 1,
+            "party_allow_static_when_pointer_missing": 1,
+            "pokedex_allow_static_when_pointer_missing": 1,
+            "pokedex_allow_static_fallback": 0,
+            "pokedex_allow_byte_fallback": 0,
         },
         "pokemon_emerald": {
             "gen": 3,
@@ -1017,6 +1063,7 @@ class PokemonMemoryReader:
             # Emerald uses a different live party block than Ruby/Sapphire.
             "party_count": "0x020244E9",
             "party_start": "0x020244EC",
+            "enemy_party_start": "0x02024744",
             "party_slot_size": 100,
             "party_force_byte_reads": 0,
             "party_allow_byte_fallback": 0,
@@ -1051,7 +1098,20 @@ class PokemonMemoryReader:
             "pokedex_caught": "0x02024D0C",
             "party_count": "0x02024284",
             "party_start": "0x02024288",
+            "enemy_party_start": "0x020244E0",
             "party_slot_size": 100,
+            "saveblock1_ptr": "0x03005008",
+            "saveblock2_ptr": "0x0300500C",
+            "party_count_offset": 0x234,
+            "party_start_offset": 0x238,
+            "pokedex_caught_offset": 0x28,
+            "pokedex_seen_offset": 0x5C,
+            "party_use_pointer_layout": 1,
+            "party_skip_scan_on_invalid_count": 1,
+            "party_allow_static_when_pointer_missing": 0,
+            "pokedex_allow_static_when_pointer_missing": 0,
+            "pokedex_allow_static_fallback": 0,
+            "pokedex_allow_byte_fallback": 0,
         },
         "pokemon_leafgreen": {
             "gen": 3,
@@ -1061,7 +1121,20 @@ class PokemonMemoryReader:
             "pokedex_caught": "0x02024D0C",
             "party_count": "0x02024284",
             "party_start": "0x02024288",
+            "enemy_party_start": "0x020244E0",
             "party_slot_size": 100,
+            "saveblock1_ptr": "0x03005008",
+            "saveblock2_ptr": "0x0300500C",
+            "party_count_offset": 0x234,
+            "party_start_offset": 0x238,
+            "pokedex_caught_offset": 0x28,
+            "pokedex_seen_offset": 0x5C,
+            "party_use_pointer_layout": 1,
+            "party_skip_scan_on_invalid_count": 1,
+            "party_allow_static_when_pointer_missing": 0,
+            "pokedex_allow_static_when_pointer_missing": 0,
+            "pokedex_allow_static_fallback": 0,
+            "pokedex_allow_byte_fallback": 0,
         },
     }
     
@@ -1315,10 +1388,13 @@ class PokemonMemoryReader:
         self._saveblock_ptr_backoff_until: Dict[str, float] = {}
         self._saveblock_ptr_fail_count: Dict[str, int] = {}
         self._pointer_unreadable_last_log: Dict[str, float] = {}
+        self._pointer_fallback_last_log: Dict[str, float] = {}
+        self._pokedex_seen_less_last_log: Dict[str, float] = {}
         self._pointer_unreadable_streak: Dict[str, int] = {}
         self._pointer_unreadable_last_attempt: Dict[str, float] = {}
         self._last_gen3_party_selection: Dict[str, Dict[str, object]] = {}
         self._last_party_read_meta: Dict[str, object] = {}
+        self._last_wild_read_meta: Dict[str, object] = {}
         self._gen3_gender_rates: Dict[int, int] = {}
         self._gen3_species_ability_ids: Dict[int, Tuple[int, int]] = {}
         self._gen3_ability_names: Dict[int, str] = {}
@@ -1472,6 +1548,10 @@ class PokemonMemoryReader:
     def get_last_party_read_meta(self) -> Dict[str, object]:
         """Return metadata from the most recent party read attempt."""
         return dict(self._last_party_read_meta)
+
+    def get_last_wild_read_meta(self) -> Dict[str, object]:
+        """Return metadata from the most recent wild encounter read attempt."""
+        return dict(self._last_wild_read_meta)
 
     def _normalize_gen3_species_id(self, species_id: int) -> Optional[int]:
         """Map Gen 3 internal species IDs to National Dex IDs."""
@@ -1698,6 +1778,28 @@ class PokemonMemoryReader:
             streak=streak,
         )
 
+    def _log_pointer_fallback_skipped_throttled(self, game_name: str, kind: str, pointer_addr: str, static_addr: str):
+        """Throttle noisy pointer-fallback-skipped info logs while pointers jitter."""
+        if bool(getattr(self.retroarch, "is_waiting_for_launch", lambda: False)()):
+            return
+
+        if not hasattr(self, "_pointer_fallback_last_log"):
+            self._pointer_fallback_last_log = {}
+
+        key = f"{game_name}:{kind}:fallback_skipped"
+        now = time.time()
+        last = float(self._pointer_fallback_last_log.get(key, 0.0))
+        if now - last < 15.0:
+            return
+        self._pointer_fallback_last_log[key] = now
+        log_event(
+            logging.INFO,
+            "gen3_pointer_fallback_skipped",
+            game=game_name,
+            kind=kind,
+            pointer_addr=pointer_addr,
+            static_addr=static_addr,
+        )
     def _resolve_gen3_gender_label(self, species_id: int, personality: int) -> str:
         """Resolve displayed gender from species gender rate and PID."""
         try:
@@ -1743,14 +1845,20 @@ class PokemonMemoryReader:
 
     def _is_gen3_shiny(self, personality: int, ot_id: int) -> bool:
         """Determine Gen 3 shininess from PID and OTID."""
+        shiny_value = self._gen3_shiny_value(personality, ot_id)
+        if shiny_value is None:
+            return False
+        return int(shiny_value) < 8
+
+    def _gen3_shiny_value(self, personality: int, ot_id: int) -> Optional[int]:
+        """Return Gen 3 shiny XOR value from PID and OTID."""
         try:
             pid = int(personality) & 0xFFFFFFFF
             oid = int(ot_id) & 0xFFFFFFFF
         except (TypeError, ValueError):
-            return False
+            return None
 
-        shiny_value = ((oid >> 16) ^ (oid & 0xFFFF) ^ (pid >> 16) ^ (pid & 0xFFFF)) & 0xFFFF
-        return shiny_value < 8
+        return int(((oid >> 16) ^ (oid & 0xFFFF) ^ (pid >> 16) ^ (pid & 0xFFFF)) & 0xFFFF)
 
     def _is_gen2_shiny_from_dvs(self, atk_def_byte: int, spd_spc_byte: int) -> bool:
         """Determine Gen 2 shininess from DV bytes."""
@@ -1808,6 +1916,27 @@ class PokemonMemoryReader:
             ot_id = read_u32(candidate_bytes, 4)
             if personality == 0 and ot_id == 0:
                 return None
+
+            # Header bytes are not encrypted; they help disambiguate byte-order variants
+            # that can still decrypt into plausible secure substructures.
+            language_id = int(candidate_bytes[18]) & 0xFF if len(candidate_bytes) > 18 else -1
+            markings = int(candidate_bytes[27]) & 0xFF if len(candidate_bytes) > 27 else 0
+            misc_flags = int(candidate_bytes[19]) & 0xFF if len(candidate_bytes) > 19 else 0
+            header_plausibility = 0
+            if 1 <= language_id <= 7:
+                header_plausibility += 6
+            elif language_id == 0:
+                header_plausibility += 2
+            else:
+                header_plausibility -= 8
+            if 0 <= markings <= 0x0F:
+                header_plausibility += 2
+            else:
+                header_plausibility -= 2
+            if 0 <= misc_flags <= 0x7F:
+                header_plausibility += 1
+            else:
+                header_plausibility -= 1
 
             key = personality ^ ot_id
             encrypted = candidate_bytes[32:80]
@@ -1908,11 +2037,13 @@ class PokemonMemoryReader:
 
                 iv_ability_word = read_u32(decrypted, misc_offset + 4)
                 ability_slot = (iv_ability_word >> 31) & 0x1
+                is_egg = ((iv_ability_word >> 30) & 0x1) == 1
                 ability_name = self._resolve_gen3_ability_name(int(normalized_species), int(ability_slot))
 
                 nature_name = self.GEN3_NATURE_NAMES[personality % len(self.GEN3_NATURE_NAMES)]
                 gender_name = self._resolve_gen3_gender_label(int(normalized_species), int(personality))
-                is_shiny = self._is_gen3_shiny(int(personality), int(ot_id))
+                shiny_xor = ((int(ot_id) >> 16) ^ (int(ot_id) & 0xFFFF) ^ (int(personality) >> 16) ^ (int(personality) & 0xFFFF)) & 0xFFFF
+                is_shiny = int(shiny_xor) < 8
 
                 held_item_id = read_u16(decrypted, growth_offset + 2)
                 experience = read_u32(decrypted, growth_offset + 4)
@@ -1921,6 +2052,7 @@ class PokemonMemoryReader:
                 if checksum_matches:
                     plausibility += 50
                 plausibility += 10
+                plausibility += int(header_plausibility)
                 plausibility += int(plausible_move_count) * 2
                 plausibility -= int(invalid_move_count) * 4
                 if isinstance(ability_name, str) and ability_name.strip():
@@ -1950,7 +2082,11 @@ class PokemonMemoryReader:
                     "ability": ability_name,
                     "moves": move_names[:4],
                     "shiny": bool(is_shiny),
+                    "is_egg": bool(is_egg),
                     "_score": int(plausibility),
+                    "_personality": int(personality),
+                    "_ot_id": int(ot_id),
+                    "_shiny_xor": int(shiny_xor),
                 }
 
             best_details: Optional[Dict[str, object]] = None
@@ -1993,6 +2129,7 @@ class PokemonMemoryReader:
         def _choose_best(candidates: List[List[int]], allow_mismatch: bool) -> Optional[Dict[str, object]]:
             best_details: Optional[Dict[str, object]] = None
             best_score_key: Optional[Tuple[int, int]] = None
+
             for idx, variant in enumerate(candidates):
                 details = _decode_once(variant, allow_checksum_mismatch_local=allow_mismatch)
                 if details is None:
@@ -2002,10 +2139,8 @@ class PokemonMemoryReader:
                 if best_score_key is None or score_key > best_score_key:
                     best_score_key = score_key
                     best_details = details
-            if isinstance(best_details, dict):
-                best_details.pop("_score", None)
-                return best_details
-            return None
+
+            return best_details
 
         # Prefer native byte order first. Only try transformed byte orders if
         # base decode fails, to avoid species drift on otherwise valid slots.
@@ -2215,8 +2350,8 @@ class PokemonMemoryReader:
                 return self._read_pokedex_flags(addr, max_pokemon, allow_byte_fallback=allow_byte_fallback)
             except TypeError:
                 return self._read_pokedex_flags(addr, max_pokemon)
-        # Emerald-specific pointer-based reads prevent cross-title address bleed in Gen 3.
-        if gen == 3 and str(config.get("layout_id", "")).lower() == "gen3_emerald" and config.get("saveblock2_ptr") and config.get("pokedex_caught_offset") is not None:
+        # Gen 3 should prefer saveblock-pointer reads to avoid static-address cross-layout bleed.
+        if gen == 3 and config.get("saveblock2_ptr") and config.get("pokedex_caught_offset") is not None:
             saveblock2_ptr = self._resolve_gen3_saveblock_ptr(config.get("saveblock2_ptr"), game_name=game_name)
             if saveblock2_ptr is not None:
                 used_pointer_layout = True
@@ -2229,6 +2364,8 @@ class PokemonMemoryReader:
                     pointer=str(config.get("saveblock2_ptr")),
                     layout=config.get("layout_id"),
                 )
+                if not bool(config.get("pokedex_allow_static_when_pointer_missing", 1)):
+                    return []
 
         caught = _safe_read_pokedex_flags(caught_addr)
 
@@ -2249,10 +2386,8 @@ class PokemonMemoryReader:
                     caught = fallback_caught
                     seen_addr = static_seen_addr
             else:
-                log_event(
-                    logging.INFO,
-                    "gen3_pointer_fallback_skipped",
-                    game=game_name,
+                self._log_pointer_fallback_skipped_throttled(
+                    game_name=game_name,
                     kind="pokedex",
                     pointer_addr=caught_addr,
                     static_addr=static_caught_addr,
@@ -2264,14 +2399,26 @@ class PokemonMemoryReader:
             if seen_addr:
                 seen = _safe_read_pokedex_flags(seen_addr)
                 if seen and len(caught) > len(seen):
-                    log_event(
-                        logging.WARNING,
-                        "pokedex_seen_less_than_caught",
-                        game=game_name,
-                        layout=config.get("layout_id"),
-                        caught_count=len(caught),
-                        seen_count=len(seen),
-                    )
+                    gap = len(caught) - len(seen)
+                    try:
+                        warning_gap = max(10, int(config.get("pokedex_seen_warning_gap", 10)))
+                    except (TypeError, ValueError):
+                        warning_gap = 10
+                    if gap >= warning_gap:
+                        key = str(game_name or "").strip().lower() or "unknown"
+                        now = time.monotonic()
+                        last = float(self._pokedex_seen_less_last_log.get(key, 0.0))
+                        if (now - last) >= 60.0:
+                            self._pokedex_seen_less_last_log[key] = now
+                            log_event(
+                                logging.WARNING,
+                                "pokedex_seen_less_than_caught",
+                                game=game_name,
+                                layout=config.get("layout_id"),
+                                caught_count=len(caught),
+                                seen_count=len(seen),
+                                gap=gap,
+                            )
             return caught
 
         if count_hint is None or not seen_addr or seen_addr == caught_addr:
@@ -2350,8 +2497,8 @@ class PokemonMemoryReader:
         slot_size = int(config["party_slot_size"])
         used_pointer_layout = False
 
-        # Emerald-specific pointer-based party addresses.
-        if gen == 3 and str(config.get("layout_id", "")).lower() == "gen3_emerald" and bool(config.get("party_use_pointer_layout", 0)) and config.get("saveblock1_ptr") and config.get("party_count_offset") is not None and config.get("party_start_offset") is not None:
+        # Gen 3 should prefer saveblock-pointer party addresses across all layouts.
+        if gen == 3 and bool(config.get("party_use_pointer_layout", 0)) and config.get("saveblock1_ptr") and config.get("party_count_offset") is not None and config.get("party_start_offset") is not None:
             saveblock1_ptr = self._resolve_gen3_saveblock_ptr(config.get("saveblock1_ptr"), game_name=game_name)
             if saveblock1_ptr is not None:
                 used_pointer_layout = True
@@ -2363,6 +2510,18 @@ class PokemonMemoryReader:
                     pointer=str(config.get("saveblock1_ptr")),
                     layout=config.get("layout_id"),
                 )
+                if not bool(config.get("party_allow_static_when_pointer_missing", 1)):
+                    self._last_party_read_meta.update({
+                        "expected_count": None,
+                        "decoded_count": 0,
+                        "incomplete": False,
+                        "count_addr": str(party_count_addr),
+                        "start_addr": str(party_start_addr),
+                        "stride": int(slot_size),
+                        "budget_hit": False,
+                        "reason": "saveblock_pointer_unreadable",
+                    })
+                    return []
 
         # Read party count from selected layout.
         count = self.retroarch.read_memory(party_count_addr)
@@ -2385,6 +2544,19 @@ class PokemonMemoryReader:
         count_valid = isinstance(count, int) and 0 <= int(count) <= 6
         max_species_id = max(self.POKEMON_NAMES.keys())
         max_decode_species_id = int(self.GEN3_INTERNAL_SPECIES_MAX) if gen == 3 else max_species_id
+
+        if gen == 3 and not count_valid and bool(config.get("party_skip_scan_on_invalid_count", 0)):
+            self._last_party_read_meta.update({
+                "expected_count": None,
+                "decoded_count": 0,
+                "incomplete": False,
+                "count_addr": str(party_count_addr),
+                "start_addr": str(party_start_addr),
+                "stride": int(slot_size),
+                "budget_hit": False,
+                "reason": "invalid_party_count",
+            })
+            return []
 
         if gen == 3:
             force_gen3_party_byte_reads = bool(config.get("party_force_byte_reads", 0))
@@ -2480,6 +2652,37 @@ class PokemonMemoryReader:
                 max_pairs = len(ordered_pairs)
             ordered_pairs = ordered_pairs[:max_pairs]
 
+            count_cache: Dict[str, object] = {}
+            def _read_count_candidate(candidate_addr: str) -> object:
+                cached = count_cache.get(candidate_addr, None)
+                if cached is not None:
+                    return cached
+                if candidate_addr == primary_count_addr and count_valid:
+                    value = int(count)
+                else:
+                    value = self.retroarch.read_memory(candidate_addr)
+                count_cache[candidate_addr] = value
+                return value
+
+            if bool(config.get("party_skip_scan_on_zero_count", 0)) and not ignore_party_count:
+                valid_counts: List[int] = []
+                for candidate_count_addr, _ in ordered_pairs:
+                    candidate_value = _read_count_candidate(candidate_count_addr)
+                    if isinstance(candidate_value, int) and 0 <= int(candidate_value) <= 6:
+                        valid_counts.append(int(candidate_value))
+                if valid_counts and max(valid_counts) == 0:
+                    self._last_party_read_meta.update({
+                        "expected_count": 0,
+                        "decoded_count": 0,
+                        "incomplete": False,
+                        "count_addr": str(primary_count_addr),
+                        "start_addr": str(primary_start_addr),
+                        "stride": int(slot_size),
+                        "budget_hit": False,
+                        "reason": "zero_party_count",
+                    })
+                    return []
+
             best_party: List[Dict] = []
             best_raw_party_len = 0
             best_raw_slots: List[int] = []
@@ -2532,7 +2735,7 @@ class PokemonMemoryReader:
                         return None
                     return int(normalized_species)
 
-                def _build_member(slot_data: List[int], normalized_species: int, slot_idx: int) -> Dict[str, object]:
+                def _build_member(slot_data: List[int], normalized_species: int, slot_idx: int, details: Optional[Dict[str, object]] = None) -> Dict[str, object]:
                     level = slot_data[84] if len(slot_data) > 84 and int(slot_data[84]) > 0 else None
                     member: Dict[str, object] = {
                         "id": int(normalized_species),
@@ -2541,24 +2744,25 @@ class PokemonMemoryReader:
                         "name": self.get_pokemon_name(int(normalized_species)),
                     }
 
-                    details = self._decode_gen3_party_slot_details(
+                    resolved_details = details if isinstance(details, dict) else self._decode_gen3_party_slot_details(
                         slot_data,
                         max_species_id=max_decode_species_id,
                         allow_checksum_mismatch=allow_relaxed_species,
                         species_hint_ids={int(normalized_species)},
                     )
-                    if isinstance(details, dict):
+                    if isinstance(resolved_details, dict):
                         try:
-                            detail_norm = int(details.get("normalized_species", 0))
+                            detail_norm = int(resolved_details.get("normalized_species", 0))
                         except (TypeError, ValueError):
                             detail_norm = 0
                         if detail_norm in (0, int(normalized_species)):
                             for key in ("gender", "nature", "ability"):
-                                value = details.get(key)
+                                value = resolved_details.get(key)
                                 if isinstance(value, str) and value.strip():
                                     member[key] = value.strip()
-                            member["shiny"] = bool(details.get("shiny", False))
-                            moves = details.get("moves")
+                            member["shiny"] = bool(resolved_details.get("shiny", False))
+                            member["is_egg"] = bool(resolved_details.get("is_egg", False))
+                            moves = resolved_details.get("moves")
                             if isinstance(moves, list):
                                 clean_moves = [
                                     str(move).strip()
@@ -2567,9 +2771,83 @@ class PokemonMemoryReader:
                                 ]
                                 if clean_moves:
                                     member["moves"] = clean_moves[:4]
-                    return member
+                            try:
+                                member["_shiny_xor"] = int(resolved_details.get("_shiny_xor", -1))
+                            except (TypeError, ValueError):
+                                pass
+                            try:
+                                member["_personality"] = int(resolved_details.get("_personality")) & 0xFFFFFFFF
+                            except (TypeError, ValueError):
+                                pass
+                            try:
+                                member["_ot_id"] = int(resolved_details.get("_ot_id")) & 0xFFFFFFFF
+                            except (TypeError, ValueError):
+                                pass
 
-                def _select_best_slot_variant(variants: List[List[int]]) -> Tuple[Optional[List[int]], Optional[int]]:
+                    shiny_pid: Optional[int] = None
+                    shiny_ot: Optional[int] = None
+                    if isinstance(resolved_details, dict):
+                        try:
+                            shiny_pid = int(resolved_details.get("_personality")) & 0xFFFFFFFF
+                        except (TypeError, ValueError):
+                            shiny_pid = None
+                        try:
+                            shiny_ot = int(resolved_details.get("_ot_id")) & 0xFFFFFFFF
+                        except (TypeError, ValueError):
+                            shiny_ot = None
+
+                    # Fallback only if decode details did not provide PID/OTID.
+                    if shiny_pid is None or shiny_ot is None:
+                        try:
+                            if isinstance(slot_data, list) and len(slot_data) >= 8:
+                                shiny_pid = (int(slot_data[0]) | (int(slot_data[1]) << 8) | (int(slot_data[2]) << 16) | (int(slot_data[3]) << 24)) & 0xFFFFFFFF
+                                shiny_ot = (int(slot_data[4]) | (int(slot_data[5]) << 8) | (int(slot_data[6]) << 16) | (int(slot_data[7]) << 24)) & 0xFFFFFFFF
+                        except Exception:
+                            shiny_pid = None
+                            shiny_ot = None
+
+                    try:
+                        if shiny_pid is not None and shiny_ot is not None:
+                            member["_personality"] = int(shiny_pid) & 0xFFFFFFFF
+                            member["_ot_id"] = int(shiny_ot) & 0xFFFFFFFF
+                            shiny_value = self._gen3_shiny_value(shiny_pid, shiny_ot)
+                            if shiny_value is not None:
+                                member["shiny"] = int(shiny_value) < 8
+                                member["_shiny_xor"] = int(shiny_value)
+                    except Exception:
+                        pass
+
+                    return member
+                def _select_best_slot_variant(variants: List[List[int]]) -> Tuple[Optional[List[int]], Optional[int], Optional[Dict[str, object]]]:
+                    best_variant: Optional[List[int]] = None
+                    best_species: Optional[int] = None
+                    best_details: Optional[Dict[str, object]] = None
+                    best_score_key: Optional[Tuple[int, int]] = None
+
+                    for idx, variant in enumerate(variants):
+                        details = self._decode_gen3_party_slot_details(
+                            variant,
+                            max_species_id=max_decode_species_id,
+                            allow_checksum_mismatch=allow_relaxed_species,
+                        )
+                        if not isinstance(details, dict):
+                            continue
+                        try:
+                            normalized_species = int(details.get("normalized_species", 0) or 0)
+                        except (TypeError, ValueError):
+                            normalized_species = 0
+                        if normalized_species <= 0 or normalized_species > max_species_id:
+                            continue
+                        score_key = (int(details.get("_score", 0)), -int(idx))
+                        if best_score_key is None or score_key > best_score_key:
+                            best_score_key = score_key
+                            best_variant = variant
+                            best_species = int(normalized_species)
+                            best_details = details
+
+                    if best_variant is not None and best_species is not None:
+                        return best_variant, int(best_species), best_details
+
                     for variant in variants:
                         species_id = _decode_species(variant)
                         if species_id is None:
@@ -2577,8 +2855,8 @@ class PokemonMemoryReader:
                         normalized_species = _normalize_species(species_id)
                         if normalized_species is None:
                             continue
-                        return variant, int(normalized_species)
-                    return None, None
+                        return variant, int(normalized_species), None
+                    return None, None, None
 
 
                 # Fast path: read contiguous party block once.
@@ -2596,11 +2874,11 @@ class PokemonMemoryReader:
                                         decode_failures += 1
                                         continue
                                     slot_data = [int(v) & 0xFF for v in block_values[offset:offset + int(slot_size)]]
-                                    selected_slot_data, selected_species = _select_best_slot_variant([slot_data])
+                                    selected_slot_data, selected_species, selected_details = _select_best_slot_variant([slot_data])
                                     if selected_slot_data is None or selected_species is None:
                                         decode_failures += 1
                                         continue
-                                    decoded_party.append(_build_member(selected_slot_data, int(selected_species), slot_idx))
+                                    decoded_party.append(_build_member(selected_slot_data, int(selected_species), slot_idx, details=selected_details))
                                 # Only short-circuit on a complete decode; partial bulk reads can
                                 # be misleading on some cores, so fall through to per-slot recovery.
                                 if len(decoded_party) >= int(slot_count):
@@ -2627,11 +2905,11 @@ class PokemonMemoryReader:
                                             variant_failures += 1
                                             continue
                                         slot_data = variant_block[offset:offset + int(slot_size)]
-                                        selected_slot_data, selected_species = _select_best_slot_variant([slot_data])
+                                        selected_slot_data, selected_species, selected_details = _select_best_slot_variant([slot_data])
                                         if selected_slot_data is None or selected_species is None:
                                             variant_failures += 1
                                             continue
-                                        variant_party.append(_build_member(selected_slot_data, int(selected_species), slot_idx))
+                                        variant_party.append(_build_member(selected_slot_data, int(selected_species), slot_idx, details=selected_details))
                                     if len(variant_party) > len(best_variant_party):
                                         best_variant_party = variant_party
                                         best_variant_failures = variant_failures
@@ -2667,7 +2945,7 @@ class PokemonMemoryReader:
                                     odd_bytes = [int(v) & 0xFF for v in bulk_double[1:slot_size * 2:2]]
                                     slot_data_variants.append(even_bytes)
                                     slot_data_variants.append(odd_bytes)
-                    selected_slot_data, selected_species = _select_best_slot_variant(slot_data_variants)
+                    selected_slot_data, selected_species, selected_details = _select_best_slot_variant(slot_data_variants)
 
                     # If bulk reads are present but fail checksum/decode, retry with direct byte reads.
                     if (selected_slot_data is None or selected_species is None) and allow_party_byte_fallback:
@@ -2718,13 +2996,13 @@ class PokemonMemoryReader:
                             deduped_slot_data_candidates.append(slot_variant)
 
                         if selected_slot_data is None or selected_species is None:
-                            selected_slot_data, selected_species = _select_best_slot_variant(deduped_slot_data_candidates)
+                            selected_slot_data, selected_species, selected_details = _select_best_slot_variant(deduped_slot_data_candidates)
 
                     if selected_slot_data is None or selected_species is None:
                         decode_failures += 1
                         continue
 
-                    decoded_party.append(_build_member(selected_slot_data, int(selected_species), slot_idx))
+                    decoded_party.append(_build_member(selected_slot_data, int(selected_species), slot_idx, details=selected_details))
                 return decoded_party, decode_failures
 
             for count_candidate, start_candidate in ordered_pairs:
@@ -2732,7 +3010,7 @@ class PokemonMemoryReader:
                     budget_exceeded = True
                     break
 
-                local_count = count if (count_candidate == primary_count_addr and count_valid) else self.retroarch.read_memory(count_candidate)
+                local_count = _read_count_candidate(count_candidate)
                 local_count_valid = isinstance(local_count, int) and 0 <= int(local_count) <= 6
 
                 if ignore_party_count:
@@ -2741,7 +3019,15 @@ class PokemonMemoryReader:
                     else:
                         slots_to_scan = 6
                 else:
-                    slots_to_scan = int(local_count) if (local_count_valid and int(local_count) > 0) else 6
+                    if local_count_valid:
+                        if int(local_count) > 0:
+                            slots_to_scan = int(local_count)
+                        elif bool(config.get("party_skip_scan_on_zero_count", 0)):
+                            slots_to_scan = 0
+                        else:
+                            slots_to_scan = 6
+                    else:
+                        slots_to_scan = 6
 
                 if int(slots_to_scan) <= 0:
                     continue
@@ -3278,6 +3564,260 @@ class PokemonMemoryReader:
             "reason": None,
         })
         return party
+
+    def read_wild_encounter(self, game_name: str) -> Optional[Dict[str, object]]:
+        """Read current enemy lead encounter when battle party memory is available."""
+
+        def _set_meta(reason: str, **extra):
+            payload: Dict[str, object] = {"game": game_name, "reason": str(reason)}
+            payload.update(extra)
+            self._last_wild_read_meta = payload
+
+        def _parse_hex_addr(value: object) -> Optional[int]:
+            try:
+                return int(str(value), 16)
+            except (TypeError, ValueError):
+                return None
+
+        def _dedupe_ints(values: List[int]) -> List[int]:
+            seen: Set[int] = set()
+            ordered: List[int] = []
+            for value in values:
+                try:
+                    parsed = int(value)
+                except (TypeError, ValueError):
+                    continue
+                if parsed in seen:
+                    continue
+                seen.add(parsed)
+                ordered.append(parsed)
+            return ordered
+
+        def _as_hex_list(values: List[int]) -> List[str]:
+            rendered: List[str] = []
+            for value in values:
+                try:
+                    rendered.append(hex(int(value)))
+                except (TypeError, ValueError):
+                    continue
+            return rendered
+
+        _set_meta("start")
+        config = self.get_game_config(game_name)
+        if not config:
+            _set_meta("missing_game_config")
+            return None
+
+        try:
+            gen = int(config.get("gen", 1))
+        except (TypeError, ValueError):
+            gen = 1
+        if gen != 3:
+            _set_meta("unsupported_generation", gen=gen)
+            return None
+
+        party_count_addr = config.get("party_count")
+        party_start_addr = config.get("party_start")
+        try:
+            slot_size = int(config.get("party_slot_size", 100) or 100)
+        except (TypeError, ValueError):
+            slot_size = 100
+
+        if not party_count_addr or not party_start_addr or slot_size <= 0:
+            _set_meta("missing_party_addresses", slot_size=slot_size)
+            return None
+
+        if (
+            bool(config.get("party_use_pointer_layout", 0))
+            and config.get("saveblock1_ptr")
+            and config.get("party_count_offset") is not None
+            and config.get("party_start_offset") is not None
+        ):
+            saveblock1_ptr = self._resolve_gen3_saveblock_ptr(config.get("saveblock1_ptr"), game_name=game_name)
+            if saveblock1_ptr is not None:
+                party_count_addr = hex(saveblock1_ptr + int(config.get("party_count_offset")))
+                party_start_addr = hex(saveblock1_ptr + int(config.get("party_start_offset")))
+            elif not bool(config.get("party_allow_static_when_pointer_missing", 1)):
+                _set_meta("pointer_layout_unavailable")
+                return None
+
+        player_count_candidates: List[int] = []
+        player_start_candidates: List[int] = []
+
+        parsed_count_addr = _parse_hex_addr(party_count_addr)
+        parsed_start_addr = _parse_hex_addr(party_start_addr)
+        if parsed_count_addr is not None:
+            player_count_candidates.append(parsed_count_addr)
+        if parsed_start_addr is not None:
+            player_start_candidates.append(parsed_start_addr)
+
+        raw_count_candidates = config.get("party_count_candidates")
+        if isinstance(raw_count_candidates, list):
+            for candidate in raw_count_candidates:
+                parsed = _parse_hex_addr(candidate)
+                if parsed is not None:
+                    player_count_candidates.append(parsed)
+
+        raw_start_candidates = config.get("party_start_candidates")
+        if isinstance(raw_start_candidates, list):
+            for candidate in raw_start_candidates:
+                parsed = _parse_hex_addr(candidate)
+                if parsed is not None:
+                    player_start_candidates.append(parsed)
+
+        meta = self._last_party_read_meta if isinstance(self._last_party_read_meta, dict) else {}
+        meta_count_addr = _parse_hex_addr(meta.get("count_addr"))
+        meta_start_addr = _parse_hex_addr(meta.get("start_addr"))
+        if meta_count_addr is not None:
+            player_count_candidates.append(meta_count_addr)
+        if meta_start_addr is not None:
+            player_start_candidates.append(meta_start_addr)
+
+        player_count_candidates = _dedupe_ints(player_count_candidates)
+        player_start_candidates = _dedupe_ints(player_start_candidates)
+        if not player_count_candidates or not player_start_candidates:
+            _set_meta(
+                "missing_player_candidates",
+                player_count_candidates=_as_hex_list(player_count_candidates),
+                player_start_candidates=_as_hex_list(player_start_candidates),
+            )
+            return None
+
+        enemy_count_reads: List[Tuple[int, int, int, int]] = []
+        count_addr_candidates: List[int] = []
+        for base_count_addr in player_count_candidates:
+            for offset in (1, 2, 3):
+                count_addr_candidates.append(int(base_count_addr + offset))
+        configured_enemy_count_addr = _parse_hex_addr(config.get("enemy_party_count"))
+        if configured_enemy_count_addr is not None:
+            count_addr_candidates.append(configured_enemy_count_addr)
+
+        count_addr_candidates = _dedupe_ints(count_addr_candidates)
+        for addr_idx, count_addr_int in enumerate(count_addr_candidates):
+            count_value = self.retroarch.read_memory(hex(count_addr_int))
+            if not isinstance(count_value, int):
+                continue
+            parsed_count = int(count_value)
+            if 1 <= parsed_count <= 6:
+                wild_rank = 0 if parsed_count == 1 else 1
+                enemy_count_reads.append((wild_rank, int(addr_idx), parsed_count, int(count_addr_int)))
+
+        enemy_count = 0
+        enemy_count_addr: Optional[int] = None
+        enemy_count_source = "unavailable"
+        if enemy_count_reads:
+            enemy_count_reads.sort(key=lambda item: (item[0], item[1], item[2]))
+            enemy_count = int(enemy_count_reads[0][2])
+            enemy_count_addr = int(enemy_count_reads[0][3])
+            enemy_count_source = "count_addr"
+
+        enemy_start_candidates: List[int] = []
+        for player_start_addr_int in player_start_candidates:
+            enemy_start_candidates.append(int(player_start_addr_int + (slot_size * 6)))
+        configured_enemy_start_addr = _parse_hex_addr(config.get("enemy_party_start"))
+        if configured_enemy_start_addr is not None:
+            enemy_start_candidates.append(configured_enemy_start_addr)
+        raw_enemy_start_candidates = config.get("enemy_party_start_candidates")
+        if isinstance(raw_enemy_start_candidates, list):
+            for candidate in raw_enemy_start_candidates:
+                parsed = _parse_hex_addr(candidate)
+                if parsed is not None:
+                    enemy_start_candidates.append(parsed)
+
+        enemy_start_candidates = _dedupe_ints(enemy_start_candidates)
+        if not enemy_start_candidates:
+            _set_meta(
+                "missing_enemy_start_candidates",
+                player_start_candidates=_as_hex_list(player_start_candidates),
+                enemy_count_source=enemy_count_source,
+            )
+            return None
+
+        details: Optional[Dict[str, object]] = None
+        selected_enemy_start: Optional[int] = None
+        decode_attempts = 0
+        for enemy_start_addr_int in enemy_start_candidates:
+            slot_bytes = self._read_gen3_slot_bytes_for_details(enemy_start_addr_int, int(slot_size))
+            if not isinstance(slot_bytes, list) or len(slot_bytes) < int(slot_size):
+                continue
+
+            decode_attempts += 1
+            decoded = self._decode_gen3_party_slot_details(
+                slot_bytes,
+                max_species_id=int(self.GEN3_INTERNAL_SPECIES_MAX),
+                allow_checksum_mismatch=True,
+                species_hint_ids=None,
+            )
+            if not isinstance(decoded, dict):
+                continue
+
+            try:
+                decoded_species = int(decoded.get("normalized_species", 0))
+            except (TypeError, ValueError):
+                decoded_species = 0
+            if decoded_species <= 0:
+                continue
+
+            details = decoded
+            selected_enemy_start = int(enemy_start_addr_int)
+            break
+
+        if not isinstance(details, dict):
+            _set_meta(
+                "enemy_decode_failed",
+                player_count_candidates=_as_hex_list(player_count_candidates),
+                player_start_candidates=_as_hex_list(player_start_candidates),
+                enemy_count_addr=hex(enemy_count_addr) if enemy_count_addr is not None else None,
+                enemy_count=enemy_count,
+                enemy_count_source=enemy_count_source,
+                enemy_start_candidates=_as_hex_list(enemy_start_candidates),
+                decode_attempts=int(decode_attempts),
+            )
+            return None
+
+        try:
+            species_id = int(details.get("normalized_species", 0))
+        except (TypeError, ValueError):
+            species_id = 0
+        if species_id <= 0:
+            _set_meta(
+                "invalid_species",
+                enemy_start=hex(selected_enemy_start) if selected_enemy_start is not None else None,
+            )
+            return None
+
+        try:
+            level_val = int(details.get("level", 0))
+        except (TypeError, ValueError):
+            level_val = 0
+
+        personality = details.get("_personality")
+        ot_id = details.get("_ot_id")
+        signature = f"{species_id}:{level_val}:{personality}:{ot_id}"
+        is_wild = bool(enemy_count == 1) if enemy_count > 0 else True
+
+        _set_meta(
+            "ok",
+            species_id=int(species_id),
+            level=int(level_val) if int(level_val) > 0 else None,
+            enemy_count=int(enemy_count) if enemy_count > 0 else None,
+            enemy_count_source=enemy_count_source,
+            enemy_count_addr=hex(enemy_count_addr) if enemy_count_addr is not None else None,
+            enemy_start=hex(selected_enemy_start) if selected_enemy_start is not None else None,
+            is_wild=bool(is_wild),
+        )
+
+        return {
+            "species_id": int(species_id),
+            "species_name": self.get_pokemon_name(int(species_id)),
+            "level": int(level_val) if int(level_val) > 0 else None,
+            "shiny": bool(details.get("shiny", False)),
+            "personality": int(personality) if isinstance(personality, int) else personality,
+            "ot_id": int(ot_id) if isinstance(ot_id, int) else ot_id,
+            "enemy_count": int(enemy_count) if int(enemy_count) > 0 else 0,
+            "is_wild": bool(is_wild),
+            "signature": signature,
+        }
 class AchievementTracker:
     """Tracks achievements and reports unlocks"""
     
@@ -3318,6 +3858,7 @@ class AchievementTracker:
         self._bad_read_streak = 0
         self._achievement_poll_count = 0
         self._collection_wait_streak = 0
+        self._empty_pokedex_streak = 0
         self._poll_heartbeat_count = 0
         self._poll_disconnected_streak = 0
         self._party_skip_streak = 0
@@ -3328,9 +3869,12 @@ class AchievementTracker:
         self._warmup_logged = False
         self._startup_baseline_captured = False
         self._startup_lockout_ids: set[str] = set()
+        self._last_bad_read_reconnect_at = 0.0
+        self._bad_read_reconnect_cooldown_s = 30.0
         self.validation_profiles: Dict[str, object] = {}
         self.recent_anomalies: List[Dict] = []
         self._derived_checker: Optional[DerivedAchievementChecker] = None
+        self._warning_last_log: Dict[str, float] = {}
     
     def set_validation_profiles(self, profiles: Dict[str, object]):
         """Inject validation profile config loaded from JSON."""
@@ -3341,6 +3885,17 @@ class AchievementTracker:
         self.recent_anomalies.append(entry)
         if len(self.recent_anomalies) > 100:
             self.recent_anomalies = self.recent_anomalies[-100:]
+
+    def _log_warning_throttled(self, kind: str, cooldown_s: float = 10.0, throttle_key: Optional[str] = None, **fields) -> bool:
+        """Emit warning logs with a per-key cooldown to reduce repeated chatter."""
+        key = throttle_key or kind
+        now = time.monotonic()
+        last = float(self._warning_last_log.get(key, 0.0))
+        if cooldown_s > 0 and (now - last) < float(cooldown_s):
+            return False
+        self._warning_last_log[key] = now
+        log_event(logging.WARNING, kind, **fields)
+        return True
 
     def _get_validation_profile(self) -> Dict[str, int]:
         """Per-game validation thresholds loaded from JSON config."""
@@ -3362,6 +3917,9 @@ class AchievementTracker:
             "unlock_confirmations_legendary": 3,
             "unlock_confirmations_gym_gen3": 2,
             "collection_baseline_confirmations": 2,
+            "collection_empty_baseline_wait_polls": 10,
+            "collection_first_nonempty_confirmations": 2,
+            "collection_empty_drop_confirmations": 3,
             "startup_lockout_enabled": 0,
             "startup_snapshot_window_polls": 30,
             "startup_max_unlocks_per_poll": 12,
@@ -3392,10 +3950,17 @@ class AchievementTracker:
             return
         self._bad_read_streak += 1
         self._record_anomaly("memory_read_suspicious", game=self.game_name, reason=reason, streak=self._bad_read_streak)
-        log_event(logging.WARNING, "memory_read_suspicious", game=self.game_name, reason=reason, streak=self._bad_read_streak)
+        self._log_warning_throttled("memory_read_suspicious", cooldown_s=5.0, throttle_key=f"memory_read_suspicious:{self.game_name}:{reason}", game=self.game_name, reason=reason, streak=self._bad_read_streak)
         if self._bad_read_streak >= 3:
+            now = time.monotonic()
+            reconnect_cooldown = max(5.0, float(getattr(self, "_bad_read_reconnect_cooldown_s", 30.0)))
+            last_reconnect = float(getattr(self, "_last_bad_read_reconnect_at", 0.0))
+            if (now - last_reconnect) < reconnect_cooldown:
+                self._bad_read_streak = 2
+                return
+            self._last_bad_read_reconnect_at = now
             self._record_anomaly("memory_read_reconnect", game=self.game_name)
-            log_event(logging.WARNING, "memory_read_reconnect", game=self.game_name)
+            self._log_warning_throttled("memory_read_reconnect", cooldown_s=5.0, throttle_key=f"memory_read_reconnect:{self.game_name}", game=self.game_name)
             self.retroarch.disconnect()
             self.retroarch.connect()
             self._bad_read_streak = 0
@@ -3709,7 +4274,8 @@ class AchievementTracker:
                 "level": level,
                 "slot": slot,
             }
-
+            if bool(member.get("shiny", False)):
+                normalized_member["shiny"] = True
             raw_name = member.get("name")
             if isinstance(raw_name, str) and raw_name.strip():
                 normalized_member["name"] = raw_name.strip()
@@ -3728,6 +4294,16 @@ class AchievementTracker:
                 ]
                 if clean_moves:
                     normalized_member["moves"] = clean_moves[:4]
+
+            # Preserve Gen3 shiny debug metadata for structured party_slot logging.
+            for src_key, dst_key in (("_shiny_xor", "_shiny_xor"), ("shiny_xor", "_shiny_xor"), ("_personality", "_personality"), ("personality", "_personality"), ("_ot_id", "_ot_id"), ("ot_id", "_ot_id")):
+                raw_value = member.get(src_key)
+                if raw_value is None:
+                    continue
+                try:
+                    normalized_member[dst_key] = int(raw_value)
+                except (TypeError, ValueError):
+                    continue
 
             normalized_party.append(normalized_member)
 
@@ -3770,6 +4346,7 @@ class AchievementTracker:
             self._bad_read_streak = 0
             self._achievement_poll_count = 0
             self._collection_wait_streak = 0
+            self._empty_pokedex_streak = 0
             self._poll_heartbeat_count = 0
             self._poll_disconnected_streak = 0
             self._party_skip_streak = 0
@@ -3943,7 +4520,7 @@ class AchievementTracker:
                 candidates_this_poll += 1
                 if candidates_this_poll > max_unlocks_per_poll:
                     self._record_anomaly("unlock_spike_ignored", game=self.game_name, candidates=candidates_this_poll, threshold=max_unlocks_per_poll)
-                    log_event(logging.WARNING, "unlock_spike_ignored", game=self.game_name, candidates=candidates_this_poll, threshold=max_unlocks_per_poll)
+                    self._log_warning_throttled("unlock_spike_ignored", cooldown_s=30.0, throttle_key=f"unlock_spike_ignored:{self.game_name}", game=self.game_name, candidates=candidates_this_poll, threshold=max_unlocks_per_poll)
                     self._unlock_streaks[achievement.id] = 0
                     continue
 
@@ -3951,7 +4528,7 @@ class AchievementTracker:
                     major_candidates_this_poll += 1
                     if major_candidates_this_poll > max_major_unlocks_per_poll:
                         self._record_anomaly("major_unlock_spike_ignored", game=self.game_name, category=achievement.category, count=major_candidates_this_poll, threshold=max_major_unlocks_per_poll)
-                        log_event(logging.WARNING, "major_unlock_spike_ignored", game=self.game_name, category=achievement.category, count=major_candidates_this_poll, threshold=max_major_unlocks_per_poll)
+                        self._log_warning_throttled("major_unlock_spike_ignored", cooldown_s=30.0, throttle_key=f"major_unlock_spike_ignored:{self.game_name}:{achievement.category}", game=self.game_name, category=achievement.category, count=major_candidates_this_poll, threshold=max_major_unlocks_per_poll)
                         self._unlock_streaks[achievement.id] = 0
                         continue
 
@@ -3960,7 +4537,7 @@ class AchievementTracker:
                     max_legendary = profile.get("max_legendary_unlocks_per_poll", 1)
                     if legendary_candidates_this_poll > max_legendary:
                         self._record_anomaly("legendary_unlock_spike_ignored", game=self.game_name, count=legendary_candidates_this_poll, threshold=max_legendary)
-                        log_event(logging.WARNING, "legendary_unlock_spike_ignored", game=self.game_name, count=legendary_candidates_this_poll, threshold=max_legendary)
+                        self._log_warning_throttled("legendary_unlock_spike_ignored", cooldown_s=30.0, throttle_key=f"legendary_unlock_spike_ignored:{self.game_name}", game=self.game_name, count=legendary_candidates_this_poll, threshold=max_legendary)
                         self._unlock_streaks[achievement.id] = 0
                         continue
 
@@ -4377,7 +4954,7 @@ class AchievementTracker:
         # Keep party reads separate from catch/achievement responsiveness.
         current_party = list(self._last_party)
         retroarch_unstable = bool(getattr(self.retroarch, "is_unstable_io", lambda: False)())
-        allow_live_party = self._collection_baseline_initialized and bool(current_pokedex) and not retroarch_unstable
+        allow_live_party = self._collection_baseline_initialized and not retroarch_unstable
         if allow_live_party:
             live_party = self._read_current_party()
             if live_party or not self._last_party:
@@ -4423,8 +5000,43 @@ class AchievementTracker:
                         baseline_confirmations=baseline_confirmations,
                         last_known=len(self._last_pokedex),
                     )
+
                 self._collection_baseline_candidate = []
                 self._collection_baseline_candidate_streak = 0
+
+                empty_wait_polls = max(2, int(self._get_validation_profile().get("collection_empty_baseline_wait_polls", 10)))
+                if self._collection_wait_streak >= empty_wait_polls:
+                    baseline_party: List[Dict] = []
+                    if not retroarch_unstable:
+                        baseline_party = self._read_current_party()
+
+                    self._last_pokedex = []
+                    self._last_party = list(baseline_party)
+                    self._collection_baseline_initialized = True
+                    self._collection_wait_streak = 0
+                    self._baseline_snapshot_pending = False
+                    self._baseline_snapshot_wait_polls = 0
+
+                    log_event(
+                        logging.INFO,
+                        "collection_baseline_established",
+                        game=self.game_name,
+                        catches=0,
+                        party=len(baseline_party),
+                        party_sync_deferred=False,
+                        reason="empty_timeout",
+                    )
+
+                    if baseline_party:
+                        self._collection_queue.put({
+                            "catches": [],
+                            "party": baseline_party,
+                            "previous_party": [],
+                            "game": self.game_name,
+                            "catch_event_type": "caught",
+                        })
+                    return
+
                 return
 
             if self._collection_wait_streak:
@@ -4481,6 +5093,7 @@ class AchievementTracker:
                 "party": current_party,
                 "previous_party": [],
                 "game": self.game_name,
+                "catch_event_type": "caught",
             })
             return
 
@@ -4497,6 +5110,7 @@ class AchievementTracker:
                     "party": current_party,
                     "previous_party": [],
                     "game": self.game_name,
+                    "catch_event_type": "caught",
                 })
                 baseline_snapshot_queued = True
                 log_event(
@@ -4519,13 +5133,52 @@ class AchievementTracker:
                     polls=self._baseline_snapshot_wait_polls,
                 )
 
-        # Detect suspicious empty reads after we already had a populated baseline.
-        if not current_pokedex and len(self._last_pokedex) >= 10:
-            self._handle_bad_read("empty_pokedex_after_non_empty")
-            effective_pokedex = list(self._last_pokedex)
+        # Avoid dropping a non-empty Pokedex state on transient empty reads.
+        if current_pokedex:
+            self._empty_pokedex_streak = 0
+        elif self._last_pokedex:
+            self._empty_pokedex_streak += 1
+            empty_drop_confirmations = max(2, int(profile.get("collection_empty_drop_confirmations", 3)))
+            if self._empty_pokedex_streak < empty_drop_confirmations:
+                if len(self._last_pokedex) >= 10:
+                    self._handle_bad_read("empty_pokedex_after_non_empty")
+                else:
+                    self._log_warning_throttled(
+                        "pokedex_empty_read_ignored",
+                        cooldown_s=10.0,
+                        throttle_key=f"pokedex_empty_read_ignored:{self.game_name}",
+                        game=self.game_name,
+                        streak=self._empty_pokedex_streak,
+                        held_count=len(self._last_pokedex),
+                    )
+                effective_pokedex = list(self._last_pokedex)
+            else:
+                self._empty_pokedex_streak = 0
+        else:
+            self._empty_pokedex_streak = 0
+
+        # When transitioning from an empty baseline, require a stable non-empty read.
+        if not self._last_pokedex and effective_pokedex:
+            first_nonempty_confirmations = max(2, int(profile.get("collection_first_nonempty_confirmations", 2)))
+            if effective_pokedex == self._collection_baseline_candidate:
+                self._collection_baseline_candidate_streak += 1
+            else:
+                self._collection_baseline_candidate = list(effective_pokedex)
+                self._collection_baseline_candidate_streak = 1
+
+            if self._collection_baseline_candidate_streak < first_nonempty_confirmations:
+                effective_pokedex = []
+            else:
+                effective_pokedex = list(self._collection_baseline_candidate)
+                self._collection_baseline_candidate = []
+                self._collection_baseline_candidate_streak = 0
+        elif not effective_pokedex:
+            self._collection_baseline_candidate = []
+            self._collection_baseline_candidate_streak = 0
 
         # Find new catches.
         new_catches = [p for p in effective_pokedex if p not in self._last_pokedex]
+        lost_catches = [p for p in self._last_pokedex if p not in effective_pokedex]
 
         # Guard against bad memory reads causing impossible bulk catch spikes.
         if len(new_catches) > profile["max_new_catches_per_poll"]:
@@ -4545,22 +5198,46 @@ class AchievementTracker:
                     "previous_party": list(self._last_party),
                     "party": current_party,
                     "game": self.game_name,
+                    "catch_event_type": "caught",
                 })
                 self._last_pokedex = list(effective_pokedex)
                 self._last_party = list(current_party)
                 self._bad_read_streak = 0
                 return
 
-            log_event(
-                logging.WARNING,
-                "collection_spike_ignored",
-                game=self.game_name,
-                spike_count=len(new_catches),
-                threshold=profile["max_new_catches_per_poll"],
-            )
-            self._handle_bad_read("bulk_catch_spike")
-            effective_pokedex = list(self._last_pokedex)
-            new_catches = []
+            # If the read both adds and removes many IDs at once, treat it as churn/noise.
+            if lost_catches and self._last_pokedex and effective_pokedex:
+                self._record_anomaly(
+                    "collection_churn_ignored",
+                    game=self.game_name,
+                    added_count=len(new_catches),
+                    removed_count=len(lost_catches),
+                    previous_count=len(self._last_pokedex),
+                    observed_count=len(effective_pokedex),
+                )
+                churn_key = f"collection_churn_ignored:{self.game_name}"
+                now = time.monotonic()
+                last = float(self._warning_last_log.get(churn_key, 0.0))
+                if (now - last) >= 20.0:
+                    self._warning_last_log[churn_key] = now
+                    log_event(
+                        logging.INFO,
+                        "collection_churn_ignored",
+                        game=self.game_name,
+                        added_count=len(new_catches),
+                        removed_count=len(lost_catches),
+                        previous_count=len(self._last_pokedex),
+                        observed_count=len(effective_pokedex),
+                    )
+                effective_pokedex = list(self._last_pokedex)
+                new_catches = []
+                self._bad_read_streak = 0
+            else:
+                self._record_anomaly("collection_spike_ignored", game=self.game_name, spike_count=len(new_catches), threshold=profile["max_new_catches_per_poll"])
+                self._log_warning_throttled("collection_spike_ignored", cooldown_s=15.0, throttle_key=f"collection_spike_ignored:{self.game_name}", game=self.game_name, spike_count=len(new_catches), threshold=profile["max_new_catches_per_poll"])
+                self._handle_bad_read("bulk_catch_spike")
+                effective_pokedex = list(self._last_pokedex)
+                new_catches = []
         else:
             self._bad_read_streak = 0
 
@@ -4645,6 +5322,10 @@ class AchievementTracker:
                     "id": dex_id,
                     "name": member.get("name") if isinstance(member.get("name"), str) else (self.pokemon_reader.get_pokemon_name(dex_id) if dex_id > 0 else f"Pokemon #{dex_id}"),
                     "level": member.get("level"),
+                    "shiny": bool(member.get("shiny", False)),
+                    "shiny_xor": member.get("_shiny_xor"),
+                    "personality": member.get("_personality"),
+                    "ot_id": member.get("_ot_id"),
                     "gender": member.get("gender"),
                     "nature": member.get("nature"),
                     "ability": member.get("ability"),
@@ -4664,7 +5345,15 @@ class AchievementTracker:
                     name_resolver=self.pokemon_reader.get_pokemon_name if self.pokemon_reader else None,
                 )
                 if line:
-                    log_event(logging.INFO, "party_slot", game=self.game_name, text=line)
+                    log_fields: Dict[str, object] = {
+                        "game": self.game_name,
+                        "text": line,
+                    }
+                    for key in ("slot", "id", "shiny", "shiny_xor", "personality", "ot_id"):
+                        value = slot_info.get(key)
+                        if value is not None:
+                            log_fields[key] = value
+                    log_event(logging.INFO, "party_slot", **log_fields)
         else:
             if not drop_pending_set and current_party == self._last_party:
                 self._pending_party_change = None
@@ -4676,6 +5365,7 @@ class AchievementTracker:
                 "catches": new_catches,
                 "party": current_party,
                 "game": self.game_name,
+                "catch_event_type": "new_addition",
             })
 
         # Update last known state.
@@ -5010,6 +5700,64 @@ class PokeAchieveGUI:
         if not self._party_type_icon_assets_dir.exists():
             self._party_type_icon_assets_dir = self.script_dir / "assets" / "type_icons"
 
+        self._hunt_modes = [
+            "Soft Reset Hunt",
+            "Wild Encounter Hunt",
+            "Fishing Encounter Hunt",
+            "Hatching Egg Hunt",
+        ]
+        self._hunt_game_options = self._build_hunt_game_options()
+        self._hunt_encounter_catalog: Dict[str, Dict[str, Dict[str, Any]]] = self._build_hunt_encounter_catalog()
+        self._hunt_route_options: Dict[str, List[str]] = self._build_default_hunt_route_options()
+        self._hunt_fishing_options: Dict[str, List[str]] = self._build_default_hunt_fishing_options()
+        self.hunt_mode_var = tk.StringVar(value=self._hunt_modes[0])
+        self.hunt_game_var = tk.StringVar(value=self._hunt_game_options[0] if self._hunt_game_options else "")
+        self.hunt_route_var = tk.StringVar(value="Any Soft Reset")
+        self.hunt_target_var = tk.StringVar(value="")
+        self.hunt_profiles_file = self.data_dir / "hunt_profiles.json"
+        self._hunt_profiles = self._load_hunt_profiles()
+        self._hunt_profile_applying = False
+        self._hunt_active = False
+        self._hunt_counter = 0
+        self._hunt_phase_count = 0
+        self._hunt_last_enemy_signature: Optional[str] = None
+        self._hunt_last_target_signature: Optional[str] = None
+        self._hunt_enemy_present = False
+        self._hunt_last_enemy_seen_at = 0.0
+        self._hunt_target_present = False
+        self._hunt_recent_other_species: deque[int] = deque(maxlen=24)
+        self._hunt_last_waiting_state = bool(self.retroarch.is_waiting_for_launch())
+        self._hunt_soft_reset_reset_pending = False
+        self._hunt_soft_reset_seen_in_pokedex = False
+        self._hunt_soft_reset_target_id = 0
+        self._hunt_alerted_signatures: Set[str] = set()
+        self._hunt_last_party_snapshot: Dict[int, Dict[str, object]] = {}
+        self._hunt_initialized = False
+        self._hunt_species_counts: Dict[int, int] = {}
+        self._hunt_species_count_labels: Dict[int, ttk.Label] = {}
+        self._hunt_last_raw_log_key: Optional[str] = None
+        self._hunt_last_raw_none_log_at = 0.0
+        self._hunt_target_sprite_label: Optional[ttk.Label] = None
+        self._hunt_target_name_label: Optional[ttk.Label] = None
+        self._hunt_target_type_frame: Optional[ttk.Frame] = None
+        self._hunt_target_type_labels: List[ttk.Label] = []
+        self._hunt_target_meta_label: Optional[ttk.Label] = None
+        self._hunt_counter_label: Optional[ttk.Label] = None
+        self._hunt_phase_label: Optional[ttk.Label] = None
+        self._hunt_mode_hint_label: Optional[ttk.Label] = None
+        self._hunt_other_sprites_frame: Optional[ttk.Frame] = None
+        self._hunt_other_sprite_labels: List[ttk.Label] = []
+        self._hunt_available_canvas: Optional[tk.Canvas] = None
+        self._hunt_available_scrollbar: Optional[ttk.Scrollbar] = None
+        self._hunt_available_window_id: Optional[int] = None
+        self._hunt_route_label: Optional[ttk.Label] = None
+        self._hunt_route_combo: Optional[ttk.Combobox] = None
+        self._hunt_target_combo: Optional[ttk.Combobox] = None
+        self._hunt_game_combo: Optional[ttk.Combobox] = None
+        self._hunt_mode_combo: Optional[ttk.Combobox] = None
+        self._hunt_start_btn: Optional[ttk.Button] = None
+        self._hunt_pause_btn: Optional[ttk.Button] = None
+
         self._build_ui()
         self._start_status_check()
         self.root.after(250, self._maybe_run_setup_wizard)
@@ -5048,6 +5796,69 @@ class PokeAchieveGUI:
         except OSError as exc:
             log_event(logging.WARNING, "config_save_failed", file=str(self.config_file), error=str(exc))
     
+    def _load_hunt_profiles(self) -> Dict[str, Any]:
+        default_data: Dict[str, Any] = {"version": 1, "games": {}}
+        if not self.hunt_profiles_file.exists():
+            return default_data
+        try:
+            with open(self.hunt_profiles_file, "r") as f:
+                data = json.load(f)
+            if isinstance(data, dict) and isinstance(data.get("games"), dict):
+                data.setdefault("version", 1)
+                return data
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            log_event(logging.WARNING, "hunt_profiles_load_failed", file=str(self.hunt_profiles_file), error=str(exc))
+        return default_data
+
+    def _save_hunt_profiles(self):
+        self._hunt_profiles.setdefault("version", 1)
+        self._hunt_profiles.setdefault("games", {})
+        try:
+            with open(self.hunt_profiles_file, "w") as f:
+                json.dump(self._hunt_profiles, f, indent=2)
+        except OSError as exc:
+            log_event(logging.WARNING, "hunt_profiles_save_failed", file=str(self.hunt_profiles_file), error=str(exc))
+
+    def _get_hunt_profile_store_for_game(self, game_name: str, *, create: bool = False) -> Optional[Dict[str, Any]]:
+        game_key = (game_name or "").strip()
+        if not game_key:
+            return None
+
+        games = self._hunt_profiles.get("games")
+        if not isinstance(games, dict):
+            if not create:
+                return None
+            games = {}
+            self._hunt_profiles["games"] = games
+
+        game_store = games.get(game_key)
+        if not isinstance(game_store, dict):
+            if not create:
+                return None
+            game_store = {"last_profile_key": "", "profiles": {}}
+            games[game_key] = game_store
+
+        profiles = game_store.get("profiles")
+        if not isinstance(profiles, dict):
+            if not create:
+                return None
+            game_store["profiles"] = {}
+
+        if not isinstance(game_store.get("last_profile_key"), str):
+            game_store["last_profile_key"] = ""
+
+        return game_store
+
+    def _build_hunt_profile_key(self, mode: str, route_name: str, target_id: int) -> str:
+        safe_mode = (mode or "").strip()
+        safe_route = (route_name or "").strip()
+        try:
+            safe_target_id = int(target_id)
+        except (TypeError, ValueError):
+            safe_target_id = 0
+        if safe_target_id < 0:
+            safe_target_id = 0
+        return f"{safe_mode}|{safe_route}|{safe_target_id}"
     def _load_validation_profiles(self):
         profile_path = self.script_dir / "profiles.json"
         if not profile_path.exists():
@@ -5158,10 +5969,15 @@ class PokeAchieveGUI:
         self.notebook.add(self.achievements_frame, text="Achievements")
         self._build_achievements_tab()
         
-        # Collection Tab (NEW!)
+        # Collection Tab
         self.collection_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.collection_frame, text="Collection")
         self._build_collection_tab()
+
+        # Shiny Hunt Tab
+        self.hunt_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.hunt_frame, text="Shiny Hunt")
+        self._build_hunt_tab()
         
         # Log Tab
         self.log_frame = ttk.Frame(self.notebook)
@@ -5309,17 +6125,23 @@ class PokeAchieveGUI:
             )
             gender_label.pack(side=tk.LEFT, padx=(0, 0))
 
+            sprite_frame = ttk.Frame(card)
+            sprite_frame.pack(fill=tk.X, pady=(0, 2))
+
+            sprite_anchor = ttk.Frame(sprite_frame)
+            sprite_anchor.pack(anchor=tk.CENTER)
+
+            sprite_label = ttk.Label(sprite_anchor, text="No Sprite", justify=tk.CENTER, anchor=tk.CENTER)
+            sprite_label.pack(anchor=tk.CENTER)
+
             shiny_label = ttk.Label(
-                header_frame,
+                sprite_anchor,
                 text="",
                 justify=tk.RIGHT,
-                anchor=tk.E,
+                anchor=tk.NE,
                 width=0,
             )
-            shiny_label.pack(side=tk.LEFT, padx=(1, 0))
-
-            sprite_label = ttk.Label(card, text="No Sprite", justify=tk.CENTER, anchor=tk.CENTER)
-            sprite_label.pack(fill=tk.X, pady=(0, 2))
+            shiny_label.place(in_=sprite_label, relx=1.0, x=0, y=0, anchor="ne")
 
             type_frame = ttk.Frame(card)
             type_frame.pack(anchor=tk.CENTER, pady=(0, 4))
@@ -5372,6 +6194,2078 @@ class PokeAchieveGUI:
         )
         self.catches_list.pack(fill=tk.BOTH, expand=True)
 
+    def _build_hunt_game_options(self) -> List[str]:
+        """Gen 1 games are excluded (no shiny), and order follows gen/release."""
+        preferred_order = [
+            "Pokemon Gold",
+            "Pokemon Silver",
+            "Pokemon Crystal",
+            "Pokemon Ruby",
+            "Pokemon Sapphire",
+            "Pokemon FireRed",
+            "Pokemon LeafGreen",
+            "Pokemon Emerald",
+        ]
+
+        options: List[str] = []
+        reader = self.tracker.pokemon_reader if self.tracker else None
+        for game_name in preferred_order:
+            if game_name not in self.tracker.GAME_IDS:
+                continue
+            config = reader.get_game_config(game_name) if reader else None
+            try:
+                gen = int(config.get("gen", 1)) if isinstance(config, dict) else 1
+            except (TypeError, ValueError):
+                gen = 1
+            if gen <= 1:
+                continue
+            options.append(game_name)
+
+        # Include any additional supported non-Gen1 games not in preferred ordering.
+        extras = [name for name in self.tracker.GAME_IDS.keys() if name not in options]
+        for game_name in sorted(extras, key=lambda g: int(self.tracker.GAME_IDS.get(g, 9999))):
+            config = reader.get_game_config(game_name) if reader else None
+            try:
+                gen = int(config.get("gen", 1)) if isinstance(config, dict) else 1
+            except (TypeError, ValueError):
+                gen = 1
+            if gen <= 1:
+                continue
+            options.append(game_name)
+
+        return options
+
+    def _build_hunt_encounter_catalog(self) -> Dict[str, Dict[str, Dict[str, Any]]]:
+        """Load generated per-game wild/fishing pools and merge soft-reset metadata."""
+        catalog: Dict[str, Dict[str, Dict[str, Any]]] = {}
+
+        catalog_path = self.script_dir / "hunt_encounter_catalog.json"
+        if catalog_path.exists():
+            try:
+                with open(catalog_path, "r", encoding="utf-8") as handle:
+                    loaded = json.load(handle)
+                if isinstance(loaded, dict):
+                    catalog = loaded
+            except (OSError, json.JSONDecodeError, ValueError):
+                catalog = {}
+
+        soft_reset_metadata = self._build_hunt_soft_reset_metadata()
+        default_soft_reset = self._default_hunt_soft_reset_categories()
+
+        for game_name in self._hunt_game_options:
+            game_block = catalog.get(game_name)
+            if not isinstance(game_block, dict):
+                game_block = {}
+
+            random_entries = game_block.get("random") if isinstance(game_block.get("random"), dict) else {}
+            fishing_entries = game_block.get("fishing") if isinstance(game_block.get("fishing"), dict) else {}
+
+            normalized_random: Dict[str, List[int]] = {}
+            for key, value in random_entries.items():
+                if not isinstance(key, str):
+                    continue
+                ids = value if isinstance(value, list) else []
+                normalized_random[key] = self._normalize_hunt_species_ids_for_game(game_name, ids)
+
+            normalized_fishing: Dict[str, List[int]] = {}
+            for key, value in fishing_entries.items():
+                if not isinstance(key, str):
+                    continue
+                ids = value if isinstance(value, list) else []
+                normalized_fishing[key] = self._normalize_hunt_species_ids_for_game(game_name, ids)
+
+            all_random_ids: Set[int] = set()
+            for key, ids in normalized_random.items():
+                if key != "Any Route / Area":
+                    all_random_ids.update(ids)
+            if "Any Route / Area" in normalized_random and normalized_random["Any Route / Area"]:
+                all_random_ids.update(normalized_random["Any Route / Area"])
+            normalized_random["Any Route / Area"] = sorted(all_random_ids)
+
+            all_fishing_ids: Set[int] = set()
+            for key, ids in normalized_fishing.items():
+                if key != "Any Fishing Spot":
+                    all_fishing_ids.update(ids)
+            if "Any Fishing Spot" in normalized_fishing and normalized_fishing["Any Fishing Spot"]:
+                all_fishing_ids.update(normalized_fishing["Any Fishing Spot"])
+            normalized_fishing["Any Fishing Spot"] = sorted(all_fishing_ids)
+
+            soft_reset_for_game = soft_reset_metadata.get(game_name)
+            if not isinstance(soft_reset_for_game, dict):
+                soft_reset_for_game = dict(default_soft_reset)
+
+            game_block["random"] = normalized_random
+            game_block["fishing"] = normalized_fishing
+            game_block["soft_reset"] = soft_reset_for_game
+            catalog[game_name] = game_block
+
+        return catalog
+
+    def _default_hunt_soft_reset_categories(self) -> Dict[str, List[Dict[str, Any]]]:
+        return {
+            "Any Soft Reset": [],
+            "Starters": [],
+            "Trades": [],
+            "Gift": [],
+            "Stationary": [],
+        }
+
+    def _build_hunt_soft_reset_metadata(self) -> Dict[str, Dict[str, List[Dict[str, Any]]]]:
+        def entry(species_id: int, *, location: str = "", level: Optional[int] = None, npc: str = "") -> Dict[str, Any]:
+            payload: Dict[str, Any] = {"id": int(species_id)}
+            if location:
+                payload["location"] = location
+            if level is not None:
+                payload["level"] = int(level)
+            if npc:
+                payload["npc"] = npc
+            return payload
+
+        data: Dict[str, Dict[str, List[Dict[str, Any]]]] = {
+            "Pokemon Gold": {
+                "Starters": [
+                    entry(152, location="New Bark Town", level=5, npc="Professor Elm"),
+                    entry(155, location="New Bark Town", level=5, npc="Professor Elm"),
+                    entry(158, location="New Bark Town", level=5, npc="Professor Elm"),
+                ],
+                "Trades": [
+                    entry(95, location="Violet City", level=3, npc="Youngster in Pokemon Center"),
+                    entry(66, location="Goldenrod City", level=10, npc="Department Store NPC"),
+                    entry(100, location="Olivine City", level=20, npc="Pokemon Center NPC"),
+                    entry(122, location="Route 2", level=10, npc="Gatehouse NPC"),
+                ],
+                "Gift": [
+                    entry(175, location="Violet City", level=5, npc="Professor Elm's Aide"),
+                    entry(133, location="Goldenrod City", level=20, npc="Bill"),
+                    entry(213, location="Cianwood City", level=15, npc="Man in house"),
+                    entry(236, location="Mt. Mortar", level=10, npc="Kiyo"),
+                    entry(147, location="Dragon's Den", level=15, npc="Elder"),
+                ],
+                "Stationary": [
+                    entry(185, location="Route 36", level=20),
+                    entry(130, location="Lake of Rage", level=30),
+                    entry(143, location="Route 11", level=50),
+                    entry(243, location="Roaming Johto", level=40),
+                    entry(244, location="Roaming Johto", level=40),
+                    entry(245, location="Roaming Johto", level=40),
+                    entry(249, location="Whirl Islands", level=40),
+                    entry(250, location="Tin Tower", level=40),
+                ],
+            },
+            "Pokemon Silver": {
+                "Starters": [
+                    entry(152, location="New Bark Town", level=5, npc="Professor Elm"),
+                    entry(155, location="New Bark Town", level=5, npc="Professor Elm"),
+                    entry(158, location="New Bark Town", level=5, npc="Professor Elm"),
+                ],
+                "Trades": [
+                    entry(95, location="Violet City", level=3, npc="Youngster in Pokemon Center"),
+                    entry(66, location="Goldenrod City", level=10, npc="Department Store NPC"),
+                    entry(100, location="Olivine City", level=20, npc="Pokemon Center NPC"),
+                    entry(122, location="Route 2", level=10, npc="Gatehouse NPC"),
+                ],
+                "Gift": [
+                    entry(175, location="Violet City", level=5, npc="Professor Elm's Aide"),
+                    entry(133, location="Goldenrod City", level=20, npc="Bill"),
+                    entry(213, location="Cianwood City", level=15, npc="Man in house"),
+                    entry(236, location="Mt. Mortar", level=10, npc="Kiyo"),
+                    entry(147, location="Dragon's Den", level=15, npc="Elder"),
+                ],
+                "Stationary": [
+                    entry(185, location="Route 36", level=20),
+                    entry(130, location="Lake of Rage", level=30),
+                    entry(143, location="Route 11", level=50),
+                    entry(243, location="Roaming Johto", level=40),
+                    entry(244, location="Roaming Johto", level=40),
+                    entry(245, location="Roaming Johto", level=40),
+                    entry(249, location="Whirl Islands", level=70),
+                    entry(250, location="Tin Tower", level=40),
+                ],
+            },
+            "Pokemon Crystal": {
+                "Starters": [
+                    entry(152, location="New Bark Town", level=5, npc="Professor Elm"),
+                    entry(155, location="New Bark Town", level=5, npc="Professor Elm"),
+                    entry(158, location="New Bark Town", level=5, npc="Professor Elm"),
+                ],
+                "Trades": [
+                    entry(95, location="Violet City", level=3, npc="Youngster in Pokemon Center"),
+                    entry(66, location="Goldenrod City", level=10, npc="Department Store NPC"),
+                    entry(100, location="Olivine City", level=20, npc="Pokemon Center NPC"),
+                    entry(122, location="Route 2", level=10, npc="Gatehouse NPC"),
+                ],
+                "Gift": [
+                    entry(175, location="Violet City", level=5, npc="Professor Elm's Aide"),
+                    entry(133, location="Goldenrod City", level=20, npc="Bill"),
+                    entry(213, location="Cianwood City", level=15, npc="Man in house"),
+                    entry(236, location="Mt. Mortar", level=10, npc="Kiyo"),
+                    entry(147, location="Dragon's Den", level=15, npc="Elder"),
+                ],
+                "Stationary": [
+                    entry(185, location="Route 36", level=20),
+                    entry(130, location="Lake of Rage", level=30),
+                    entry(143, location="Route 11", level=50),
+                    entry(243, location="Roaming Johto", level=40),
+                    entry(244, location="Roaming Johto", level=40),
+                    entry(245, location="Roaming Johto", level=40),
+                    entry(249, location="Whirl Islands", level=60),
+                    entry(250, location="Tin Tower", level=60),
+                    entry(251, location="Ilex Forest", level=30),
+                ],
+            },
+            "Pokemon Ruby": {
+                "Starters": [
+                    entry(252, location="Littleroot Town", level=5, npc="Professor Birch"),
+                    entry(255, location="Littleroot Town", level=5, npc="Professor Birch"),
+                    entry(258, location="Littleroot Town", level=5, npc="Professor Birch"),
+                ],
+                "Trades": [
+                    entry(270, location="Rustboro City", level=5, npc="School Kid in house"),
+                    entry(273, location="Fortree City", level=13, npc="Pokemon Center NPC"),
+                    entry(300, location="Pacifidlog Town", level=15, npc="Pokemon Fan in house"),
+                    entry(311, location="Route 110", level=13, npc="Cycling Road gate NPC"),
+                    entry(312, location="Route 110", level=13, npc="Cycling Road gate NPC"),
+                ],
+                "Gift": [
+                    entry(351, location="Weather Institute", level=25, npc="Scientist"),
+                    entry(360, location="Lavaridge Town", level=5, npc="Old Woman (Egg)"),
+                    entry(374, location="Mossdeep City", level=5, npc="Steven"),
+                ],
+                "Stationary": [
+                    entry(377, location="Desert Ruins", level=40),
+                    entry(378, location="Island Cave", level=40),
+                    entry(379, location="Ancient Tomb", level=40),
+                    entry(380, location="Roaming Hoenn", level=40),
+                    entry(381, location="Southern Island", level=50),
+                    entry(382, location="Cave of Origin", level=45),
+                    entry(383, location="Terra Cave", level=70),
+                    entry(384, location="Sky Pillar", level=70),
+                ],
+            },
+            "Pokemon Sapphire": {
+                "Starters": [
+                    entry(252, location="Littleroot Town", level=5, npc="Professor Birch"),
+                    entry(255, location="Littleroot Town", level=5, npc="Professor Birch"),
+                    entry(258, location="Littleroot Town", level=5, npc="Professor Birch"),
+                ],
+                "Trades": [
+                    entry(273, location="Rustboro City", level=5, npc="School Kid in house"),
+                    entry(270, location="Fortree City", level=13, npc="Pokemon Center NPC"),
+                    entry(300, location="Pacifidlog Town", level=15, npc="Pokemon Fan in house"),
+                    entry(311, location="Route 110", level=13, npc="Cycling Road gate NPC"),
+                    entry(312, location="Route 110", level=13, npc="Cycling Road gate NPC"),
+                ],
+                "Gift": [
+                    entry(351, location="Weather Institute", level=25, npc="Scientist"),
+                    entry(360, location="Lavaridge Town", level=5, npc="Old Woman (Egg)"),
+                    entry(374, location="Mossdeep City", level=5, npc="Steven"),
+                ],
+                "Stationary": [
+                    entry(377, location="Desert Ruins", level=40),
+                    entry(378, location="Island Cave", level=40),
+                    entry(379, location="Ancient Tomb", level=40),
+                    entry(381, location="Roaming Hoenn", level=40),
+                    entry(380, location="Southern Island", level=50),
+                    entry(382, location="Marine Cave", level=70),
+                    entry(383, location="Cave of Origin", level=45),
+                    entry(384, location="Sky Pillar", level=70),
+                ],
+            },
+            "Pokemon Emerald": {
+                "Starters": [
+                    entry(252, location="Littleroot Town", level=5, npc="Professor Birch"),
+                    entry(255, location="Littleroot Town", level=5, npc="Professor Birch"),
+                    entry(258, location="Littleroot Town", level=5, npc="Professor Birch"),
+                ],
+                "Trades": [
+                    entry(270, location="Rustboro City", level=5, npc="School Kid in house"),
+                    entry(273, location="Fortree City", level=13, npc="Pokemon Center NPC"),
+                    entry(300, location="Pacifidlog Town", level=15, npc="Pokemon Fan in house"),
+                    entry(311, location="Route 110", level=13, npc="Cycling Road gate NPC"),
+                    entry(312, location="Route 110", level=13, npc="Cycling Road gate NPC"),
+                ],
+                "Gift": [
+                    entry(351, location="Weather Institute", level=25, npc="Scientist"),
+                    entry(360, location="Lavaridge Town", level=5, npc="Old Woman (Egg)"),
+                    entry(374, location="Mossdeep City", level=5, npc="Steven"),
+                ],
+                "Stationary": [
+                    entry(377, location="Desert Ruins", level=40),
+                    entry(378, location="Island Cave", level=40),
+                    entry(379, location="Ancient Tomb", level=40),
+                    entry(380, location="Roaming Hoenn", level=40),
+                    entry(381, location="Roaming Hoenn", level=40),
+                    entry(382, location="Marine Cave", level=70),
+                    entry(383, location="Terra Cave", level=70),
+                    entry(384, location="Sky Pillar", level=70),
+                ],
+            },
+            "Pokemon FireRed": {
+                "Starters": [
+                    entry(1, location="Pallet Town", level=5, npc="Professor Oak"),
+                    entry(4, location="Pallet Town", level=5, npc="Professor Oak"),
+                    entry(7, location="Pallet Town", level=5, npc="Professor Oak"),
+                ],
+                "Trades": [
+                    entry(122, location="Route 2", level=10, npc="House near Diglett's Cave"),
+                    entry(83, location="Vermilion City", level=5, npc="Pokemon Fan Club"),
+                    entry(108, location="Cinnabar Island", level=15, npc="Pokemon Lab"),
+                    entry(124, location="Cerulean City", level=20, npc="Pokemon Center"),
+                    entry(29, location="Route 5", level=16, npc="Underground Path gate"),
+                    entry(32, location="Route 11", level=16, npc="Gatehouse"),
+                ],
+                "Gift": [
+                    entry(129, location="Route 4", level=5, npc="Magikarp Salesman"),
+                    entry(133, location="Celadon Mansion", level=25, npc="NPC on rooftop"),
+                    entry(106, location="Saffron Dojo", level=25, npc="Fighting Dojo Master"),
+                    entry(107, location="Saffron Dojo", level=25, npc="Fighting Dojo Master"),
+                    entry(131, location="Silph Co.", level=25, npc="Silph Employee"),
+                    entry(138, location="Cinnabar Lab", level=5, npc="Scientist (Fossil)"),
+                    entry(140, location="Cinnabar Lab", level=5, npc="Scientist (Fossil)"),
+                ],
+                "Stationary": [
+                    entry(143, location="Route 12", level=30),
+                    entry(143, location="Route 16", level=30),
+                    entry(144, location="Seafoam Islands", level=50),
+                    entry(145, location="Power Plant", level=50),
+                    entry(146, location="Mt. Ember", level=50),
+                    entry(150, location="Cerulean Cave", level=70),
+                ],
+            },
+            "Pokemon LeafGreen": {
+                "Starters": [
+                    entry(1, location="Pallet Town", level=5, npc="Professor Oak"),
+                    entry(4, location="Pallet Town", level=5, npc="Professor Oak"),
+                    entry(7, location="Pallet Town", level=5, npc="Professor Oak"),
+                ],
+                "Trades": [
+                    entry(122, location="Route 2", level=10, npc="House near Diglett's Cave"),
+                    entry(83, location="Vermilion City", level=5, npc="Pokemon Fan Club"),
+                    entry(108, location="Cinnabar Island", level=15, npc="Pokemon Lab"),
+                    entry(124, location="Cerulean City", level=20, npc="Pokemon Center"),
+                    entry(29, location="Route 5", level=16, npc="Underground Path gate"),
+                    entry(32, location="Route 11", level=16, npc="Gatehouse"),
+                ],
+                "Gift": [
+                    entry(129, location="Route 4", level=5, npc="Magikarp Salesman"),
+                    entry(133, location="Celadon Mansion", level=25, npc="NPC on rooftop"),
+                    entry(106, location="Saffron Dojo", level=25, npc="Fighting Dojo Master"),
+                    entry(107, location="Saffron Dojo", level=25, npc="Fighting Dojo Master"),
+                    entry(131, location="Silph Co.", level=25, npc="Silph Employee"),
+                    entry(138, location="Cinnabar Lab", level=5, npc="Scientist (Fossil)"),
+                    entry(140, location="Cinnabar Lab", level=5, npc="Scientist (Fossil)"),
+                ],
+                "Stationary": [
+                    entry(143, location="Route 12", level=30),
+                    entry(143, location="Route 16", level=30),
+                    entry(144, location="Seafoam Islands", level=50),
+                    entry(145, location="Power Plant", level=50),
+                    entry(146, location="Mt. Ember", level=50),
+                    entry(150, location="Cerulean Cave", level=70),
+                ],
+            },
+        }
+
+        for game_name in self._hunt_game_options:
+            categories = data.get(game_name)
+            if not isinstance(categories, dict):
+                categories = self._default_hunt_soft_reset_categories()
+
+            normalized: Dict[str, List[Dict[str, Any]]] = self._default_hunt_soft_reset_categories()
+            for category_name in ("Starters", "Trades", "Gift", "Stationary"):
+                raw_entries = categories.get(category_name)
+                if isinstance(raw_entries, list):
+                    normalized[category_name] = list(raw_entries)
+
+            seen_ids: Set[int] = set()
+            all_entries: List[Dict[str, Any]] = []
+            for category_name in ("Starters", "Trades", "Gift", "Stationary"):
+                for item in normalized.get(category_name, []):
+                    if not isinstance(item, dict):
+                        continue
+                    try:
+                        species_id = int(item.get("id", 0))
+                    except (TypeError, ValueError):
+                        continue
+                    if species_id <= 0 or species_id in seen_ids:
+                        continue
+                    seen_ids.add(species_id)
+                    all_entries.append(dict(item))
+            normalized["Any Soft Reset"] = all_entries
+            data[game_name] = normalized
+
+        return data
+
+    def _get_hunt_soft_reset_entries_for_selection(self, game_name: str, category_name: Optional[str] = None) -> List[Dict[str, Any]]:
+        category = (category_name or self.hunt_route_var.get()).strip()
+        game_data = self._hunt_encounter_catalog.get(game_name, {})
+        soft_reset = game_data.get("soft_reset") if isinstance(game_data.get("soft_reset"), dict) else {}
+
+        raw_entries: List[Any] = []
+        if category and category in soft_reset:
+            candidate = soft_reset.get(category)
+            if isinstance(candidate, list):
+                raw_entries = candidate
+        if not raw_entries:
+            candidate = soft_reset.get("Any Soft Reset")
+            if isinstance(candidate, list):
+                raw_entries = candidate
+
+        allowed_ids = set(self._get_hunt_all_species_ids(game_name))
+        seen: Set[int] = set()
+        normalized: List[Dict[str, Any]] = []
+
+        for raw in raw_entries:
+            payload: Dict[str, Any]
+            if isinstance(raw, dict):
+                payload = dict(raw)
+                try:
+                    species_id = int(payload.get("id", payload.get("species_id", 0)))
+                except (TypeError, ValueError):
+                    continue
+            else:
+                try:
+                    species_id = int(raw)
+                except (TypeError, ValueError):
+                    continue
+                payload = {"id": species_id}
+
+            if species_id <= 0:
+                continue
+            if allowed_ids and species_id not in allowed_ids:
+                continue
+            if species_id in seen:
+                continue
+            seen.add(species_id)
+
+            payload["id"] = species_id
+            if isinstance(payload.get("level"), str):
+                try:
+                    payload["level"] = int(str(payload.get("level")).strip())
+                except (TypeError, ValueError):
+                    payload.pop("level", None)
+            normalized.append(payload)
+
+        return normalized
+
+    def _hunt_location_sort_key(self, value: str) -> Tuple[int, int, str, str]:
+        text = str(value or "").strip()
+        route_match = re.match(r"^Route\s+(\d+)(?:\s*\(([^)]*)\))?$", text, flags=re.IGNORECASE)
+        if route_match:
+            variant = str(route_match.group(2) or "").strip().lower()
+            return (0, int(route_match.group(1)), variant != "surf", variant)
+        return (1, 10_000, False, text.lower())
+
+    def _build_default_hunt_route_options(self) -> Dict[str, List[str]]:
+        route_options: Dict[str, List[str]] = {}
+        for game_name in self._hunt_game_options:
+            entries = self._hunt_encounter_catalog.get(game_name, {}).get("random", {})
+            values = sorted(list(entries.keys()), key=self._hunt_location_sort_key)
+            if "Any Route / Area" in values:
+                values = ["Any Route / Area"] + [v for v in values if v != "Any Route / Area"]
+            route_options[game_name] = values or ["Any Route / Area"]
+        return route_options
+
+    def _build_default_hunt_fishing_options(self) -> Dict[str, List[str]]:
+        fishing_options: Dict[str, List[str]] = {}
+        for game_name in self._hunt_game_options:
+            entries = self._hunt_encounter_catalog.get(game_name, {}).get("fishing", {})
+            values = sorted(list(entries.keys()), key=self._hunt_location_sort_key)
+            if "Any Fishing Spot" in values:
+                values = ["Any Fishing Spot"] + [v for v in values if v != "Any Fishing Spot"]
+            fishing_options[game_name] = values or ["Any Fishing Spot"]
+        return fishing_options
+
+    def _get_hunt_route_values(self, game_name: str, mode: str) -> List[str]:
+        if mode == "Soft Reset Hunt":
+            entries = self._hunt_encounter_catalog.get(game_name, {}).get("soft_reset", {})
+            values = list(entries.keys())
+            if "Any Soft Reset" in values:
+                values = ["Any Soft Reset"] + [v for v in values if v != "Any Soft Reset"]
+            return values or ["Any Soft Reset"]
+
+        if mode == "Fishing Encounter Hunt":
+            return list(self._hunt_fishing_options.get(game_name, ["Any Fishing Spot"]))
+
+        if mode == "Wild Encounter Hunt":
+            return list(self._hunt_route_options.get(game_name, ["Any Route / Area"]))
+
+        return []
+
+    def _get_hunt_all_species_ids(self, game_name: str) -> List[int]:
+        reader = self.tracker.pokemon_reader if self.tracker else None
+        if not reader:
+            return []
+        config = reader.get_game_config(game_name) if game_name else None
+        try:
+            max_pokemon = int(config.get("max_pokemon", 386)) if isinstance(config, dict) else 386
+        except (TypeError, ValueError):
+            max_pokemon = 386
+        return [pid for pid in range(1, max_pokemon + 1) if isinstance(reader.POKEMON_NAMES.get(pid), str)]
+
+    def _normalize_hunt_species_ids_for_game(self, game_name: str, species_ids: List[int]) -> List[int]:
+        allowed = set(self._get_hunt_all_species_ids(game_name))
+        ordered: List[int] = []
+        seen: Set[int] = set()
+        for raw in species_ids:
+            try:
+                pid = int(raw)
+            except (TypeError, ValueError):
+                continue
+            if pid <= 0 or pid not in allowed or pid in seen:
+                continue
+            ordered.append(pid)
+            seen.add(pid)
+        return ordered
+
+    def _get_hunt_species_ids_for_selection(self, game_name: str, mode: Optional[str] = None, route_name: Optional[str] = None) -> List[int]:
+        mode_value = (mode or self.hunt_mode_var.get()).strip()
+        route_value = (route_name or self.hunt_route_var.get()).strip()
+        game_data = self._hunt_encounter_catalog.get(game_name, {})
+
+        if mode_value == "Soft Reset Hunt":
+            entries = self._get_hunt_soft_reset_entries_for_selection(game_name, route_value)
+            species_ids: List[int] = []
+            for item in entries:
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    pid = int(item.get("id", 0))
+                except (TypeError, ValueError):
+                    continue
+                if pid > 0:
+                    species_ids.append(pid)
+            normalized = self._normalize_hunt_species_ids_for_game(game_name, species_ids)
+            return normalized or self._get_hunt_all_species_ids(game_name)
+
+        if mode_value == "Wild Encounter Hunt":
+            entries = game_data.get("random", {})
+            if route_value and route_value in entries:
+                species_ids = list(entries.get(route_value, []))
+            elif "Any Route / Area" in entries:
+                species_ids = list(entries.get("Any Route / Area", []))
+            else:
+                species_ids = [pid for values in entries.values() for pid in values]
+            normalized = self._normalize_hunt_species_ids_for_game(game_name, species_ids)
+            return normalized or self._get_hunt_all_species_ids(game_name)
+
+        if mode_value == "Fishing Encounter Hunt":
+            entries = game_data.get("fishing", {})
+            if route_value and route_value in entries:
+                species_ids = list(entries.get(route_value, []))
+            elif "Any Fishing Spot" in entries:
+                species_ids = list(entries.get("Any Fishing Spot", []))
+            else:
+                species_ids = [pid for values in entries.values() for pid in values]
+            normalized = self._normalize_hunt_species_ids_for_game(game_name, species_ids)
+            return normalized or self._get_hunt_all_species_ids(game_name)
+
+        # Hatching Egg Hunt fallback pool.
+        return self._get_hunt_all_species_ids(game_name)
+
+    def _get_hunt_other_species_ids(self, game_name: str) -> List[int]:
+        mode = self.hunt_mode_var.get().strip()
+        if mode == "Hatching Egg Hunt":
+            return []
+        if mode == "Soft Reset Hunt":
+            entries = self._get_hunt_soft_reset_entries_for_selection(game_name)
+            ids: List[int] = []
+            for item in entries:
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    pid = int(item.get("id", 0))
+                except (TypeError, ValueError):
+                    continue
+                if pid > 0:
+                    ids.append(pid)
+            return ids
+        return self._get_hunt_species_ids_for_selection(game_name)
+
+    def _build_hunt_tab(self):
+        """Build shiny hunt tracker tab."""
+        container = ttk.Frame(self.hunt_frame, padding=10)
+        container.pack(fill=tk.BOTH, expand=True)
+
+        controls = ttk.LabelFrame(container, text="Hunt Setup", padding=10)
+        controls.pack(fill=tk.X, pady=(0, 10))
+        for col in range(8):
+            controls.columnconfigure(col, weight=1)
+
+        ttk.Label(controls, text="Mode:").grid(row=0, column=0, sticky="w", padx=4, pady=4)
+        self._hunt_mode_combo = ttk.Combobox(
+            controls,
+            textvariable=self.hunt_mode_var,
+            values=self._hunt_modes,
+            state="readonly",
+            width=24,
+        )
+        self._hunt_mode_combo.grid(row=0, column=1, sticky="ew", padx=4, pady=4)
+        self._hunt_mode_combo.bind("<<ComboboxSelected>>", self._on_hunt_mode_selected)
+
+        ttk.Label(controls, text="Game:").grid(row=0, column=2, sticky="w", padx=4, pady=4)
+        self._hunt_game_combo = ttk.Combobox(
+            controls,
+            textvariable=self.hunt_game_var,
+            values=self._hunt_game_options,
+            state="readonly",
+            width=18,
+        )
+        self._hunt_game_combo.grid(row=0, column=3, sticky="ew", padx=4, pady=4)
+        self._hunt_game_combo.bind("<<ComboboxSelected>>", self._on_hunt_game_selected)
+
+        self._hunt_route_label = ttk.Label(controls, text="Route:")
+        self._hunt_route_label.grid(row=0, column=4, sticky="w", padx=4, pady=4)
+        self._hunt_route_combo = ttk.Combobox(
+            controls,
+            textvariable=self.hunt_route_var,
+            values=["Any Route / Area"],
+            state="readonly",
+            width=24,
+        )
+        self._hunt_route_combo.grid(row=0, column=5, sticky="ew", padx=4, pady=4)
+        self._hunt_route_combo.bind("<<ComboboxSelected>>", self._on_hunt_route_selected)
+
+        ttk.Label(controls, text="Target:").grid(row=1, column=0, sticky="w", padx=4, pady=4)
+        self._hunt_target_combo = ttk.Combobox(
+            controls,
+            textvariable=self.hunt_target_var,
+            values=[],
+            state="readonly",
+            width=36,
+        )
+        self._hunt_target_combo.grid(row=1, column=1, columnspan=3, sticky="ew", padx=4, pady=4)
+        self._hunt_target_combo.bind("<<ComboboxSelected>>", self._on_hunt_target_selected)
+
+        self._hunt_start_btn = ttk.Button(controls, text="Start Hunt", command=self._start_hunt)
+        self._hunt_start_btn.grid(row=1, column=4, sticky="ew", padx=4, pady=4)
+
+        self._hunt_pause_btn = ttk.Button(controls, text="Pause Hunt", command=self._pause_hunt, state="disabled")
+        self._hunt_pause_btn.grid(row=1, column=5, sticky="ew", padx=4, pady=4)
+
+        ttk.Button(controls, text="Reset Counter", command=self._reset_hunt_counter).grid(
+            row=1, column=6, sticky="ew", padx=4, pady=4
+        )
+
+        target_frame = ttk.LabelFrame(container, text="Target", padding=10)
+        target_frame.pack(fill=tk.X, pady=(0, 10))
+
+        target_inner = ttk.Frame(target_frame)
+        target_inner.pack(anchor=tk.CENTER)
+
+        self._hunt_target_name_label = ttk.Label(
+            target_inner,
+            text="No target selected",
+            font=("Segoe UI", 12, "bold"),
+            anchor="center",
+            justify=tk.CENTER,
+        )
+        self._hunt_target_name_label.pack(pady=(0, 6))
+
+        self._hunt_target_sprite_label = ttk.Label(target_inner, text="Sprite loading...")
+        self._hunt_target_sprite_label.pack(pady=(0, 6))
+
+        self._hunt_target_type_frame = ttk.Frame(target_inner)
+        self._hunt_target_type_frame.pack(anchor=tk.CENTER, pady=(0, 4))
+        self._hunt_target_type_labels = []
+        for _ in range(2):
+            type_label = ttk.Label(self._hunt_target_type_frame, text="")
+            type_label.pack(side=tk.LEFT, padx=2)
+            self._hunt_target_type_labels.append(type_label)
+
+        self._hunt_target_meta_label = ttk.Label(
+            target_inner,
+            text="",
+            style="Subtle.TLabel",
+            anchor="center",
+            justify=tk.CENTER,
+            wraplength=520,
+        )
+        self._hunt_target_meta_label.pack(pady=(0, 6))
+
+        counter_row = ttk.Frame(target_inner)
+        counter_row.pack()
+
+        self._hunt_counter_label = ttk.Label(
+            counter_row,
+            text="Encounters: 0",
+            font=("Segoe UI", 12, "bold"),
+            anchor="center",
+            justify=tk.CENTER,
+        )
+        self._hunt_counter_label.pack(side=tk.LEFT, padx=(0, 10))
+
+        self._hunt_phase_label = ttk.Label(
+            counter_row,
+            text="Phases: 0",
+            font=("Segoe UI", 12, "bold"),
+            anchor="center",
+            justify=tk.CENTER,
+        )
+        self._hunt_phase_label.pack(side=tk.LEFT, padx=(10, 0))
+
+        self._hunt_mode_hint_label = ttk.Label(
+            target_inner,
+            text="",
+            style="Subtle.TLabel",
+            anchor="center",
+            justify=tk.CENTER,
+        )
+        self._hunt_mode_hint_label.pack(pady=(6, 0))
+
+        available_frame = ttk.LabelFrame(container, text="Available Pokemon", padding=10)
+        available_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+
+        available_body = ttk.Frame(available_frame)
+        available_body.pack(fill=tk.BOTH, expand=True)
+
+        self._hunt_available_canvas = tk.Canvas(available_body, highlightthickness=0, height=320)
+        self._hunt_available_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        self._hunt_available_scrollbar = ttk.Scrollbar(available_body, orient=tk.VERTICAL, command=self._hunt_available_canvas.yview)
+        self._hunt_available_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self._hunt_available_canvas.configure(yscrollcommand=self._hunt_available_scrollbar.set)
+
+        self._hunt_other_sprites_frame = ttk.Frame(self._hunt_available_canvas)
+        self._hunt_available_window_id = self._hunt_available_canvas.create_window((0, 0), window=self._hunt_other_sprites_frame, anchor="nw")
+        self._hunt_other_sprites_frame.bind("<Configure>", self._on_hunt_available_frame_configure)
+        self._hunt_available_canvas.bind("<Configure>", self._on_hunt_available_canvas_configure)
+        self._hunt_available_canvas.bind("<MouseWheel>", self._on_hunt_available_mousewheel)
+        self._hunt_other_sprites_frame.bind("<MouseWheel>", self._on_hunt_available_mousewheel)
+        self._hunt_other_sprite_labels = []
+
+        self.hunt_status_label = ttk.Label(container, text="Hunt idle", style="Subtle.TLabel")
+        self.hunt_status_label.pack(anchor=tk.W)
+
+        self._update_hunt_mode_controls()
+        self._load_last_hunt_for_game(self.hunt_game_var.get().strip(), auto_start=False)
+
+    def _get_hunt_species_options(self, game_name: str) -> List[Tuple[int, str]]:
+        reader = self.tracker.pokemon_reader if self.tracker else None
+        if not reader:
+            return []
+
+        species_ids = self._get_hunt_species_ids_for_selection(game_name)
+        options: List[Tuple[int, str]] = []
+        for pid in species_ids:
+            name = reader.POKEMON_NAMES.get(pid)
+            if isinstance(name, str) and name.strip():
+                options.append((int(pid), name.strip()))
+        return options
+
+    def _on_hunt_mode_selected(self, _event=None):
+        keep_active = bool(self._hunt_active)
+        self._update_hunt_mode_controls()
+        self._load_saved_hunt_for_current_selection(auto_start=keep_active)
+        if keep_active and not self._hunt_active:
+            self._start_hunt(silent=True, emit_log=False, persist=True)
+
+    def _on_hunt_game_selected(self, _event=None):
+        keep_active = bool(self._hunt_active)
+        selected_game = self.hunt_game_var.get().strip()
+        self._load_last_hunt_for_game(selected_game, auto_start=keep_active)
+        if keep_active and not self._hunt_active:
+            self._start_hunt(silent=True, emit_log=False, persist=True)
+
+    def _on_hunt_route_selected(self, _event=None):
+        keep_active = bool(self._hunt_active)
+        self._refresh_hunt_targets()
+        self._load_saved_hunt_for_current_selection(auto_start=keep_active)
+        if keep_active and not self._hunt_active:
+            self._start_hunt(silent=True, emit_log=False, persist=True)
+
+    def _on_hunt_target_selected(self, _event=None):
+        keep_active = bool(self._hunt_active)
+        self._update_hunt_target_display()
+        self._load_saved_hunt_for_current_selection(auto_start=keep_active)
+        if keep_active and not self._hunt_active:
+            self._start_hunt(silent=True, emit_log=False, persist=True)
+
+    def _capture_current_hunt_profile(self) -> Optional[Tuple[str, str, Dict[str, Any]]]:
+        game_name = self.hunt_game_var.get().strip() or (self.tracker.game_name or "")
+        if game_name not in self._hunt_game_options:
+            return None
+
+        mode = self.hunt_mode_var.get().strip()
+        route_name = self.hunt_route_var.get().strip()
+        target_id = self._get_hunt_target_pokemon_id()
+        profile_key = self._build_hunt_profile_key(mode, route_name, target_id)
+        profile: Dict[str, Any] = {
+            "mode": mode,
+            "route": route_name,
+            "target_id": target_id,
+            "counter": int(max(0, self._hunt_counter)),
+            "phase_count": int(max(0, self._hunt_phase_count)),
+            "species_counts": {str(int(pid)): int(max(0, count)) for pid, count in self._hunt_species_counts.items() if int(count) > 0},
+            "active": bool(self._hunt_active),
+            "updated_at": int(time.time()),
+        }
+        return game_name, profile_key, profile
+
+    def _save_current_hunt_profile(self, *, active_override: Optional[bool] = None, set_last_profile_key: bool = True):
+        if self._hunt_profile_applying:
+            return
+
+        captured = self._capture_current_hunt_profile()
+        if not captured:
+            return
+
+        game_name, profile_key, profile = captured
+        if active_override is not None:
+            profile["active"] = bool(active_override)
+
+        game_store = self._get_hunt_profile_store_for_game(game_name, create=True)
+        if not isinstance(game_store, dict):
+            return
+
+        profiles = game_store.get("profiles")
+        if not isinstance(profiles, dict):
+            profiles = {}
+            game_store["profiles"] = profiles
+
+        if bool(profile.get("active")):
+            for existing in profiles.values():
+                if isinstance(existing, dict):
+                    existing["active"] = False
+
+        profiles[profile_key] = profile
+        if set_last_profile_key:
+            game_store["last_profile_key"] = profile_key
+        self._save_hunt_profiles()
+
+    def _resolve_hunt_target_display(self, game_name: str, target_id: int) -> str:
+        if int(target_id or 0) <= 0:
+            return ""
+        for pid, name in self._get_hunt_species_options(game_name):
+            if int(pid) == int(target_id):
+                return f"{int(pid):03d} {name}"
+        return ""
+
+    def _apply_hunt_profile(self, game_name: str, profile: Dict[str, Any], *, auto_start: bool):
+        if game_name not in self._hunt_game_options or not isinstance(profile, dict):
+            return
+
+        profile_mode = str(profile.get("mode") or "").strip()
+        if profile_mode not in self._hunt_modes:
+            profile_mode = self._hunt_modes[0]
+
+        route_name = str(profile.get("route") or "").strip()
+        try:
+            target_id = int(profile.get("target_id", 0))
+        except (TypeError, ValueError):
+            target_id = 0
+        try:
+            counter_value = int(profile.get("counter", 0))
+        except (TypeError, ValueError):
+            counter_value = 0
+        try:
+            phase_value = int(profile.get("phase_count", 0))
+        except (TypeError, ValueError):
+            phase_value = 0
+        profile_active = bool(profile.get("active", False))
+        species_counts_raw = profile.get("species_counts")
+        parsed_species_counts: Dict[int, int] = {}
+        if isinstance(species_counts_raw, dict):
+            for raw_pid, raw_count in species_counts_raw.items():
+                try:
+                    pid_int = int(raw_pid)
+                    count_int = int(raw_count)
+                except (TypeError, ValueError):
+                    continue
+                if pid_int > 0 and count_int > 0:
+                    parsed_species_counts[pid_int] = count_int
+
+        self._hunt_profile_applying = True
+        try:
+            if self.hunt_game_var.get().strip() != game_name:
+                self.hunt_game_var.set(game_name)
+
+            self.hunt_mode_var.set(profile_mode)
+            self._update_hunt_mode_controls()
+
+            route_values = self._get_hunt_route_values(game_name, profile_mode)
+            if route_name and route_name in route_values:
+                self.hunt_route_var.set(route_name)
+            elif route_values:
+                self.hunt_route_var.set(route_values[0])
+            else:
+                self.hunt_route_var.set("")
+
+            self._refresh_hunt_targets()
+
+            target_display = self._resolve_hunt_target_display(game_name, target_id)
+            if target_display:
+                self.hunt_target_var.set(target_display)
+            self._hunt_species_counts = dict(parsed_species_counts)
+            self._update_hunt_target_display()
+            self._set_hunt_counter(counter_value)
+            self._set_hunt_phase_count(phase_value)
+        finally:
+            self._hunt_profile_applying = False
+
+        if auto_start:
+            started = self._start_hunt(silent=True, emit_log=False, persist=False)
+            if not started:
+                self._pause_hunt(emit_log=False, persist=False)
+                log_event(
+                    logging.WARNING,
+                    "hunt_auto_start_failed",
+                    game=game_name,
+                    mode=profile_mode,
+                    route=self.hunt_route_var.get().strip(),
+                    target=self.hunt_target_var.get().strip(),
+                    profile_active=bool(profile_active),
+                )
+        else:
+            self._pause_hunt(emit_log=False, persist=False)
+
+    def _load_saved_hunt_for_current_selection(self, *, auto_start: bool = False) -> bool:
+        game_name = self.hunt_game_var.get().strip() or (self.tracker.game_name or "")
+        if game_name not in self._hunt_game_options:
+            return False
+
+        game_store = self._get_hunt_profile_store_for_game(game_name, create=False)
+        profiles = game_store.get("profiles") if isinstance(game_store, dict) else None
+        if not isinstance(profiles, dict):
+            profiles = {}
+
+        profile_key = self._build_hunt_profile_key(
+            self.hunt_mode_var.get().strip(),
+            self.hunt_route_var.get().strip(),
+            self._get_hunt_target_pokemon_id(),
+        )
+        profile = profiles.get(profile_key)
+        if isinstance(profile, dict):
+            self._apply_hunt_profile(game_name, profile, auto_start=auto_start)
+            if isinstance(game_store, dict):
+                game_store["last_profile_key"] = profile_key
+                self._save_hunt_profiles()
+            return True
+
+        self._hunt_profile_applying = True
+        try:
+            self._hunt_species_counts = {}
+            self._set_hunt_counter(0)
+            self._set_hunt_phase_count(0)
+        finally:
+            self._hunt_profile_applying = False
+
+        self._update_hunt_other_species_display()
+        self._pause_hunt(emit_log=False, persist=False)
+        self._save_current_hunt_profile(active_override=False, set_last_profile_key=False)
+        return False
+
+    def _load_last_hunt_for_game(self, game_name: str, *, auto_start: bool):
+        game_key = (game_name or "").strip()
+        if game_key not in self._hunt_game_options:
+            self._refresh_hunt_targets()
+            self._hunt_profile_applying = True
+            try:
+                self._hunt_species_counts = {}
+                self._set_hunt_counter(0)
+                self._set_hunt_phase_count(0)
+            finally:
+                self._hunt_profile_applying = False
+            self._update_hunt_other_species_display()
+            self._pause_hunt(emit_log=False, persist=False)
+            return
+
+        if self.hunt_game_var.get().strip() != game_key:
+            self.hunt_game_var.set(game_key)
+
+        game_store = self._get_hunt_profile_store_for_game(game_key, create=False)
+        profiles = game_store.get("profiles") if isinstance(game_store, dict) else None
+        if not isinstance(profiles, dict):
+            profiles = {}
+
+        profile: Optional[Dict[str, Any]] = None
+        if auto_start and profiles:
+            active_profiles = sorted(
+                (
+                    item
+                    for item in profiles.values()
+                    if isinstance(item, dict) and bool(item.get("active", False))
+                ),
+                key=lambda item: int(item.get("updated_at", 0)) if isinstance(item.get("updated_at", 0), int) else 0,
+                reverse=True,
+            )
+            if active_profiles:
+                profile = active_profiles[0]
+
+        if profile is None:
+            last_key = game_store.get("last_profile_key") if isinstance(game_store, dict) else ""
+            if isinstance(last_key, str) and last_key:
+                candidate = profiles.get(last_key)
+                if isinstance(candidate, dict):
+                    profile = candidate
+
+        if profile is None and profiles:
+            sorted_profiles = sorted(
+                (item for item in profiles.values() if isinstance(item, dict)),
+                key=lambda item: int(item.get("updated_at", 0)) if isinstance(item.get("updated_at", 0), int) else 0,
+                reverse=True,
+            )
+            if sorted_profiles:
+                profile = sorted_profiles[0]
+
+        if isinstance(profile, dict):
+            self._apply_hunt_profile(game_key, profile, auto_start=auto_start)
+            self._save_current_hunt_profile(active_override=bool(profile.get("active", False)))
+            return
+
+        self._update_hunt_mode_controls()
+        self._hunt_profile_applying = True
+        try:
+            self._hunt_species_counts = {}
+            self._set_hunt_counter(0)
+            self._set_hunt_phase_count(0)
+        finally:
+            self._hunt_profile_applying = False
+        self._update_hunt_other_species_display()
+        self._pause_hunt(emit_log=False, persist=False)
+        self._save_current_hunt_profile(active_override=False, set_last_profile_key=False)
+
+    def _refresh_hunt_targets(self, _event=None):
+        game_name = self.hunt_game_var.get().strip()
+        if not game_name and self._hunt_game_options:
+            game_name = self._hunt_game_options[0]
+            self.hunt_game_var.set(game_name)
+
+        mode = self.hunt_mode_var.get().strip()
+        route_values = self._get_hunt_route_values(game_name, mode)
+        if self._hunt_route_combo is not None:
+            self._hunt_route_combo.configure(values=route_values)
+            current_route = self.hunt_route_var.get().strip()
+            if current_route not in route_values:
+                self.hunt_route_var.set(route_values[0] if route_values else "")
+
+        species_options = self._get_hunt_species_options(game_name)
+        display_values = [f"{pid:03d} {name}" for pid, name in species_options]
+        if self._hunt_target_combo is not None:
+            self._hunt_target_combo.configure(values=display_values)
+
+        current_target = self.hunt_target_var.get().strip()
+        if current_target not in display_values:
+            self.hunt_target_var.set(display_values[0] if display_values else "")
+
+        self._update_hunt_target_display()
+
+    def _get_hunt_target_pokemon_id(self) -> int:
+        raw = self.hunt_target_var.get().strip()
+        if not raw:
+            return 0
+        token = raw.split(" ", 1)[0].strip()
+        try:
+            return int(token)
+        except (TypeError, ValueError):
+            return 0
+
+    def _set_hunt_counter(self, value: int):
+        self._hunt_counter = max(0, int(value))
+        if isinstance(self._hunt_counter_label, ttk.Label):
+            self._hunt_counter_label.configure(text=f"Encounters: {self._hunt_counter:,}")
+        if not self._hunt_profile_applying:
+            self._save_current_hunt_profile()
+
+    def _set_hunt_phase_count(self, value: int):
+        self._hunt_phase_count = max(0, int(value))
+        if isinstance(self._hunt_phase_label, ttk.Label):
+            self._hunt_phase_label.configure(text=f"Phases: {self._hunt_phase_count:,}")
+        if not self._hunt_profile_applying:
+            self._save_current_hunt_profile()
+
+    def _get_hunt_species_count(self, species_id: int) -> int:
+        try:
+            key = int(species_id)
+        except (TypeError, ValueError):
+            return 0
+        if key <= 0:
+            return 0
+        return int(self._hunt_species_counts.get(key, 0))
+
+    def _record_hunt_species_encounter(self, species_id: int):
+        try:
+            key = int(species_id)
+        except (TypeError, ValueError):
+            return
+        if key <= 0:
+            return
+        self._hunt_species_counts[key] = self._get_hunt_species_count(key) + 1
+        label = self._hunt_species_count_labels.get(key)
+        if isinstance(label, ttk.Label):
+            label.configure(text=f"Encounters: {self._hunt_species_counts[key]:,}")
+
+    def _update_hunt_target_display(self, _event=None):
+        target_id = self._get_hunt_target_pokemon_id()
+        game_name = self.hunt_game_var.get().strip() or (self.tracker.game_name or "")
+        target_name = self.tracker.pokemon_reader.get_pokemon_name(target_id) if target_id > 0 and self.tracker and self.tracker.pokemon_reader else "No target selected"
+
+        if isinstance(self._hunt_target_name_label, ttk.Label):
+            if target_id > 0:
+                self._hunt_target_name_label.configure(text=f"Target: {target_name} (#{target_id})")
+            else:
+                self._hunt_target_name_label.configure(text="No target selected")
+
+        if isinstance(self._hunt_target_sprite_label, ttk.Label):
+            if target_id > 0:
+                sprite = self._request_party_sprite(target_id, game_name, shiny=True)
+                if sprite is not None:
+                    self._hunt_target_sprite_label.configure(image=sprite, text="")
+                    setattr(self._hunt_target_sprite_label, "image", sprite)
+                else:
+                    self._hunt_target_sprite_label.configure(image="", text="Sprite loading...")
+                    setattr(self._hunt_target_sprite_label, "image", None)
+            else:
+                self._hunt_target_sprite_label.configure(image="", text="No target")
+                setattr(self._hunt_target_sprite_label, "image", None)
+
+        target_types: List[str] = []
+        target_details: List[str] = []
+        context_details: List[str] = []
+        mode = self.hunt_mode_var.get().strip()
+        route_value = self.hunt_route_var.get().strip()
+        target_entry: Optional[Dict[str, Any]] = None
+
+        if target_id > 0 and mode == "Soft Reset Hunt":
+            for item in self._get_hunt_soft_reset_entries_for_selection(game_name):
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    if int(item.get("id", 0)) == int(target_id):
+                        target_entry = item
+                        break
+                except (TypeError, ValueError):
+                    continue
+
+        if isinstance(target_entry, dict):
+            raw_types = target_entry.get("types")
+            if isinstance(raw_types, list):
+                for value in raw_types:
+                    if isinstance(value, str) and value.strip():
+                        target_types.append(value.strip().lower())
+
+            location = target_entry.get("location")
+            if isinstance(location, str) and location.strip():
+                target_details.append(location.strip())
+            level = target_entry.get("level")
+            if isinstance(level, int) and level > 0:
+                target_details.append(f"Lv.{level}")
+            npc = target_entry.get("npc")
+            if isinstance(npc, str) and npc.strip():
+                target_details.append(f"NPC: {npc.strip()}")
+
+        if target_id > 0 and not target_types:
+            resolved_types = self._request_species_types(target_id, game_name)
+            if isinstance(resolved_types, list):
+                for value in resolved_types:
+                    if isinstance(value, str) and value.strip():
+                        target_types.append(value.strip().lower())
+
+        if mode == "Wild Encounter Hunt" and route_value:
+            context_details.append(f"Route: {route_value}")
+        elif mode == "Fishing Encounter Hunt" and route_value:
+            context_details.append(f"Fishing Spot: {route_value}")
+        elif mode == "Soft Reset Hunt" and route_value:
+            context_details.append(f"Category: {route_value}")
+        elif mode == "Hatching Egg Hunt":
+            context_details.append("Egg Hunt")
+
+        target_types = target_types[:2]
+
+        labels = self._hunt_target_type_labels if isinstance(self._hunt_target_type_labels, list) else []
+        for idx, type_label in enumerate(labels):
+            if not isinstance(type_label, ttk.Label):
+                continue
+            if idx < len(target_types):
+                type_name = target_types[idx]
+                icon = self._request_party_type_icon(type_name, game_name)
+                if icon is not None:
+                    type_label.configure(image=icon, text="")
+                    setattr(type_label, "image", icon)
+                else:
+                    type_label.configure(image="", text=type_name.title())
+                    setattr(type_label, "image", None)
+            else:
+                type_label.configure(image="", text="")
+                setattr(type_label, "image", None)
+
+        if isinstance(self._hunt_target_meta_label, ttk.Label):
+            meta_parts = context_details + target_details
+            if meta_parts:
+                self._hunt_target_meta_label.configure(text=" / ".join(meta_parts))
+            else:
+                self._hunt_target_meta_label.configure(text="")
+
+        self._update_hunt_other_species_display()
+
+    def _update_hunt_mode_controls(self, _event=None):
+        mode = self.hunt_mode_var.get().strip()
+
+        if mode == "Soft Reset Hunt":
+            route_enabled = True
+            route_label = "Category:"
+        elif mode == "Fishing Encounter Hunt":
+            route_enabled = True
+            route_label = "Fishing Spot:"
+        elif mode == "Wild Encounter Hunt":
+            route_enabled = True
+            route_label = "Route:"
+        else:
+            route_enabled = False
+            route_label = "Route:"
+
+        if isinstance(self._hunt_route_label, ttk.Label):
+            self._hunt_route_label.configure(text=route_label)
+
+        if isinstance(self._hunt_route_combo, ttk.Combobox):
+            self._hunt_route_combo.configure(state="readonly" if route_enabled else "disabled")
+
+        if isinstance(self._hunt_mode_hint_label, ttk.Label):
+            hints = {
+                "Soft Reset Hunt": "Choose category + target. Available Pokemon shows event cards.",
+                "Wild Encounter Hunt": "Choose route + target. Target list is filtered to that route.",
+                "Fishing Encounter Hunt": "Choose fishing spot + target. Target list is filtered to that fishing spot.",
+                "Hatching Egg Hunt": "Choose target species. Counter increments when eggs hatch into that target.",
+            }
+            self._hunt_mode_hint_label.configure(text=hints.get(mode, ""))
+
+        self._refresh_hunt_targets()
+
+    def _update_hunt_other_species_display(self):
+        if not isinstance(self._hunt_other_sprites_frame, ttk.Frame):
+            return
+
+        for child in self._hunt_other_sprites_frame.winfo_children():
+            child.destroy()
+        self._hunt_species_count_labels = {}
+
+        game_name = self.hunt_game_var.get().strip() or (self.tracker.game_name or "")
+        mode = self.hunt_mode_var.get().strip()
+
+        if mode == "Soft Reset Hunt":
+            entries = self._get_hunt_soft_reset_entries_for_selection(game_name)
+            if not entries:
+                ttk.Label(self._hunt_other_sprites_frame, text="No available Pokemon for this category.", style="Subtle.TLabel").pack(anchor=tk.W)
+                self._on_hunt_available_frame_configure()
+                return
+
+            columns = 3
+            for col in range(columns):
+                self._hunt_other_sprites_frame.columnconfigure(col, weight=1)
+
+            for idx, item in enumerate(entries):
+                try:
+                    pid = int(item.get("id", 0))
+                except (TypeError, ValueError):
+                    continue
+                if pid <= 0:
+                    continue
+
+                name = self._get_pokemon_name(pid)
+                card = ttk.LabelFrame(self._hunt_other_sprites_frame, text=f"#{pid:03d} {name}", padding=6)
+                card.grid(row=idx // columns, column=idx % columns, sticky="nsew", padx=4, pady=4)
+
+                sprite = self._request_party_sprite(pid, game_name, shiny=False)
+                sprite_label = ttk.Label(card, text="Sprite loading...", anchor=tk.CENTER, justify=tk.CENTER)
+                if sprite is not None:
+                    sprite_label.configure(image=sprite, text="")
+                    setattr(sprite_label, "image", sprite)
+                sprite_label.pack(anchor=tk.CENTER, pady=(0, 4))
+
+                type_row = ttk.Frame(card)
+                type_row.pack(anchor=tk.CENTER, pady=(0, 4))
+
+                types: List[str] = []
+                raw_types = item.get("types")
+                if isinstance(raw_types, list):
+                    for value in raw_types:
+                        if isinstance(value, str) and value.strip():
+                            types.append(value.strip().lower())
+                if not types:
+                    resolved_types = self._request_species_types(pid, game_name)
+                    if isinstance(resolved_types, list):
+                        for value in resolved_types:
+                            if isinstance(value, str) and value.strip():
+                                types.append(value.strip().lower())
+                types = types[:2]
+
+                if types:
+                    for type_name in types:
+                        icon = self._request_party_type_icon(type_name, game_name)
+                        icon_label = ttk.Label(type_row, text="")
+                        if icon is not None:
+                            icon_label.configure(image=icon)
+                            setattr(icon_label, "image", icon)
+                        else:
+                            icon_label.configure(text=type_name.title())
+                        icon_label.pack(side=tk.LEFT, padx=2)
+
+                count_label = ttk.Label(card, text=f"Encounters: {self._get_hunt_species_count(pid):,}", style="Subtle.TLabel")
+                count_label.pack(anchor=tk.CENTER, pady=(0, 4))
+                self._hunt_species_count_labels[int(pid)] = count_label
+
+                details: List[str] = []
+                location = item.get("location")
+                if isinstance(location, str) and location.strip():
+                    details.append(location.strip())
+                level = item.get("level")
+                if isinstance(level, int) and level > 0:
+                    details.append(f"Lv.{level}")
+                npc = item.get("npc")
+                if isinstance(npc, str) and npc.strip():
+                    details.append(f"NPC: {npc.strip()}")
+
+                if details:
+                    ttk.Label(card, text=" / ".join(details), wraplength=200, justify=tk.LEFT, anchor=tk.W).pack(fill=tk.X)
+
+            self._on_hunt_available_frame_configure()
+            return
+
+        species_ids = self._get_hunt_other_species_ids(game_name)
+        if not species_ids:
+            ttk.Label(self._hunt_other_sprites_frame, text="No available Pokemon for this selection.", style="Subtle.TLabel").pack(anchor=tk.W)
+            self._on_hunt_available_frame_configure()
+            return
+
+        columns = 8
+        for col in range(columns):
+            self._hunt_other_sprites_frame.columnconfigure(col, weight=1)
+
+        for idx, pid in enumerate(species_ids):
+            item_frame = ttk.Frame(self._hunt_other_sprites_frame)
+            item_frame.grid(row=idx // columns, column=idx % columns, padx=4, pady=4, sticky="n")
+
+            sprite = self._request_party_sprite(int(pid), game_name, shiny=False)
+            sprite_label = ttk.Label(item_frame, text="...", anchor=tk.CENTER, justify=tk.CENTER)
+            if sprite is not None:
+                sprite_label.configure(image=sprite, text="")
+                setattr(sprite_label, "image", sprite)
+            sprite_label.pack(anchor=tk.CENTER)
+
+            ttk.Label(item_frame, text=self._get_pokemon_name(int(pid)), wraplength=100, justify=tk.CENTER).pack(anchor=tk.CENTER)
+            count_label = ttk.Label(item_frame, text=f"Encounters: {self._get_hunt_species_count(int(pid)):,}", style="Subtle.TLabel", justify=tk.CENTER)
+            count_label.pack(anchor=tk.CENTER)
+            self._hunt_species_count_labels[int(pid)] = count_label
+
+        self._on_hunt_available_frame_configure()
+
+    def _on_hunt_available_frame_configure(self, _event=None):
+        if not isinstance(self._hunt_available_canvas, tk.Canvas):
+            return
+        bbox = self._hunt_available_canvas.bbox("all")
+        if bbox:
+            self._hunt_available_canvas.configure(scrollregion=bbox)
+
+    def _on_hunt_available_canvas_configure(self, event):
+        if not isinstance(self._hunt_available_canvas, tk.Canvas):
+            return
+        if self._hunt_available_window_id is not None:
+            self._hunt_available_canvas.itemconfigure(self._hunt_available_window_id, width=event.width)
+
+    def _on_hunt_available_mousewheel(self, event):
+        if not isinstance(self._hunt_available_canvas, tk.Canvas):
+            return
+        delta = 0
+        raw_delta = getattr(event, "delta", 0)
+        if raw_delta:
+            delta = -int(raw_delta / 120)
+        else:
+            num = getattr(event, "num", None)
+            if num == 4:
+                delta = -1
+            elif num == 5:
+                delta = 1
+        if delta != 0:
+            self._hunt_available_canvas.yview_scroll(delta, "units")
+
+    def _prime_hunt_baseline(self):
+        """Prime encounter/party baseline so counters start from next new event."""
+        mode = self.hunt_mode_var.get().strip()
+        game_for_hunt = self.hunt_game_var.get().strip() or (self.tracker.game_name if self.tracker else "") or ""
+        self._hunt_last_party_snapshot = self._snapshot_party_for_hunt(self.tracker._last_party if self.tracker else [])
+        self._hunt_last_enemy_signature = None
+        self._hunt_last_enemy_seen_at = 0.0
+        self._hunt_last_raw_log_key = None
+        self._hunt_last_raw_none_log_at = 0.0
+        self._hunt_last_target_signature = None
+        self._hunt_enemy_present = False
+        self._hunt_target_present = False
+        self._hunt_soft_reset_reset_pending = False
+        self._hunt_soft_reset_seen_in_pokedex = False
+        self._hunt_soft_reset_target_id = 0
+
+        if mode == "Hatching Egg Hunt":
+            self._hunt_initialized = True
+            return
+
+        if mode in {"Wild Encounter Hunt", "Fishing Encounter Hunt"}:
+            # Count the next observed battle as an encounter, even when hunt starts mid-battle.
+            self._hunt_initialized = True
+            return
+
+        encounter = self.tracker.pokemon_reader.read_wild_encounter(game_for_hunt) if self.tracker and self.tracker.pokemon_reader else None
+        if isinstance(encounter, dict):
+            signature = str(encounter.get("signature", "")).strip()
+            if signature:
+                self._hunt_last_enemy_signature = signature
+            self._hunt_enemy_present = bool(encounter.get("is_wild", True))
+            self._hunt_last_enemy_seen_at = time.monotonic()
+
+        if mode == "Soft Reset Hunt":
+            present, target_signature, _, _, _ = self._get_soft_reset_target_state(encounter, game_for_hunt)
+            self._hunt_target_present = bool(present)
+            self._hunt_last_target_signature = str(target_signature).strip() if isinstance(target_signature, str) and str(target_signature).strip() else None
+            self._hunt_soft_reset_seen_in_pokedex = self._is_hunt_target_in_pokedex()
+            self._hunt_soft_reset_target_id = self._get_hunt_target_pokemon_id()
+
+        self._hunt_initialized = True
+
+    def _start_hunt(self, *, silent: bool = False, emit_log: bool = True, persist: bool = True) -> bool:
+        game_name = self.hunt_game_var.get().strip()
+        if game_name not in self._hunt_game_options:
+            if not silent:
+                messagebox.showwarning("Unsupported Game", "Shiny Hunt supports Gen 2/3 games only.")
+            return False
+
+        if self.hunt_mode_var.get().strip() != "Hatching Egg Hunt" and self._get_hunt_target_pokemon_id() <= 0:
+            if not silent:
+                messagebox.showwarning("No Target", "Select a hunt target before starting.")
+            return False
+
+        self._hunt_active = True
+        self._hunt_alerted_signatures = set()
+        self._hunt_last_waiting_state = bool(self.retroarch.is_waiting_for_launch())
+        self._hunt_soft_reset_reset_pending = False
+        self._hunt_recent_other_species.clear()
+        self._update_hunt_other_species_display()
+        self._prime_hunt_baseline()
+        if isinstance(self._hunt_start_btn, ttk.Button):
+            self._hunt_start_btn.configure(state="disabled")
+        if isinstance(self._hunt_pause_btn, ttk.Button):
+            self._hunt_pause_btn.configure(state="normal")
+        if isinstance(self.hunt_status_label, ttk.Label):
+            self.hunt_status_label.configure(text="Hunt active")
+        if emit_log:
+            self._log(f"[HUNT] Started {self.hunt_mode_var.get()}", "info")
+        if persist and not self._hunt_profile_applying:
+            self._save_current_hunt_profile(active_override=True)
+        return True
+
+    def _pause_hunt(self, emit_log: bool = True, persist: bool = True):
+        self._hunt_active = False
+        if isinstance(self._hunt_start_btn, ttk.Button):
+            self._hunt_start_btn.configure(state="normal")
+        if isinstance(self._hunt_pause_btn, ttk.Button):
+            self._hunt_pause_btn.configure(state="disabled")
+        if isinstance(self.hunt_status_label, ttk.Label):
+            self.hunt_status_label.configure(text="Hunt paused")
+        if emit_log:
+            self._log("[HUNT] Hunt paused", "info")
+        if persist and not self._hunt_profile_applying:
+            self._save_current_hunt_profile(active_override=False)
+
+    def _reset_hunt_counter(self, emit_log: bool = True, persist: bool = True):
+        self._set_hunt_counter(0)
+        self._set_hunt_phase_count(0)
+        self._hunt_species_counts = {}
+        self._hunt_recent_other_species.clear()
+        self._hunt_alerted_signatures.clear()
+        self._update_hunt_other_species_display()
+        self._prime_hunt_baseline()
+        if emit_log:
+            self._log("[HUNT] Counter and phases reset", "info")
+        if persist and not self._hunt_profile_applying:
+            self._save_current_hunt_profile(active_override=bool(self._hunt_active))
+
+    def _snapshot_party_for_hunt(self, party: List[Dict]) -> Dict[int, Dict[str, object]]:
+        snapshot: Dict[int, Dict[str, object]] = {}
+        for member in party:
+            if not isinstance(member, dict):
+                continue
+            try:
+                slot = int(member.get("slot", 0))
+            except (TypeError, ValueError):
+                continue
+            if slot <= 0:
+                continue
+            name = member.get("name") if isinstance(member.get("name"), str) else ""
+            is_egg = bool(member.get("is_egg", False)) or str(name).strip().lower() == "egg"
+            snapshot[int(slot)] = {
+                "id": int(member.get("id", 0)) if isinstance(member.get("id"), int) else 0,
+                "name": str(name).strip(),
+                "is_egg": bool(is_egg),
+                "shiny": bool(member.get("shiny", False)),
+            }
+        return snapshot
+
+    def _show_shiny_hunt_popup(self, title: str, message: str):
+        self._log(f"[HUNT] {message}", "success")
+        try:
+            messagebox.showinfo(title, message, parent=self.root)
+        except Exception:
+            pass
+
+    def _log_hunt_raw_encounter(self, encounter: Dict[str, object], game_name: str, mode: str):
+        if not isinstance(encounter, dict):
+            return
+
+        try:
+            species_id = int(encounter.get("species_id", 0))
+        except (TypeError, ValueError):
+            species_id = 0
+        species_name_raw = encounter.get("species_name")
+        if isinstance(species_name_raw, str) and species_name_raw.strip():
+            species_name = species_name_raw.strip()
+        elif self.tracker and self.tracker.pokemon_reader:
+            species_name = self.tracker.pokemon_reader.get_pokemon_name(species_id)
+        else:
+            species_name = f"Pokemon #{species_id}"
+
+        try:
+            level_val = int(encounter.get("level", 0) or 0)
+        except (TypeError, ValueError):
+            level_val = 0
+
+        try:
+            enemy_count = int(encounter.get("enemy_count", 0) or 0)
+        except (TypeError, ValueError):
+            enemy_count = 0
+
+        reader_meta: Dict[str, object] = {}
+        if self.tracker and self.tracker.pokemon_reader:
+            try:
+                reader_meta = self.tracker.pokemon_reader.get_last_wild_read_meta()
+            except Exception:
+                reader_meta = {}
+        read_reason = str(reader_meta.get("reason", "unknown"))
+        enemy_count_source = str(reader_meta.get("enemy_count_source", ""))
+        enemy_start = reader_meta.get("enemy_start")
+
+        is_wild = bool(encounter.get("is_wild", True))
+        is_shiny = bool(encounter.get("shiny", False))
+        signature = str(encounter.get("signature", "")).strip()
+        if not signature:
+            signature = f"{species_id}:{level_val}:{encounter.get('personality')}:{encounter.get('ot_id')}"
+
+        route_value = self.hunt_route_var.get().strip()
+        target_id = self._get_hunt_target_pokemon_id()
+        log_key = f"{game_name}|{mode}|{route_value}|{signature}|{enemy_count}|{int(is_wild)}"
+        if log_key == self._hunt_last_raw_log_key:
+            return
+
+        self._hunt_last_raw_log_key = log_key
+        self._hunt_last_raw_none_log_at = 0.0
+
+        log_event(
+            logging.INFO,
+            "hunt_wild_read",
+            game=game_name,
+            mode=mode,
+            route=route_value,
+            target_id=target_id,
+            species_id=species_id,
+            species=species_name,
+            level=level_val,
+            shiny=is_shiny,
+            enemy_count=enemy_count,
+            is_wild=is_wild,
+            signature=signature,
+            reader_reason=read_reason,
+            enemy_count_source=(enemy_count_source or None),
+            enemy_start=(str(enemy_start) if enemy_start is not None else None),
+        )
+
+        mode_label = "FISHING" if mode == "Fishing Encounter Hunt" else "WILD"
+        form_text = "Shiny" if is_shiny else "Normal"
+        level_text = f"Lv.{level_val}" if level_val > 0 else "Lv.?"
+        source_text = enemy_count_source if enemy_count_source else "unknown"
+        self._log(
+            f"RAW {mode_label} READ: {species_name} (#{species_id}) / {level_text} / {form_text} / wild={is_wild} / enemy_count={enemy_count} / source={source_text} / reason={read_reason}",
+            "hunt",
+        )
+
+    def _log_hunt_raw_no_encounter(self, game_name: str, mode: str):
+        if bool(getattr(self.retroarch, "is_waiting_for_launch", lambda: False)()):
+            return
+        if not bool(getattr(self.retroarch, "connected", False)):
+            return
+
+        now_ts = time.monotonic()
+        if (now_ts - float(self._hunt_last_raw_none_log_at)) < 15.0:
+            return
+
+        self._hunt_last_raw_none_log_at = now_ts
+        self._hunt_last_raw_log_key = None
+
+        route_value = self.hunt_route_var.get().strip()
+        target_id = self._get_hunt_target_pokemon_id()
+
+        reader_meta: Dict[str, object] = {}
+        if self.tracker and self.tracker.pokemon_reader:
+            try:
+                reader_meta = self.tracker.pokemon_reader.get_last_wild_read_meta()
+            except Exception:
+                reader_meta = {}
+        read_reason = str(reader_meta.get("reason", "unknown"))
+        enemy_count_source = str(reader_meta.get("enemy_count_source", ""))
+        decode_attempts_raw = reader_meta.get("decode_attempts", 0)
+        try:
+            decode_attempts = int(decode_attempts_raw)
+        except (TypeError, ValueError):
+            decode_attempts = 0
+
+        log_event(
+            logging.INFO,
+            "hunt_wild_read_none",
+            game=game_name,
+            mode=mode,
+            route=route_value,
+            target_id=target_id,
+            reason=read_reason,
+            enemy_count_source=(enemy_count_source or None),
+            decode_attempts=decode_attempts,
+            enemy_count=reader_meta.get("enemy_count"),
+            enemy_count_addr=reader_meta.get("enemy_count_addr"),
+            enemy_start=reader_meta.get("enemy_start"),
+            enemy_start_candidates=reader_meta.get("enemy_start_candidates"),
+            player_start_candidates=reader_meta.get("player_start_candidates"),
+            player_count_candidates=reader_meta.get("player_count_candidates"),
+        )
+
+        mode_label = "FISHING" if mode == "Fishing Encounter Hunt" else "WILD"
+        source_text = enemy_count_source if enemy_count_source else "unknown"
+        self._log(
+            f"RAW {mode_label} READ: no encounter data / Route: {route_value or '-'} / Target: #{target_id if target_id > 0 else 0} / reason={read_reason} / source={source_text} / decode_attempts={decode_attempts}",
+            "hunt",
+        )
+
+    def _is_hunt_target_in_pokedex(self) -> bool:
+        """Return True when the selected hunt target currently exists in tracked Pokedex state."""
+        if not self.tracker:
+            return False
+        target_id = self._get_hunt_target_pokemon_id()
+        if target_id <= 0:
+            return False
+        pokedex = self.tracker._last_pokedex if isinstance(self.tracker._last_pokedex, list) else []
+        for pid in pokedex:
+            try:
+                if int(pid) == int(target_id):
+                    return True
+            except (TypeError, ValueError):
+                continue
+        return False
+
+    def _get_soft_reset_target_state(self, encounter: Optional[Dict[str, object]], game_name: str) -> Tuple[bool, Optional[str], bool, str, int]:
+        """Resolve current soft-reset target visibility from enemy encounter or party state."""
+        target_id = self._get_hunt_target_pokemon_id()
+        if target_id <= 0 or not self.tracker or not self.tracker.pokemon_reader:
+            return False, None, False, "", 0
+
+        if isinstance(encounter, dict):
+            try:
+                encounter_species_id = int(encounter.get("species_id", 0))
+            except (TypeError, ValueError):
+                encounter_species_id = 0
+            if encounter_species_id == target_id and bool(encounter.get("is_wild", True)):
+                species_name = str(encounter.get("species_name") or self.tracker.pokemon_reader.get_pokemon_name(encounter_species_id))
+                encounter_signature = str(encounter.get("signature", "")).strip()
+                marker = f"enemy:{encounter_signature}" if encounter_signature else f"enemy:{encounter_species_id}"
+                return True, marker, bool(encounter.get("shiny", False)), species_name, encounter_species_id
+
+        def _resolve_target_from_party(party_data: object) -> Tuple[bool, Optional[str], bool, str, int]:
+            if not isinstance(party_data, list):
+                return False, None, False, "", 0
+            for member in party_data:
+                if not isinstance(member, dict):
+                    continue
+                try:
+                    member_species_id = int(member.get("id", 0))
+                except (TypeError, ValueError):
+                    continue
+                if member_species_id != target_id:
+                    continue
+
+                try:
+                    slot = int(member.get("slot", 0))
+                except (TypeError, ValueError):
+                    slot = 0
+                species_name = str(member.get("name") or self.tracker.pokemon_reader.get_pokemon_name(member_species_id))
+
+                personality = member.get("_personality")
+                ot_id = member.get("_ot_id")
+                level = member.get("level")
+                sig_parts = ["party", str(slot), str(member_species_id)]
+                if isinstance(personality, int) and isinstance(ot_id, int):
+                    sig_parts.extend([str(int(personality) & 0xFFFFFFFF), str(int(ot_id) & 0xFFFFFFFF)])
+                elif isinstance(level, int):
+                    sig_parts.append(str(int(level)))
+                signature = ":".join(sig_parts)
+                return True, signature, bool(member.get("shiny", False)), species_name, member_species_id
+            return False, None, False, "", 0
+
+        cached_party = self.tracker._last_party if isinstance(self.tracker._last_party, list) else []
+        present, signature, is_shiny, species_name, species_id = _resolve_target_from_party(cached_party)
+        if present:
+            return present, signature, is_shiny, species_name, species_id
+
+        # Soft-reset hunts on fresh saves can happen before collection baseline captures party;
+        # do a direct live read so attempts are still counted.
+        try:
+            live_party = self.tracker.pokemon_reader.read_party(game_name)
+        except Exception:
+            live_party = []
+
+        return _resolve_target_from_party(live_party)
+
+    def _handle_hunt_soft_reset_progress(self, encounter: Optional[Dict[str, object]], game_name: str):
+        """Track soft-reset attempts for both stationary encounters and party-based targets."""
+        present, signature, is_shiny, species_name, species_id = self._get_soft_reset_target_state(encounter, game_name)
+        target_in_pokedex = self._is_hunt_target_in_pokedex()
+        current_target_id = self._get_hunt_target_pokemon_id()
+
+        if current_target_id != self._hunt_soft_reset_target_id:
+            self._hunt_soft_reset_target_id = current_target_id
+            self._hunt_target_present = False
+            self._hunt_last_target_signature = None
+            self._hunt_enemy_present = False
+            self._hunt_soft_reset_seen_in_pokedex = bool(target_in_pokedex)
+
+        if not self._hunt_initialized:
+            self._hunt_target_present = bool(present)
+            self._hunt_last_target_signature = signature if isinstance(signature, str) and signature else None
+            self._hunt_soft_reset_seen_in_pokedex = bool(target_in_pokedex)
+            self._hunt_initialized = True
+            return
+
+        if not present:
+            if self._hunt_target_present:
+                # Transitioned from visible target to not visible; record current dex state
+                # so fallback counting does not double count the same attempt.
+                self._hunt_soft_reset_seen_in_pokedex = bool(target_in_pokedex)
+            else:
+                fallback_new_attempt = (not self._hunt_soft_reset_seen_in_pokedex) and bool(target_in_pokedex)
+                if fallback_new_attempt:
+                    if self._hunt_soft_reset_reset_pending:
+                        self._hunt_soft_reset_reset_pending = False
+                    else:
+                        self._set_hunt_counter(self._hunt_counter + 1)
+
+                    resolved_species_id = species_id if species_id > 0 else self._get_hunt_target_pokemon_id()
+                    if resolved_species_id > 0:
+                        resolved_species_name = species_name or self.tracker.pokemon_reader.get_pokemon_name(resolved_species_id)
+                        self._log(
+                            f"SOFT RESET ENCOUNTER #{self._hunt_counter}: {resolved_species_name} (#{resolved_species_id}) [{game_name}] / State: Pokedex",
+                            "hunt",
+                        )
+
+                self._hunt_soft_reset_seen_in_pokedex = bool(target_in_pokedex)
+
+            self._hunt_target_present = False
+            self._hunt_last_target_signature = None
+            self._hunt_enemy_present = False
+            return
+
+        normalized_signature = signature if isinstance(signature, str) and signature else None
+        is_new_attempt = (not self._hunt_target_present) or (normalized_signature is not None and normalized_signature != self._hunt_last_target_signature)
+        if is_new_attempt:
+            if self._hunt_soft_reset_reset_pending:
+                self._hunt_soft_reset_reset_pending = False
+            else:
+                self._set_hunt_counter(self._hunt_counter + 1)
+
+            if species_id > 0:
+                form_text = "Shiny" if is_shiny else "Normal"
+                self._log(
+                    f"SOFT RESET ENCOUNTER #{self._hunt_counter}: {species_name} (#{species_id}) [{game_name}] / {form_text}",
+                    "hunt",
+                )
+            # Prevent duplicate fallback counting when Pokedex updates after a counted attempt.
+            self._hunt_soft_reset_seen_in_pokedex = True
+
+        self._hunt_target_present = True
+        if normalized_signature is not None:
+            self._hunt_last_target_signature = normalized_signature
+
+        if is_shiny and species_id > 0:
+            alert_key = f"Soft Reset Hunt:{normalized_signature or species_id}"
+            if alert_key in self._hunt_alerted_signatures:
+                return
+            self._hunt_alerted_signatures.add(alert_key)
+            self._show_shiny_hunt_popup(
+                "Shiny Found!",
+                f"Shiny found: {species_name} (#{species_id}) in {game_name}.",
+            )
+
+    def _handle_hunt_enemy_encounter(self, encounter: Dict[str, object], game_name: str):
+        if not isinstance(encounter, dict):
+            return
+
+        mode = self.hunt_mode_var.get().strip()
+        if mode not in {"Wild Encounter Hunt", "Fishing Encounter Hunt"}:
+            return
+
+        if not bool(encounter.get("is_wild", True)):
+            self._hunt_enemy_present = False
+            self._hunt_last_enemy_seen_at = 0.0
+            log_event(
+                logging.INFO,
+                "hunt_encounter_skipped_non_wild",
+                game=game_name,
+                mode=mode,
+                species_id=encounter.get("species_id"),
+                enemy_count=encounter.get("enemy_count"),
+            )
+            return
+
+        try:
+            species_id = int(encounter.get("species_id", 0))
+        except (TypeError, ValueError):
+            species_id = 0
+        if species_id <= 0:
+            return
+
+        try:
+            level_val = int(encounter.get("level", 0) or 0)
+        except (TypeError, ValueError):
+            level_val = 0
+        personality = encounter.get("personality")
+        ot_id = encounter.get("ot_id")
+        signature = str(encounter.get("signature", "")).strip()
+        if not signature:
+            signature = f"{species_id}:{level_val}:{personality}:{ot_id}"
+
+        now_ts = time.monotonic()
+        if not self._hunt_initialized:
+            self._hunt_last_enemy_signature = signature
+            self._hunt_enemy_present = True
+            self._hunt_last_enemy_seen_at = now_ts
+            self._hunt_initialized = True
+            return
+
+        same_signature = bool(signature) and signature == self._hunt_last_enemy_signature
+        is_new_encounter = (not self._hunt_enemy_present) or (not same_signature)
+
+        self._hunt_enemy_present = True
+        self._hunt_last_enemy_signature = signature
+        self._hunt_last_enemy_seen_at = now_ts
+        if not is_new_encounter:
+            return
+
+        allowed_species = set(
+            self._get_hunt_species_ids_for_selection(
+                game_name,
+                mode=mode,
+                route_name=self.hunt_route_var.get().strip(),
+            )
+        )
+        if allowed_species and species_id not in allowed_species:
+            log_event(
+                logging.INFO,
+                "hunt_encounter_skipped_route_filter",
+                game=game_name,
+                mode=mode,
+                route=self.hunt_route_var.get().strip(),
+                species_id=species_id,
+                allowed_count=len(allowed_species),
+            )
+            return
+
+        self._record_hunt_species_encounter(species_id)
+        species_counter = self._get_hunt_species_count(species_id)
+        target_id = self._get_hunt_target_pokemon_id()
+        target_match = target_id <= 0 or species_id == target_id
+        if target_match:
+            self._set_hunt_counter(self._hunt_counter + 1)
+            log_event(
+                logging.INFO,
+                "hunt_encounter_counted",
+                game=game_name,
+                mode=mode,
+                route=self.hunt_route_var.get().strip(),
+                species_id=species_id,
+                counter=self._hunt_counter,
+                species_counter=species_counter,
+                signature=signature,
+                target_id=target_id,
+            )
+        else:
+            log_event(
+                logging.INFO,
+                "hunt_encounter_non_target",
+                game=game_name,
+                mode=mode,
+                route=self.hunt_route_var.get().strip(),
+                species_id=species_id,
+                species_counter=species_counter,
+                counter=self._hunt_counter,
+                signature=signature,
+                target_id=target_id,
+            )
+
+        species_name = str(encounter.get("species_name") or self.tracker.pokemon_reader.get_pokemon_name(species_id))
+        is_shiny = bool(encounter.get("shiny", False))
+        form_text = "Shiny" if is_shiny else "Normal"
+        encounter_label = "FISHING" if mode == "Fishing Encounter Hunt" else "WILD"
+        if target_match:
+            self._log(
+                f"{encounter_label} TARGET ENCOUNTER #{self._hunt_counter}: {species_name} (#{species_id}) [{game_name}] / {form_text}",
+                "hunt",
+            )
+        else:
+            target_name = self.tracker.pokemon_reader.get_pokemon_name(target_id) if target_id > 0 else "Any"
+            self._log(
+                f"{encounter_label} ENCOUNTER (non-target): {species_name} (#{species_id}) [{game_name}] / {form_text} / Species Count: {species_counter:,} / Target: {target_name} (#{target_id})",
+                "hunt",
+            )
+
+        if is_shiny and target_id > 0 and not target_match:
+            self._set_hunt_phase_count(self._hunt_phase_count + 1)
+            target_name = self.tracker.pokemon_reader.get_pokemon_name(target_id)
+            log_event(
+                logging.INFO,
+                "hunt_phase_advanced",
+                game=game_name,
+                mode=mode,
+                route=self.hunt_route_var.get().strip(),
+                phase=self._hunt_phase_count,
+                species_id=species_id,
+                target_id=target_id,
+                signature=signature,
+            )
+            self._log(
+                f"{encounter_label} PHASE #{self._hunt_phase_count}: Shiny non-target {species_name} (#{species_id}) [{game_name}] / Target: {target_name} (#{target_id})",
+                "hunt",
+            )
+
+        if is_shiny:
+            alert_key = f"{mode}:{signature or species_id}:{self._hunt_counter}"
+            if alert_key in self._hunt_alerted_signatures:
+                return
+            self._hunt_alerted_signatures.add(alert_key)
+            self._show_shiny_hunt_popup(
+                "Shiny Found!",
+                f"Shiny found: {species_name} (#{species_id}) in {game_name}.",
+            )
+
+    def _handle_hunt_egg_progress(self, current_party: List[Dict], game_name: str):
+        snapshot = self._snapshot_party_for_hunt(current_party)
+        if not self._hunt_initialized:
+            self._hunt_last_party_snapshot = snapshot
+            self._hunt_initialized = True
+            return
+
+        target_id = self._get_hunt_target_pokemon_id()
+        previous = self._hunt_last_party_snapshot
+        for slot, prev_state in previous.items():
+            curr_state = snapshot.get(slot)
+            if not curr_state:
+                continue
+            if not bool(prev_state.get("is_egg", False)):
+                continue
+            if bool(curr_state.get("is_egg", False)):
+                continue
+
+            species_id = int(curr_state.get("id", 0)) if isinstance(curr_state.get("id"), int) else 0
+            species_name = str(curr_state.get("name") or self.tracker.pokemon_reader.get_pokemon_name(species_id))
+            is_shiny = bool(curr_state.get("shiny", False))
+
+            if target_id <= 0 or species_id == target_id:
+                self._set_hunt_counter(self._hunt_counter + 1)
+
+            if is_shiny:
+                alert_key = f"egg:{slot}:{species_id}:{self._hunt_counter}"
+                if alert_key not in self._hunt_alerted_signatures:
+                    self._hunt_alerted_signatures.add(alert_key)
+                    self._show_shiny_hunt_popup(
+                        "Shiny Found!",
+                        f"Shiny hatch found: {species_name} (#{species_id}) in {game_name}.",
+                    )
+
+        self._hunt_last_party_snapshot = snapshot
+
+    def _process_hunt_updates(self):
+        """Poll hunt counters from live memory state."""
+        if not self.is_running:
+            return
+
+        try:
+            current_game = (self.tracker.game_name or "").strip()
+            if current_game and current_game in self._hunt_game_options and self.hunt_game_var.get().strip() != current_game:
+                self._load_last_hunt_for_game(current_game, auto_start=True)
+
+            waiting_now = bool(self.retroarch.is_waiting_for_launch())
+            if self._hunt_active:
+                mode = self.hunt_mode_var.get().strip()
+                # On reset/reconnect, clear encounter + target signatures so repeated
+                # identical encounter signatures can still count as new attempts.
+                if mode == "Soft Reset Hunt":
+                    if waiting_now and not self._hunt_last_waiting_state:
+                        self._hunt_last_enemy_signature = None
+                        self._hunt_last_enemy_seen_at = 0.0
+                        self._hunt_last_target_signature = None
+                        self._hunt_enemy_present = False
+                        self._hunt_target_present = False
+                        self._hunt_initialized = True
+                        self._hunt_soft_reset_reset_pending = False
+                    elif (not waiting_now) and self._hunt_last_waiting_state:
+                        self._hunt_last_enemy_signature = None
+                        self._hunt_last_enemy_seen_at = 0.0
+                        self._hunt_last_target_signature = None
+                        self._hunt_enemy_present = False
+                        self._hunt_target_present = False
+                        self._hunt_initialized = True
+                        self._set_hunt_counter(self._hunt_counter + 1)
+                        self._hunt_soft_reset_reset_pending = True
+
+                selected_hunt_game = self.hunt_game_var.get().strip()
+                game_for_hunt = current_game if current_game in self._hunt_game_options else selected_hunt_game
+
+                if mode == "Hatching Egg Hunt":
+                    party = list(self.tracker._last_party) if isinstance(self.tracker._last_party, list) else []
+                    self._handle_hunt_egg_progress(party, game_for_hunt)
+                else:
+                    encounter = self.tracker.pokemon_reader.read_wild_encounter(game_for_hunt) if self.tracker and self.tracker.pokemon_reader else None
+                    if mode == "Soft Reset Hunt":
+                        self._handle_hunt_soft_reset_progress(encounter, game_for_hunt)
+                    elif mode in {"Wild Encounter Hunt", "Fishing Encounter Hunt"}:
+                        if isinstance(encounter, dict):
+                            self._log_hunt_raw_encounter(encounter, game_for_hunt, mode)
+                            self._handle_hunt_enemy_encounter(encounter, game_for_hunt)
+                        else:
+                            if waiting_now or not bool(getattr(self.retroarch, "connected", False)):
+                                self._hunt_last_raw_log_key = None
+                            else:
+                                self._log_hunt_raw_no_encounter(game_for_hunt, mode)
+                            self._hunt_enemy_present = False
+                            self._hunt_last_enemy_seen_at = 0.0
+                    elif isinstance(encounter, dict):
+                        self._handle_hunt_enemy_encounter(encounter, game_for_hunt)
+                    else:
+                        self._hunt_enemy_present = False
+                        self._hunt_last_enemy_seen_at = 0.0
+
+                if isinstance(self.hunt_status_label, ttk.Label):
+                    self.hunt_status_label.configure(text=f"Hunt active ({mode})")
+            else:
+                self._hunt_enemy_present = False
+                self._hunt_last_enemy_seen_at = 0.0
+                if isinstance(self.hunt_status_label, ttk.Label):
+                    self.hunt_status_label.configure(text="Hunt idle")
+
+            self._hunt_last_waiting_state = waiting_now
+        except Exception as exc:
+            log_event(logging.WARNING, "hunt_poll_exception", error=str(exc), error_type=type(exc).__name__)
+
+        next_delay_ms = 1000
+        if self._hunt_active:
+            active_mode = self.hunt_mode_var.get().strip()
+            if active_mode in {"Wild Encounter Hunt", "Fishing Encounter Hunt"}:
+                next_delay_ms = 250
+            elif active_mode == "Soft Reset Hunt":
+                next_delay_ms = 400
+        self.root.after(next_delay_ms, self._process_hunt_updates)
+
     def _build_log_tab(self):
         """Build log tab"""
         self.log_text = scrolledtext.ScrolledText(
@@ -5401,6 +8295,7 @@ class PokeAchieveGUI:
             "api": "API",
             "collection": "COLLECTION",
             "party": "PARTY",
+            "hunt": "HUNT",
         }.get(level, "INFO")
 
         self.log_text.configure(state='normal')
@@ -5534,6 +8429,8 @@ class PokeAchieveGUI:
                     self._merge_with_website_data(display_name)
                 
                 self.game_label.configure(text=f"Game: {display_name}")
+                if display_name in self._hunt_game_options:
+                    self._load_last_hunt_for_game(display_name, auto_start=True)
                 self._log(f"Loaded {len(self.tracker.achievements)} achievements for {display_name}", "success")
                 
                 if not self.is_running:
@@ -5639,6 +8536,7 @@ class PokeAchieveGUI:
         # Start processing queues
         self._check_unlocks()
         self._process_collection_updates()
+        self._process_hunt_updates()
     
     def _stop_tracking(self):
         """Stop tracking"""
@@ -5811,13 +8709,33 @@ class PokeAchieveGUI:
                 party = update["party"]
                 previous_party = update.get("previous_party", [])
                 game = update["game"]
-                
-                # Log new catches
+                catch_event_type = str(update.get("catch_event_type", "new_addition")).strip().lower()
+                catches_int: List[int] = []
+                for pokemon_id in catches:
+                    try:
+                        catches_int.append(int(pokemon_id))
+                    except (TypeError, ValueError):
+                        continue
+
+                if catch_event_type == "new_addition":
+                    soft_reset_active = bool(self._hunt_active and self.hunt_mode_var.get().strip() == "Soft Reset Hunt")
+                    target_id = self._get_hunt_target_pokemon_id()
+                    if soft_reset_active and target_id > 0 and catches_int and all(pid == target_id for pid in catches_int):
+                        catch_event_type = "new_encounter"
+
+                if catch_event_type == "caught":
+                    catch_action = "CAUGHT"
+                elif catch_event_type == "new_encounter":
+                    catch_action = "NEW ENCOUNTER"
+                else:
+                    catch_action = "NEW ADDITION"
+
+                # Log Pokedex entries
                 for pokemon_id in catches:
                     pokemon_name = self.tracker.pokemon_reader.get_pokemon_name(pokemon_id)
-                    self._log(f"NEW CATCH: {pokemon_name} (#{pokemon_id})", "collection")
-                    self._add_catch_to_list(pokemon_id, game)
-                
+                    self._log(f"[POKEDEX] {catch_action}: {pokemon_name} (#{pokemon_id})", "collection")
+                    self._add_catch_to_list(pokemon_id, game, event_action=catch_action)
+
                 # Update party display
                 self._update_party_display(party, game)
                 # Log party changes to tracker log (independent of API dedupe behavior).
@@ -5921,7 +8839,12 @@ class PokeAchieveGUI:
                 
                 # Post to API
                 if self.api:
-                    self.tracker.post_collection_to_platform(catches, party, game, previous_party=previous_party)                
+                    catches_for_api = catches
+                    if catch_event_type == "new_encounter":
+                        catches_for_api = []
+
+                    if catches_for_api or party != previous_party:
+                        self.tracker.post_collection_to_platform(catches_for_api, party, game, previous_party=previous_party)
             except queue.Empty:
                 break
         
@@ -6033,18 +8956,21 @@ class PokeAchieveGUI:
         if self.tracker and self.tracker.pokemon_reader:
             return self.tracker.pokemon_reader.get_pokemon_name(pokemon_id)
         return f"Pokemon #{pokemon_id}"
-    
-    def _add_catch_to_list(self, pokemon_id: int, game: str = ""):
-        """Add catch to recent catches list"""
+
+    def _add_catch_to_list(self, pokemon_id: int, game: str = "", event_action: str = "NEW ADDITION"):
+        """Add Pokedex entry to recent catches list"""
         pokemon_name = self.tracker.pokemon_reader.get_pokemon_name(pokemon_id)
         self.catches_list.configure(state='normal')
         timestamp = datetime.now().strftime("%H:%M:%S")
         game_info = f" [{game}]" if game else ""
-        mobile_icon = "[CATCH]"
-        self.catches_list.insert('1.0', f"[{timestamp}] {mobile_icon} NEW CATCH: {pokemon_name} (#{pokemon_id}){game_info}\n")
+        action = str(event_action).strip().upper()
+        if action not in {"CAUGHT", "NEW ADDITION", "NEW ENCOUNTER"}:
+            action = "NEW ADDITION"
+        mobile_icon = "[POKEDEX]"
+        self.catches_list.insert('1.0', f"[{timestamp}] {mobile_icon} {action}: {pokemon_name} (#{pokemon_id}){game_info}\n")
         self._trim_scrolled_text(self.catches_list, self._max_catch_lines)
         self.catches_list.configure(state='disabled')
-    
+
     def _get_party_game_variant(self, game: str) -> str:
         if not isinstance(game, str):
             return "default"
@@ -6310,6 +9236,10 @@ class PokeAchieveGUI:
                     log_event(logging.DEBUG, "species_type_download_failed", pokemon_id=int(pokemon_id), error=error_text)
             if self._party_display_last_party:
                 self._update_party_display(self._party_display_last_party, self._party_display_last_game)
+            if isinstance(self._hunt_other_sprites_frame, ttk.Frame):
+                self._update_hunt_other_species_display()
+            if isinstance(self._hunt_target_name_label, ttk.Label):
+                self._update_hunt_target_display()
 
         try:
             self.root.after(0, _complete)
@@ -6732,7 +9662,12 @@ class PokeAchieveGUI:
                 # Clear config file
                 if self.config_file.exists():
                     self.config_file.unlink()
-                
+
+                # Clear hunt profiles
+                if self.hunt_profiles_file.exists():
+                    self.hunt_profiles_file.unlink()
+                self._hunt_profiles = {"version": 1, "games": {}}
+
                 # Clear tracker state
                 self.tracker.achievements = []
                 self.tracker.game_name = None
@@ -6757,6 +9692,27 @@ class PokeAchieveGUI:
                 self.progress_bar["value"] = 0
                 self.collection_label.configure(text="Caught: 0 | Shiny: 0 | Party: 0")
                 self._update_party_display([], "")
+                self._hunt_profile_applying = True
+                self._hunt_active = False
+                self._set_hunt_counter(0)
+                self._set_hunt_phase_count(0)
+                self._hunt_profile_applying = False
+                self._hunt_species_counts = {}
+                self._hunt_species_count_labels = {}
+                self._hunt_recent_other_species.clear()
+                self._hunt_alerted_signatures.clear()
+                self._hunt_last_enemy_signature = None
+                self._hunt_last_enemy_seen_at = 0.0
+                self._hunt_last_target_signature = None
+                self._hunt_last_raw_log_key = None
+                self._hunt_last_raw_none_log_at = 0.0
+                self._hunt_enemy_present = False
+                self._hunt_target_present = False
+                self._hunt_soft_reset_reset_pending = False
+                self._hunt_soft_reset_seen_in_pokedex = False
+                self._hunt_soft_reset_target_id = 0
+                self._hunt_initialized = False
+                self._update_hunt_other_species_display()
 
                 self._threadsafe_log("Local app data cleared", "info")
                 msgbox.showinfo("Success", "App data cleared! Restart the tracker to start fresh.")
@@ -6895,6 +9851,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
