@@ -3876,8 +3876,16 @@ class PokemonMemoryReader:
             enemy_count_source = "count_addr"
 
         enemy_start_candidates: List[int] = []
+        enemy_party_span = int(slot_size * 6)
         for player_start_addr_int in player_start_candidates:
-            enemy_start_candidates.append(int(player_start_addr_int + (slot_size * 6)))
+            # Layouts differ by game/core: enemy party may sit either after or before player party.
+            # Probe both directions plus small alignment nudges to tolerate +4/-4 start shifts.
+            enemy_start_candidates.append(int(player_start_addr_int + enemy_party_span))
+            enemy_start_candidates.append(int(player_start_addr_int - enemy_party_span))
+            enemy_start_candidates.append(int(player_start_addr_int + enemy_party_span + 4))
+            enemy_start_candidates.append(int(player_start_addr_int - enemy_party_span + 4))
+            enemy_start_candidates.append(int(player_start_addr_int + enemy_party_span - 4))
+            enemy_start_candidates.append(int(player_start_addr_int - enemy_party_span - 4))
         configured_enemy_start_addr = _parse_hex_addr(config.get("enemy_party_start"))
         if configured_enemy_start_addr is not None:
             enemy_start_candidates.append(configured_enemy_start_addr)
