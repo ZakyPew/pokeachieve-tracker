@@ -1843,6 +1843,16 @@ class PokemonMemoryReader:
             return "Unknown Move"
         return self._gen3_move_names.get(mid, f"Move #{mid}")
 
+    def _resolve_legacy_move_name(self, move_id: int) -> str:
+        """Resolve Gen 1/2 move labels when canonical tables are unavailable."""
+        try:
+            mid = int(move_id)
+        except (TypeError, ValueError):
+            return "-"
+        if mid <= 0:
+            return "-"
+        return f"Move #{mid}"
+
     def _is_gen3_shiny(self, personality: int, ot_id: int) -> bool:
         """Determine Gen 3 shininess from PID and OTID."""
         shiny_value = self._gen3_shiny_value(personality, ot_id)
@@ -3506,6 +3516,7 @@ class PokemonMemoryReader:
 
             level = None
             is_shiny = False
+            moves: List[str] = []
 
             if isinstance(slot_data, list) and len(slot_data) >= slot_size:
                 if all(isinstance(v, int) and 0 <= int(v) <= 0xFF for v in slot_data[:slot_size]):
@@ -3514,6 +3525,11 @@ class PokemonMemoryReader:
 
                     if int(gen) == 2:
                         # GSC party struct: MON_LEVEL at 0x1F, MON_DVS at 0x15-0x16.
+                        for move_offset in (0x02, 0x03, 0x04, 0x05):
+                            if len(slot_bytes) > move_offset:
+                                rendered = self._resolve_legacy_move_name(slot_bytes[move_offset])
+                                if rendered != "-":
+                                    moves.append(rendered)
                         if len(slot_bytes) > 0x1F:
                             level_candidate = int(slot_bytes[0x1F])
                             if level_candidate > 0:
@@ -3521,6 +3537,11 @@ class PokemonMemoryReader:
                         if len(slot_bytes) > 0x16:
                             is_shiny = self._is_gen2_shiny_from_dvs(slot_bytes[0x15], slot_bytes[0x16])
                     else:
+                        for move_offset in (8, 9, 10, 11):
+                            if len(slot_bytes) > move_offset:
+                                rendered = self._resolve_legacy_move_name(slot_bytes[move_offset])
+                                if rendered != "-":
+                                    moves.append(rendered)
                         level_candidate = int(slot_bytes[3]) if len(slot_bytes) > 3 else 0
                         if level_candidate > 0:
                             level = level_candidate
@@ -3532,6 +3553,17 @@ class PokemonMemoryReader:
                 species_id = int(species_id)
             except (TypeError, ValueError):
                 continue
+
+            if int(gen) == 1:
+                # Gen 1 slot species bytes are internal IDs. Read the party species list for Dex IDs.
+                species_list_addr = hex(int(party_count_addr, 16) + 1 + i)
+                species_list_value = self.retroarch.read_memory(species_list_addr)
+                if isinstance(species_list_value, int):
+                    species_list_id = int(species_list_value) & 0xFF
+                    max_species = int(config.get("max_pokemon", 151) or 151)
+                    if 1 <= species_list_id <= max_species:
+                        species_id = species_list_id
+
             if species_id <= 0:
                 continue
 
@@ -3549,6 +3581,8 @@ class PokemonMemoryReader:
             }
             if int(gen) >= 2:
                 member["shiny"] = bool(is_shiny)
+            if moves:
+                member["moves"] = moves[:4]
 
             party.append(member)
 
@@ -5607,6 +5641,21 @@ class PokeAchieveGUI:
         "epic": "#9b59b6",
         "legendary": "#f39c12"
     }
+
+    GAME_THEMES = {
+        "default": {"bg": "#f3f4f6", "fg": "#111827", "accent": "#2563eb", "subtle": "#4b5563"},
+        "Pokemon Red": {"bg": "#fef2f2", "fg": "#7f1d1d", "accent": "#dc2626", "subtle": "#991b1b"},
+        "Pokemon Blue": {"bg": "#eff6ff", "fg": "#1e3a8a", "accent": "#2563eb", "subtle": "#1d4ed8"},
+        "Pokemon Yellow": {"bg": "#fffbeb", "fg": "#713f12", "accent": "#eab308", "subtle": "#a16207"},
+        "Pokemon Gold": {"bg": "#fffbeb", "fg": "#78350f", "accent": "#d97706", "subtle": "#92400e"},
+        "Pokemon Silver": {"bg": "#f8fafc", "fg": "#334155", "accent": "#64748b", "subtle": "#475569"},
+        "Pokemon Crystal": {"bg": "#ecfeff", "fg": "#0e7490", "accent": "#06b6d4", "subtle": "#0891b2"},
+        "Pokemon Ruby": {"bg": "#fff1f2", "fg": "#881337", "accent": "#e11d48", "subtle": "#9f1239"},
+        "Pokemon Sapphire": {"bg": "#eff6ff", "fg": "#1e3a8a", "accent": "#2563eb", "subtle": "#1d4ed8"},
+        "Pokemon Emerald": {"bg": "#ecfdf5", "fg": "#14532d", "accent": "#059669", "subtle": "#047857"},
+        "Pokemon FireRed": {"bg": "#fff7ed", "fg": "#9a3412", "accent": "#ea580c", "subtle": "#c2410c"},
+        "Pokemon LeafGreen": {"bg": "#f0fdf4", "fg": "#14532d", "accent": "#22c55e", "subtle": "#15803d"},
+    }
     
     def __init__(self):
         self.root = tk.Tk()
@@ -5765,6 +5814,7 @@ class PokeAchieveGUI:
     def _configure_styles(self):
         """Apply a cleaner, modern ttk theme and spacing."""
         style = ttk.Style(self.root)
+        self._ttk_style = style
         for theme in ("clam", "vista", "default"):
             if theme in style.theme_names():
                 style.theme_use(theme)
@@ -5777,6 +5827,27 @@ class PokeAchieveGUI:
         style.configure("Header.TLabel", font=("Segoe UI", 12, "bold"))
         style.configure("Subtle.TLabel", foreground="#4b5563")
         style.configure("Primary.TButton", font=("Segoe UI", 10, "bold"), padding=(12, 7))
+        self._apply_game_theme(None)
+
+    def _apply_game_theme(self, game_name: Optional[str]):
+        """Apply lightweight color accents based on the detected game."""
+        style = getattr(self, "_ttk_style", None)
+        if not isinstance(style, ttk.Style):
+            return
+
+        theme_key = str(game_name or "").strip()
+        palette = self.GAME_THEMES.get(theme_key, self.GAME_THEMES["default"])
+
+        style.configure("TFrame", background=palette["bg"])
+        style.configure("TLabel", background=palette["bg"], foreground=palette["fg"])
+        style.configure("Subtle.TLabel", background=palette["bg"], foreground=palette["subtle"])
+        style.configure("TNotebook", background=palette["bg"])
+        style.map("TNotebook.Tab", background=[("selected", palette["accent"]), ("!selected", palette["bg"])], foreground=[("selected", "#ffffff"), ("!selected", palette["fg"])])
+        style.configure("Primary.TButton", background=palette["accent"], foreground="#ffffff")
+        try:
+            self.root.configure(bg=palette["bg"])
+        except tk.TclError:
+            pass
 
     def _load_config(self) -> dict:
         """Load configuration from file"""
@@ -8429,6 +8500,7 @@ class PokeAchieveGUI:
                     self._merge_with_website_data(display_name)
                 
                 self.game_label.configure(text=f"Game: {display_name}")
+                self._apply_game_theme(display_name)
                 if display_name in self._hunt_game_options:
                     self._load_last_hunt_for_game(display_name, auto_start=True)
                 self._log(f"Loaded {len(self.tracker.achievements)} achievements for {display_name}", "success")
@@ -8549,6 +8621,7 @@ class PokeAchieveGUI:
         self.tracker.save_progress(self.progress_file)
         # Clear game name so it can be re-detected and restarted
         self.tracker.game_name = None
+        self._apply_game_theme(None)
     
     def _check_unlocks(self):
         """Check for new unlocks"""
@@ -8672,7 +8745,7 @@ class PokeAchieveGUI:
                     self._sent_event_ids.add(event_id)
                     self._save_sent_events()
                 if isinstance(data, dict) and data.get("skipped"):
-                    self._threadsafe_log(f"Skipped platform unlock (not mapped): {ach.name}", "warning")
+                    self._threadsafe_log(f"Skipped platform unlock (not mapped): {ach.name}", "api")
                 else:
                     self._threadsafe_log(f"Posted unlock to platform: {ach.name}", "api")
                 return True
@@ -9688,6 +9761,7 @@ class PokeAchieveGUI:
                 self._set_api_status("Not configured" if not self.api else "Configured")
 
                 self.game_label.configure(text="Game: None")
+                self._apply_game_theme(None)
                 self.progress_label.configure(text="0/0 (0%) - 0/0 pts")
                 self.progress_bar["value"] = 0
                 self.collection_label.configure(text="Caught: 0 | Shiny: 0 | Party: 0")
