@@ -197,6 +197,7 @@ class PokeAchieveAPI:
         self._tracker_user_achievements_forbidden = False
         self._public_games_catalog_unsupported = False
         self._achievement_catalog_cache: Dict[int, List[dict]] = {}
+        self._achievement_catalog_unavailable_games: Set[int] = set()
 
     def _make_url(self, endpoint: str) -> str:
         if endpoint.startswith("http://") or endpoint.startswith("https://"):
@@ -224,7 +225,7 @@ class PokeAchieveAPI:
                 try:
                     return True, json.loads(body)
                 except json.JSONDecodeError as exc:
-                    if endpoint.startswith("/games/") and endpoint.endswith("/achievements"):
+                    if (endpoint.startswith("/games/") or endpoint.startswith("/api/games/")) and endpoint.endswith("/achievements"):
                         self._public_games_catalog_unsupported = True
                     log_event(logging.ERROR, "api_exception", method=method, endpoint=endpoint, error_type=type(exc).__name__, error=str(exc))
                     return False, {"error": str(exc), "status": status}
@@ -233,6 +234,22 @@ class PokeAchieveAPI:
             error_body = e.read().decode()
             if endpoint == "/api/users/me/achievements" and status in {401, 403}:
                 self._tracker_user_achievements_forbidden = True
+            catalog_match = re.match(r"^/api/games/(\d+)/achievements$", str(endpoint).strip())
+            if catalog_match and status in {401, 403, 404, 405}:
+                catalog_game_id: Optional[int] = None
+                try:
+                    catalog_game_id = int(catalog_match.group(1))
+                    self._achievement_catalog_unavailable_games.add(catalog_game_id)
+                except ValueError:
+                    pass
+                if status in {401, 403, 405}:
+                    self._public_games_catalog_unsupported = True
+                log_event(logging.INFO, "api_catalog_unavailable", endpoint=endpoint, status=status, game_id=catalog_game_id)
+                try:
+                    error_data = json.loads(error_body)
+                    return False, {"error": error_data.get("detail", str(e)), "status": status}
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    return False, {"error": f"HTTP {status}: {error_body[:200]}", "status": status}
             log_event(logging.ERROR, "api_http_error", method=method, endpoint=endpoint, status=status, body_preview=error_body[:200])
             try:
                 error_data = json.loads(error_body)
@@ -302,13 +319,24 @@ class PokeAchieveAPI:
 
     def _get_achievement_catalog(self, game_id: int, force_refresh: bool = False) -> List[dict]:
         """Load and cache game achievement catalog from tracker API."""
+        if self._public_games_catalog_unsupported:
+            return []
+        if game_id in self._achievement_catalog_unavailable_games:
+            return []
         if not force_refresh and game_id in self._achievement_catalog_cache:
             return self._achievement_catalog_cache.get(game_id, [])
 
         success, data = self._request("GET", f"/api/games/{game_id}/achievements")
         if success and isinstance(data, list):
             self._achievement_catalog_cache[game_id] = data
+            self._achievement_catalog_unavailable_games.discard(game_id)
             return data
+        if isinstance(data, dict):
+            status = data.get("status")
+            if status in {401, 403, 404, 405}:
+                self._achievement_catalog_unavailable_games.add(game_id)
+                if status in {401, 403, 405}:
+                    self._public_games_catalog_unsupported = True
         return []
 
     def _augment_unlocked_with_catalog_names(self, game_id: int, unlocked: List[str]) -> List[str]:
@@ -567,6 +595,8 @@ class RetroArchClient:
         self._last_io_error_ts = 0.0
         self._waiting_for_launch = False
         self._waiting_since_ts = 0.0
+        self._response_mismatch_last_log: Dict[str, float] = {}
+        self._response_mismatch_suppressed: Dict[str, int] = {}
     
     def connect(self) -> bool:
         """Connect to RetroArch"""
@@ -746,14 +776,24 @@ class RetroArchClient:
                     self._command_timeout_count += 1
                     self._io_error_streak += 1
                     self._last_io_error_ts = time.time()
-                    log_event(
-                        logging.WARNING,
-                        "retroarch_response_mismatch",
-                        command=command,
-                        expected=expected_prefix,
-                        mismatched=mismatched,
-                        expected_addr=hex(expected_read_addr) if expected_read_addr is not None else None,
-                    )
+                    mismatch_key = f"{expected_prefix}:{hex(expected_read_addr) if expected_read_addr is not None else 'none'}"
+                    now = time.monotonic()
+                    last_log = float(self._response_mismatch_last_log.get(mismatch_key, 0.0))
+                    if (now - last_log) >= 8.0:
+                        suppressed = int(self._response_mismatch_suppressed.get(mismatch_key, 0))
+                        self._response_mismatch_last_log[mismatch_key] = now
+                        self._response_mismatch_suppressed[mismatch_key] = 0
+                        log_event(
+                            logging.WARNING,
+                            "retroarch_response_mismatch",
+                            command=command,
+                            expected=expected_prefix,
+                            mismatched=int(mismatched) + int(suppressed),
+                            suppressed=suppressed if suppressed > 0 else None,
+                            expected_addr=hex(expected_read_addr) if expected_read_addr is not None else None,
+                        )
+                    else:
+                        self._response_mismatch_suppressed[mismatch_key] = int(self._response_mismatch_suppressed.get(mismatch_key, 0)) + 1
                     return None
                 if mismatched:
                     log_event(
@@ -1097,7 +1137,7 @@ class PokemonMemoryReader:
             "pokedex_seen": "0x02024C0C",
             "pokedex_caught": "0x02024D0C",
             "party_count": "0x02024284",
-            "party_start": "0x02024288",
+            "party_start": "0x02024284",
             "enemy_party_start": "0x020244E0",
             "party_slot_size": 100,
             "saveblock1_ptr": "0x03005008",
@@ -1106,7 +1146,16 @@ class PokemonMemoryReader:
             "party_start_offset": 0x238,
             "pokedex_caught_offset": 0x28,
             "pokedex_seen_offset": 0x5C,
-            "party_use_pointer_layout": 1,
+            "party_use_pointer_layout": 0,
+            "party_decode_budget_ms": 1400,
+            "party_count_candidates": ["0x02024284", "0x02024285"],
+            "party_start_candidates": ["0x02024284", "0x02024288"],
+            "party_stride_candidates": [100],
+            "party_max_pairs": 6,
+            "party_enable_offset_scan": 0,
+            "party_allow_double_stride": 0,
+            "party_skip_scan_on_zero_count": 1,
+            "party_byte_read_retries": 2,
             "party_skip_scan_on_invalid_count": 1,
             "party_allow_static_when_pointer_missing": 0,
             "pokedex_allow_static_when_pointer_missing": 0,
@@ -1120,7 +1169,7 @@ class PokemonMemoryReader:
             "pokedex_seen": "0x02024C0C",
             "pokedex_caught": "0x02024D0C",
             "party_count": "0x02024284",
-            "party_start": "0x02024288",
+            "party_start": "0x02024284",
             "enemy_party_start": "0x020244E0",
             "party_slot_size": 100,
             "saveblock1_ptr": "0x03005008",
@@ -1129,7 +1178,16 @@ class PokemonMemoryReader:
             "party_start_offset": 0x238,
             "pokedex_caught_offset": 0x28,
             "pokedex_seen_offset": 0x5C,
-            "party_use_pointer_layout": 1,
+            "party_use_pointer_layout": 0,
+            "party_decode_budget_ms": 1400,
+            "party_count_candidates": ["0x02024284", "0x02024285"],
+            "party_start_candidates": ["0x02024284", "0x02024288"],
+            "party_stride_candidates": [100],
+            "party_max_pairs": 6,
+            "party_enable_offset_scan": 0,
+            "party_allow_double_stride": 0,
+            "party_skip_scan_on_zero_count": 1,
+            "party_byte_read_retries": 2,
             "party_skip_scan_on_invalid_count": 1,
             "party_allow_static_when_pointer_missing": 0,
             "pokedex_allow_static_when_pointer_missing": 0,
@@ -1395,6 +1453,8 @@ class PokemonMemoryReader:
         self._last_gen3_party_selection: Dict[str, Dict[str, object]] = {}
         self._last_party_read_meta: Dict[str, object] = {}
         self._last_wild_read_meta: Dict[str, object] = {}
+        self._party_budget_hit_last_log: Dict[str, float] = {}
+        self._party_budget_hit_suppressed: Dict[str, int] = {}
         self._gen3_gender_rates: Dict[int, int] = {}
         self._gen3_species_ability_ids: Dict[int, Tuple[int, int]] = {}
         self._gen3_ability_names: Dict[int, str] = {}
@@ -1800,6 +1860,44 @@ class PokemonMemoryReader:
             pointer_addr=pointer_addr,
             static_addr=static_addr,
         )
+    def _log_pointer_fallback_static_throttled(
+        self,
+        *,
+        game_name: str,
+        kind: str,
+        pointer_addr: str,
+        static_addr: str,
+        reason: Optional[str] = None,
+        pointer_count: Optional[int] = None,
+        static_count: Optional[int] = None,
+        count: Optional[int] = None,
+    ):
+        """Throttle noisy pointer-fallback-static info logs while pointer values churn."""
+        if bool(getattr(self.retroarch, "is_waiting_for_launch", lambda: False)()):
+            return
+
+        if not hasattr(self, "_pointer_fallback_last_log"):
+            self._pointer_fallback_last_log = {}
+
+        reason_key = str(reason or "fallback")
+        key = f"{game_name}:{kind}:fallback_static:{reason_key}"
+        now = time.time()
+        last = float(self._pointer_fallback_last_log.get(key, 0.0))
+        if now - last < 8.0:
+            return
+        self._pointer_fallback_last_log[key] = now
+        log_event(
+            logging.INFO,
+            "gen3_pointer_fallback_static",
+            game=game_name,
+            kind=kind,
+            pointer_addr=pointer_addr,
+            static_addr=static_addr,
+            pointer_count=pointer_count,
+            static_count=static_count,
+            count=count,
+            reason=reason,
+        )
     def _resolve_gen3_gender_label(self, species_id: int, personality: int) -> str:
         """Resolve displayed gender from species gender rate and PID."""
         try:
@@ -2186,8 +2284,14 @@ class PokemonMemoryReader:
             if all(isinstance(v, int) and 0 <= int(v) <= 0xFF for v in bulk[:size]):
                 return [int(v) & 0xFF for v in bulk[:size]]
 
-        required = list(range(0, 8)) + [28, 29] + list(range(32, 80)) + [84]
-        buffer = [0] * max(size, 85)
+        required = sorted(set(
+            list(range(0, 8))
+            + [18, 19, 27, 28, 29]
+            + list(range(32, 80))
+            + [84]
+            + list(range(86, 100))
+        ))
+        buffer = [0] * max(size, 100)
         for offset in required:
             abs_addr = int(slot_addr) + int(offset)
             value = self.retroarch.read_memory(hex(abs_addr))
@@ -2340,6 +2444,7 @@ class PokemonMemoryReader:
         caught_addr = static_caught_addr
         seen_addr = static_seen_addr
         used_pointer_layout = False
+        pointer_static_preferred = False
         allow_byte_fallback = bool(config.get("pokedex_allow_byte_fallback", 1))
         if bool(getattr(self.retroarch, "is_unstable_io", lambda: False)()):
             allow_byte_fallback = False
@@ -2374,10 +2479,8 @@ class PokemonMemoryReader:
             if allow_static_fallback:
                 fallback_caught = _safe_read_pokedex_flags(static_caught_addr)
                 if fallback_caught:
-                    log_event(
-                        logging.INFO,
-                        "gen3_pointer_fallback_static",
-                        game=game_name,
+                    self._log_pointer_fallback_static_throttled(
+                        game_name=game_name,
                         kind="pokedex",
                         pointer_addr=caught_addr,
                         static_addr=static_caught_addr,
@@ -2474,7 +2577,8 @@ class PokemonMemoryReader:
                     continue
                 if pokemon_id > 0:
                     caught_ids_set.add(pokemon_id)
-        use_caught_plausibility = len(caught_ids_set) >= 5
+        use_caught_plausibility = len(caught_ids_set) >= 1
+        hinted_slot_count = min(6, len(caught_ids_set)) if caught_ids_set else None
 
         gen = int(config.get("gen", 1))
         self._last_party_read_meta = {
@@ -2496,6 +2600,7 @@ class PokemonMemoryReader:
         party_start_addr = static_party_start_addr
         slot_size = int(config["party_slot_size"])
         used_pointer_layout = False
+        pointer_static_preferred = False
 
         # Gen 3 should prefer saveblock-pointer party addresses across all layouts.
         if gen == 3 and bool(config.get("party_use_pointer_layout", 0)) and config.get("saveblock1_ptr") and config.get("party_count_offset") is not None and config.get("party_start_offset") is not None:
@@ -2510,42 +2615,43 @@ class PokemonMemoryReader:
                     pointer=str(config.get("saveblock1_ptr")),
                     layout=config.get("layout_id"),
                 )
-                if not bool(config.get("party_allow_static_when_pointer_missing", 1)):
-                    self._last_party_read_meta.update({
-                        "expected_count": None,
-                        "decoded_count": 0,
-                        "incomplete": False,
-                        "count_addr": str(party_count_addr),
-                        "start_addr": str(party_start_addr),
-                        "stride": int(slot_size),
-                        "budget_hit": False,
-                        "reason": "saveblock_pointer_unreadable",
-                    })
-                    return []
-
         # Read party count from selected layout.
         count = self.retroarch.read_memory(party_count_addr)
-        if (not isinstance(count, int) or count < 0 or count > 6) and used_pointer_layout:
+        if used_pointer_layout:
             fallback_count = self.retroarch.read_memory(static_party_count_addr)
-            if isinstance(fallback_count, int) and 0 <= fallback_count <= 6:
-                log_event(
-                    logging.INFO,
-                    "gen3_pointer_fallback_static",
-                    game=game_name,
+            pointer_count_valid = isinstance(count, int) and 0 <= int(count) <= 6
+            static_count_valid = isinstance(fallback_count, int) and 0 <= int(fallback_count) <= 6
+            fallback_reason: Optional[str] = None
+
+            # Pointer value can be readable but still stale/wrong on some cores.
+            if (not pointer_count_valid) and static_count_valid:
+                fallback_reason = "pointer_invalid"
+            elif pointer_count_valid and static_count_valid and int(count) == 0 and int(fallback_count) > 0:
+                fallback_reason = "pointer_zero_static_nonzero"
+            elif pointer_count_valid and static_count_valid and int(fallback_count) > 0 and int(count) != int(fallback_count):
+                fallback_reason = "pointer_static_mismatch"
+
+            if fallback_reason:
+                self._log_pointer_fallback_static_throttled(
+                    game_name=game_name,
                     kind="party",
                     pointer_addr=party_count_addr,
                     static_addr=static_party_count_addr,
-                    count=fallback_count,
+                    pointer_count=int(count) if pointer_count_valid else None,
+                    static_count=int(fallback_count),
+                    reason=fallback_reason,
                 )
-                count = fallback_count
+                count = int(fallback_count)
                 party_count_addr = static_party_count_addr
                 party_start_addr = static_party_start_addr
+                pointer_static_preferred = int(fallback_count) > 0
 
         count_valid = isinstance(count, int) and 0 <= int(count) <= 6
         max_species_id = max(self.POKEMON_NAMES.keys())
         max_decode_species_id = int(self.GEN3_INTERNAL_SPECIES_MAX) if gen == 3 else max_species_id
 
         if gen == 3 and not count_valid and bool(config.get("party_skip_scan_on_invalid_count", 0)):
+            # Keep scanning candidate layouts even when the count byte is unstable.
             self._last_party_read_meta.update({
                 "expected_count": None,
                 "decoded_count": 0,
@@ -2556,22 +2662,41 @@ class PokemonMemoryReader:
                 "budget_hit": False,
                 "reason": "invalid_party_count",
             })
-            return []
 
         if gen == 3:
             force_gen3_party_byte_reads = bool(config.get("party_force_byte_reads", 0))
             allow_party_byte_fallback = bool(config.get("party_allow_byte_fallback", 1))
+            try:
+                party_byte_read_retries = max(1, min(6, int(config.get("party_byte_read_retries", 3))))
+            except (TypeError, ValueError):
+                party_byte_read_retries = 3
             ignore_party_count = bool(config.get("party_ignore_count", 0))
             enable_offset_scan = bool(config.get("party_enable_offset_scan", 1))
             allow_double_stride = bool(config.get("party_allow_double_stride", 1))
             try_double_bulk = bool(config.get("party_try_double_bulk", 1))
+            if pointer_static_preferred:
+                enable_offset_scan = False
+                try_double_bulk = False
+            skip_zero_count = bool(config.get("party_skip_scan_on_zero_count", 1 if used_pointer_layout else 0))
             try:
                 party_decode_budget_ms = max(200, int(config.get("party_decode_budget_ms", 1200)))
+                if pointer_static_preferred:
+                    party_decode_budget_ms = max(int(party_decode_budget_ms), 3200)
             except (TypeError, ValueError):
                 party_decode_budget_ms = 1200
             decode_deadline = time.perf_counter() + (float(party_decode_budget_ms) / 1000.0)
             budget_exceeded = False
-            gen3_required_slot_bytes = list(range(0, 8)) + [28, 29] + list(range(32, 80)) + [84]
+            # Minimal byte set required to decode Gen 3 party entries when bulk reads are unstable:
+            # - header/personality/OT/checksum/encrypted core
+            # - level
+            # - current/max HP and derived stats (used by slot sanity checks)
+            gen3_required_slot_bytes = sorted(set(
+                list(range(0, 8))
+                + [18, 19, 27, 28, 29]
+                + list(range(32, 80))
+                + [84]
+                + list(range(86, 100))
+            ))
 
             try:
                 primary_count_addr = hex(int(str(party_count_addr), 16))
@@ -2588,42 +2713,46 @@ class PokemonMemoryReader:
                 return time.perf_counter() >= decode_deadline
 
             address_pairs: List[Tuple[str, str]] = [(primary_count_addr, primary_start_addr)]
-            if not used_pointer_layout:
-                raw_count_candidates = config.get("party_count_candidates")
-                raw_start_candidates = config.get("party_start_candidates")
+            raw_count_candidates = config.get("party_count_candidates")
+            raw_start_candidates = config.get("party_start_candidates")
 
-                count_candidates: List[str] = [primary_count_addr]
-                if isinstance(raw_count_candidates, list):
-                    for candidate in raw_count_candidates:
-                        if isinstance(candidate, str):
-                            count_candidates.append(candidate)
+            count_candidates: List[str] = [primary_count_addr]
+            start_candidates: List[str] = [primary_start_addr]
 
-                start_candidates: List[str] = [primary_start_addr]
-                if isinstance(raw_start_candidates, list):
-                    for candidate in raw_start_candidates:
-                        if isinstance(candidate, str):
-                            start_candidates.append(candidate)
+            # When pointer layout is active, also keep static addresses in the scan set.
+            if used_pointer_layout:
+                count_candidates.append(str(static_party_count_addr))
+                start_candidates.append(str(static_party_start_addr))
 
-                # Preserve legacy indexed pairing first.
-                for idx, start_candidate in enumerate(start_candidates):
-                    count_candidate = count_candidates[idx] if idx < len(count_candidates) else primary_count_addr
+            if isinstance(raw_count_candidates, list):
+                for candidate in raw_count_candidates:
+                    if isinstance(candidate, str):
+                        count_candidates.append(candidate)
+
+            if isinstance(raw_start_candidates, list):
+                for candidate in raw_start_candidates:
+                    if isinstance(candidate, str):
+                        start_candidates.append(candidate)
+
+            # Preserve legacy indexed pairing first.
+            for idx, start_candidate in enumerate(start_candidates):
+                count_candidate = count_candidates[idx] if idx < len(count_candidates) else primary_count_addr
+                address_pairs.append((count_candidate, start_candidate))
+
+            # Cross-pair count and start candidates to avoid locking to a bad count address.
+            for start_candidate in start_candidates:
+                for count_candidate in count_candidates:
                     address_pairs.append((count_candidate, start_candidate))
 
-                # Cross-pair count and start candidates to avoid locking to a bad count address.
-                for start_candidate in start_candidates:
-                    for count_candidate in count_candidates:
-                        address_pairs.append((count_candidate, start_candidate))
-
-                # Derive nearby count candidates from each start address.
-                # Emerald pointer layout uses count at (start - 0x4); some cores shift by one byte.
-                for start_candidate in start_candidates:
-                    try:
-                        start_base = int(str(start_candidate), 16)
-                    except (TypeError, ValueError):
-                        continue
-                    for delta in (-4, -3):
-                        address_pairs.append((hex(start_base + delta), start_candidate))
-
+            # Derive nearby count candidates from each start address.
+            # Emerald pointer layout uses count at (start - 0x4); some cores shift by one byte.
+            for start_candidate in start_candidates:
+                try:
+                    start_base = int(str(start_candidate), 16)
+                except (TypeError, ValueError):
+                    continue
+                for delta in (-4, -3):
+                    address_pairs.append((hex(start_base + delta), start_candidate))
             seen_pairs = set()
             ordered_pairs: List[Tuple[str, str]] = []
             for count_candidate, start_candidate in address_pairs:
@@ -2645,12 +2774,14 @@ class PokemonMemoryReader:
                     "reason": "no_candidate_pairs",
                 })
                 return []
-
-            try:
-                max_pairs = max(1, int(config.get("party_max_pairs", len(ordered_pairs))))
-            except (TypeError, ValueError):
-                max_pairs = len(ordered_pairs)
-            ordered_pairs = ordered_pairs[:max_pairs]
+            if pointer_static_preferred:
+                ordered_pairs = [(primary_count_addr, primary_start_addr)]
+            else:
+                try:
+                    max_pairs = max(1, int(config.get("party_max_pairs", len(ordered_pairs))))
+                except (TypeError, ValueError):
+                    max_pairs = len(ordered_pairs)
+                ordered_pairs = ordered_pairs[:max_pairs]
 
             count_cache: Dict[str, object] = {}
             def _read_count_candidate(candidate_addr: str) -> object:
@@ -2664,13 +2795,15 @@ class PokemonMemoryReader:
                 count_cache[candidate_addr] = value
                 return value
 
-            if bool(config.get("party_skip_scan_on_zero_count", 0)) and not ignore_party_count:
+            if skip_zero_count and not ignore_party_count:
                 valid_counts: List[int] = []
                 for candidate_count_addr, _ in ordered_pairs:
                     candidate_value = _read_count_candidate(candidate_count_addr)
                     if isinstance(candidate_value, int) and 0 <= int(candidate_value) <= 6:
                         valid_counts.append(int(candidate_value))
-                if valid_counts and max(valid_counts) == 0:
+                # Keep scanning when we have a caught-count hint (e.g., immediately after taking
+                # a starter) even if party counters are transiently zero.
+                if valid_counts and max(valid_counts) == 0 and not (hinted_slot_count is not None and int(hinted_slot_count) > 0):
                     self._last_party_read_meta.update({
                         "expected_count": 0,
                         "decoded_count": 0,
@@ -2949,16 +3082,22 @@ class PokemonMemoryReader:
 
                     # If bulk reads are present but fail checksum/decode, retry with direct byte reads.
                     if (selected_slot_data is None or selected_species is None) and allow_party_byte_fallback:
-                        slot_data_low = [0] * 85
-                        slot_data_high = [0] * 85
-                        slot_data_addrle = [0] * 85
-                        slot_data_addrbe = [0] * 85
+                        slot_variant_size = max(int(slot_size), 100)
+                        slot_data_low = [0] * slot_variant_size
+                        slot_data_high = [0] * slot_variant_size
+                        slot_data_addrle = [0] * slot_variant_size
+                        slot_data_addrbe = [0] * slot_variant_size
                         saw_wide_values = False
                         for byte_idx in gen3_required_slot_bytes:
                             if _decode_budget_exceeded():
                                 return decoded_party, decode_failures
                             abs_addr = base_addr + (slot_idx * slot_stride) + int(byte_idx)
-                            byte_val = self.retroarch.read_memory(hex(abs_addr))
+                            byte_val: Optional[int] = None
+                            for _ in range(int(party_byte_read_retries)):
+                                probe = self.retroarch.read_memory(hex(abs_addr))
+                                if isinstance(probe, int):
+                                    byte_val = int(probe)
+                                    break
                             if not isinstance(byte_val, int):
                                 slot_data_low = []
                                 slot_data_high = []
@@ -2989,7 +3128,7 @@ class PokemonMemoryReader:
                         deduped_slot_data_candidates: List[List[int]] = []
                         seen_variant_keys = set()
                         for slot_variant in slot_data_candidates:
-                            variant_key = bytes(int(v) & 0xFF for v in slot_variant[:85])
+                            variant_key = bytes(int(v) & 0xFF for v in slot_variant[:int(slot_size)])
                             if variant_key in seen_variant_keys:
                                 continue
                             seen_variant_keys.add(variant_key)
@@ -3022,10 +3161,14 @@ class PokemonMemoryReader:
                     if local_count_valid:
                         if int(local_count) > 0:
                             slots_to_scan = int(local_count)
-                        elif bool(config.get("party_skip_scan_on_zero_count", 0)):
-                            slots_to_scan = 0
+                        elif skip_zero_count:
+                            slots_to_scan = int(hinted_slot_count) if hinted_slot_count is not None and int(hinted_slot_count) > 0 else 0
                         else:
                             slots_to_scan = 6
+                    elif hinted_slot_count is not None and int(hinted_slot_count) > 0:
+                        # After starter selection, a tiny caught set (often size 1) is a useful
+                        # lower-bound hint even when party_count is transiently unreadable.
+                        slots_to_scan = int(hinted_slot_count)
                     else:
                         slots_to_scan = 6
 
@@ -3232,16 +3375,26 @@ class PokemonMemoryReader:
                         )
 
             if budget_exceeded:
-                log_event(
-                    logging.INFO,
-                    "gen3_party_decode_budget_hit",
-                    game=game_name,
-                    budget_ms=party_decode_budget_ms,
-                    decoded=len(best_party),
-                    expected=best_expected_count,
-                    start_addr=best_start_addr,
-                    count_addr=best_count_addr,
-                )
+                budget_key = f"{game_name}:{best_count_addr}:{best_start_addr}"
+                now = time.monotonic()
+                last_log = float(self._party_budget_hit_last_log.get(budget_key, 0.0))
+                if (now - last_log) >= 10.0:
+                    suppressed = int(self._party_budget_hit_suppressed.get(budget_key, 0))
+                    self._party_budget_hit_last_log[budget_key] = now
+                    self._party_budget_hit_suppressed[budget_key] = 0
+                    log_event(
+                        logging.INFO,
+                        "gen3_party_decode_budget_hit",
+                        game=game_name,
+                        budget_ms=party_decode_budget_ms,
+                        decoded=len(best_party),
+                        expected=best_expected_count,
+                        start_addr=best_start_addr,
+                        count_addr=best_count_addr,
+                        suppressed=suppressed if suppressed > 0 else None,
+                    )
+                else:
+                    self._party_budget_hit_suppressed[budget_key] = int(self._party_budget_hit_suppressed.get(budget_key, 0)) + 1
 
             interleaved_recovery_meta: Optional[Dict[str, object]] = None
             interleaved_recovery_miss_meta: Optional[Dict[str, object]] = None
@@ -3626,7 +3779,8 @@ class PokemonMemoryReader:
         if not party_count_addr or not party_start_addr or slot_size <= 0:
             _set_meta("missing_party_addresses", slot_size=slot_size)
             return None
-
+        used_pointer_layout = False
+        pointer_static_preferred = False
         if (
             bool(config.get("party_use_pointer_layout", 0))
             and config.get("saveblock1_ptr")
@@ -3635,11 +3789,21 @@ class PokemonMemoryReader:
         ):
             saveblock1_ptr = self._resolve_gen3_saveblock_ptr(config.get("saveblock1_ptr"), game_name=game_name)
             if saveblock1_ptr is not None:
+                used_pointer_layout = True
                 party_count_addr = hex(saveblock1_ptr + int(config.get("party_count_offset")))
                 party_start_addr = hex(saveblock1_ptr + int(config.get("party_start_offset")))
             elif not bool(config.get("party_allow_static_when_pointer_missing", 1)):
                 _set_meta("pointer_layout_unavailable")
                 return None
+
+        if used_pointer_layout:
+            pointer_count = self.retroarch.read_memory(party_count_addr)
+            static_count = self.retroarch.read_memory(config.get("party_count"))
+            pointer_count_valid = isinstance(pointer_count, int) and 0 <= int(pointer_count) <= 6
+            static_count_valid = isinstance(static_count, int) and 0 <= int(static_count) <= 6
+            if ((not pointer_count_valid) and static_count_valid) or (pointer_count_valid and static_count_valid and int(pointer_count) == 0 and int(static_count) > 0):
+                party_count_addr = config.get("party_count")
+                party_start_addr = config.get("party_start")
 
         player_count_candidates: List[int] = []
         player_start_candidates: List[int] = []
@@ -3875,6 +4039,7 @@ class AchievementTracker:
         self.recent_anomalies: List[Dict] = []
         self._derived_checker: Optional[DerivedAchievementChecker] = None
         self._warning_last_log: Dict[str, float] = {}
+        self._poll_stage_duration_last_log: Dict[str, float] = {}
     
     def set_validation_profiles(self, profiles: Dict[str, object]):
         """Inject validation profile config loaded from JSON."""
@@ -4315,6 +4480,38 @@ class AchievementTracker:
         normalized_party.sort(key=lambda member: int(member.get("slot", 0)))
         return normalized_party
 
+    def _is_starter_pending_for_collection(self, current_pokedex: Optional[List[int]] = None) -> bool:
+        """True when game progression has not reached starter selection yet."""
+        if not self.game_name or not self.achievements:
+            return False
+
+        if isinstance(current_pokedex, list) and len(current_pokedex) > 0:
+            return False
+
+        starter_achievements = [
+            ach for ach in self.achievements
+            if any(token in ach.id.lower() for token in ("first_steps", "starter_chosen", "journey_begins"))
+        ]
+        if not starter_achievements:
+            return False
+
+        if any(bool(ach.unlocked) for ach in starter_achievements):
+            return False
+
+        for achievement in starter_achievements:
+            try:
+                if self._should_use_derived_check(achievement):
+                    if self._check_derived_achievement(achievement):
+                        return False
+                elif achievement.memory_address and achievement.memory_condition:
+                    value = self.retroarch.read_memory(achievement.memory_address)
+                    if value is not None and self.evaluate_condition(value, achievement.memory_condition):
+                        return False
+            except Exception:
+                continue
+
+        return True
+
     def load_game(self, game_name: str, achievements_file: Path) -> bool:
         """Load achievements for a specific game"""
         try:
@@ -4357,6 +4554,7 @@ class AchievementTracker:
             self._warmup_logged = False
             self._startup_baseline_captured = False
             self._startup_lockout_ids = set()
+            self._poll_stage_duration_last_log = {}
 
             validation = self.pokemon_reader.validate_memory_profile(game_name)
             log_event(logging.INFO, "memory_profile_validation", game=game_name, ok=validation.get("ok"), failures=validation.get("failures", []), warnings=validation.get("warnings", []))
@@ -4954,7 +5152,8 @@ class AchievementTracker:
         # Keep party reads separate from catch/achievement responsiveness.
         current_party = list(self._last_party)
         retroarch_unstable = bool(getattr(self.retroarch, "is_unstable_io", lambda: False)())
-        allow_live_party = self._collection_baseline_initialized and not retroarch_unstable
+        starter_pending = self._is_starter_pending_for_collection(current_pokedex)
+        allow_live_party = self._collection_baseline_initialized and not retroarch_unstable and not starter_pending
         if allow_live_party:
             live_party = self._read_current_party()
             if live_party or not self._last_party:
@@ -4972,9 +5171,9 @@ class AchievementTracker:
                         streak=self._party_skip_streak,
                         io_error_streak=getattr(self.retroarch, "_io_error_streak", 0),
                     )
-        elif current_pokedex:
+        elif current_pokedex or starter_pending:
             self._party_skip_streak += 1
-            skip_reason = "baseline_pending" if not self._collection_baseline_initialized else "unstable_io"
+            skip_reason = "starter_pending" if starter_pending else ("baseline_pending" if not self._collection_baseline_initialized else "unstable_io")
             if self._party_skip_streak == 1 or self._party_skip_streak % 20 == 0:
                 log_event(
                     logging.INFO,
@@ -4999,19 +5198,52 @@ class AchievementTracker:
                         streak=self._collection_wait_streak,
                         baseline_confirmations=baseline_confirmations,
                         last_known=len(self._last_pokedex),
+                        starter_pending=starter_pending,
                     )
 
                 self._collection_baseline_candidate = []
                 self._collection_baseline_candidate_streak = 0
 
+                if starter_pending:
+                    return
+
+                if not retroarch_unstable:
+                    baseline_party = self._read_current_party()
+                    if baseline_party:
+                        self._last_pokedex = []
+                        self._last_party = list(baseline_party)
+                        self._collection_baseline_initialized = True
+                        self._collection_wait_streak = 0
+                        self._baseline_snapshot_pending = False
+                        self._baseline_snapshot_wait_polls = 0
+
+                        log_event(
+                            logging.INFO,
+                            "collection_baseline_established",
+                            game=self.game_name,
+                            catches=0,
+                            party=len(baseline_party),
+                            party_sync_deferred=False,
+                            reason="party_detected_without_pokedex",
+                        )
+
+                        self._collection_queue.put({
+                            "catches": [],
+                            "party": baseline_party,
+                            "previous_party": [],
+                            "game": self.game_name,
+                            "catch_event_type": "caught",
+                        })
+                        return
+
                 empty_wait_polls = max(2, int(self._get_validation_profile().get("collection_empty_baseline_wait_polls", 10)))
                 if self._collection_wait_streak >= empty_wait_polls:
-                    baseline_party: List[Dict] = []
+                    timeout_party: List[Dict] = []
                     if not retroarch_unstable:
-                        baseline_party = self._read_current_party()
+                        timeout_party = self._read_current_party()
 
                     self._last_pokedex = []
-                    self._last_party = list(baseline_party)
+                    self._last_party = list(timeout_party)
                     self._collection_baseline_initialized = True
                     self._collection_wait_streak = 0
                     self._baseline_snapshot_pending = False
@@ -5022,15 +5254,15 @@ class AchievementTracker:
                         "collection_baseline_established",
                         game=self.game_name,
                         catches=0,
-                        party=len(baseline_party),
+                        party=len(timeout_party),
                         party_sync_deferred=False,
                         reason="empty_timeout",
                     )
 
-                    if baseline_party:
+                    if timeout_party:
                         self._collection_queue.put({
                             "catches": [],
-                            "party": baseline_party,
+                            "party": timeout_party,
                             "previous_party": [],
                             "game": self.game_name,
                             "catch_event_type": "caught",
@@ -5481,6 +5713,25 @@ class AchievementTracker:
             if self.retroarch.connected and self.achievements:
                 if bool(getattr(self.retroarch, "is_waiting_for_launch", lambda: False)()):
                     self._poll_disconnected_streak += 1
+                    if self._last_party:
+                        previous_party = list(self._last_party)
+                        previous_count = len(previous_party)
+                        self._last_party = []
+                        self._pending_party_change = None
+                        self._collection_queue.put({
+                            "catches": [],
+                            "party": [],
+                            "previous_party": previous_party,
+                            "game": self.game_name,
+                            "catch_event_type": "caught",
+                        })
+                        log_event(
+                            logging.INFO,
+                            "party_state_cleared",
+                            game=self.game_name,
+                            previous_count=previous_count,
+                            reason="retroarch_waiting",
+                        )
                     time.sleep(interval_ms / 1000)
                     continue
 
@@ -5529,14 +5780,19 @@ class AchievementTracker:
                 finally:
                     ach_ms = int((time.perf_counter() - ach_started) * 1000)
                     if ach_ms >= 1500:
-                        log_event(
-                            logging.INFO,
-                            "poll_stage_duration",
-                            game=self.game_name,
-                            poll=self._poll_heartbeat_count,
-                            stage="achievements",
-                            duration_ms=ach_ms,
-                        )
+                        now = time.monotonic()
+                        stage_key = f"{self.game_name}:achievements"
+                        last = float(self._poll_stage_duration_last_log.get(stage_key, 0.0))
+                        if should_trace_poll or ach_ms >= 3000 or (now - last) >= 20.0:
+                            self._poll_stage_duration_last_log[stage_key] = now
+                            log_event(
+                                logging.INFO,
+                                "poll_stage_duration",
+                                game=self.game_name,
+                                poll=self._poll_heartbeat_count,
+                                stage="achievements",
+                                duration_ms=ach_ms,
+                            )
 
                 if should_trace_poll:
                     log_event(
@@ -5569,14 +5825,19 @@ class AchievementTracker:
                 finally:
                     collection_ms = int((time.perf_counter() - collection_started) * 1000)
                     if collection_ms >= 1500:
-                        log_event(
-                            logging.INFO,
-                            "poll_stage_duration",
-                            game=self.game_name,
-                            poll=self._poll_heartbeat_count,
-                            stage="collection",
-                            duration_ms=collection_ms,
-                        )
+                        now = time.monotonic()
+                        stage_key = f"{self.game_name}:collection"
+                        last = float(self._poll_stage_duration_last_log.get(stage_key, 0.0))
+                        if should_trace_poll or collection_ms >= 3000 or (now - last) >= 20.0:
+                            self._poll_stage_duration_last_log[stage_key] = now
+                            log_event(
+                                logging.INFO,
+                                "poll_stage_duration",
+                                game=self.game_name,
+                                poll=self._poll_heartbeat_count,
+                                stage="collection",
+                                duration_ms=collection_ms,
+                            )
             else:
                 self._poll_disconnected_streak += 1
                 if self._poll_disconnected_streak == 1:
@@ -8388,28 +8649,42 @@ class PokeAchieveGUI:
             "Pokemon Ruby": "pokemon_ruby.json",
             "Pokemon Sapphire": "pokemon_sapphire.json",
         }
-        
         achievement_file = None
         display_name = None
         clean_lower = clean_name.lower()
         log_event(logging.DEBUG, "load_achievements_clean_lower", clean_lower=clean_lower)
-        for key, filename in game_map.items():
-            key_lower = key.lower()
-            log_event(logging.DEBUG, "load_achievements_match_check", key=key_lower, candidate=clean_lower)
-            # Check if key is in cleaned name (handles "pokemon emerald" in "pokemon - emerald version playing")
-            if key_lower in clean_lower:
-                achievement_file = self.achievements_dir / filename
-                display_name = key
-                log_event(logging.INFO, "load_achievements_match", game=key, file=filename)
-                break
-            # Also try matching individual words (e.g., "emerald" matches)
-            key_words = key_lower.replace("pokemon ", "")
-            if key_words in clean_lower:
-                achievement_file = self.achievements_dir / filename
-                display_name = key
-                log_event(logging.INFO, "load_achievements_word_match", game=key, file=filename)
-                break
-        
+
+        canonical_name = None
+        try:
+            canonical_name = self.retroarch._normalize_game_name(clean_name)
+        except Exception:
+            canonical_name = None
+
+        if canonical_name in game_map:
+            filename = game_map[canonical_name]
+            achievement_file = self.achievements_dir / filename
+            display_name = canonical_name
+            log_event(logging.INFO, "load_achievements_match", game=canonical_name, file=filename, source="canonical")
+        else:
+            for key, filename in game_map.items():
+                key_lower = key.lower()
+                log_event(logging.DEBUG, "load_achievements_match_check", key=key_lower, candidate=clean_lower)
+                # Check full game-name phrase first (e.g., "pokemon emerald" in status text)
+                if key_lower in clean_lower:
+                    achievement_file = self.achievements_dir / filename
+                    display_name = key
+                    log_event(logging.INFO, "load_achievements_match", game=key, file=filename, source="full_name")
+                    break
+
+                # Only allow safe fallback word matching for longer tokens to avoid red/firered collisions.
+                key_words = key_lower.replace("pokemon ", "").strip()
+                if len(key_words) >= 5 and re.search(rf"\b{re.escape(key_words)}\b", clean_lower):
+                    achievement_file = self.achievements_dir / filename
+                    display_name = key
+                    log_event(logging.INFO, "load_achievements_word_match", game=key, file=filename)
+                    break
+
+
         log_event(logging.DEBUG, "load_achievements_match_scan", candidate=clean_name.lower())
         for key, filename in game_map.items():
             log_event(logging.DEBUG, "load_achievements_scan_item", key=key.lower(), candidate=clean_name.lower())
@@ -8449,6 +8724,7 @@ class PokeAchieveGUI:
 
                 # Expand server unlock tokens using live catalog IDs/names.
                 catalog = self.api._get_achievement_catalog(game_id) if self.api else []
+                catalog_has_data = isinstance(catalog, list) and len(catalog) > 0
                 if isinstance(catalog, list):
                     for item in catalog:
                         if not isinstance(item, dict):
@@ -8480,7 +8756,7 @@ class PokeAchieveGUI:
                 for ach in self.tracker.achievements:
                     by_id = ach.id in server_unlocked
                     by_name = f"name:{ach.name.strip().lower()}" in server_unlocked
-                    resolved = self.api._resolve_achievement_id(game_id, ach.name, ach.id) if self.api else None
+                    resolved = self.api._resolve_achievement_id(game_id, ach.name, ach.id) if (self.api and catalog_has_data) else None
                     by_resolved = resolved is not None and str(resolved) in server_unlocked
                     if (by_id or by_name or by_resolved) and not ach.unlocked:
                         ach.unlocked = True
@@ -8498,7 +8774,7 @@ class PokeAchieveGUI:
                         continue
                     by_id = ach.id in server_unlocked
                     by_name = f"name:{ach.name.strip().lower()}" in server_unlocked
-                    resolved = self.api._resolve_achievement_id(game_id, ach.name, ach.id) if self.api else None
+                    resolved = self.api._resolve_achievement_id(game_id, ach.name, ach.id) if (self.api and catalog_has_data) else None
                     by_resolved = resolved is not None and str(resolved) in server_unlocked
                     if not (by_id or by_name or by_resolved):
                         missing_on_server.append(ach)
@@ -9683,6 +9959,7 @@ class PokeAchieveGUI:
                 self.tracker._warmup_logged = False
                 self.tracker._startup_baseline_captured = False
                 self.tracker._startup_lockout_ids = set()
+                self.tracker._poll_stage_duration_last_log = {}
                 self._sent_event_ids = set()
                 self._save_sent_events()
                 self._set_api_status("Not configured" if not self.api else "Configured")
@@ -9851,3 +10128,9 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+
+
+
