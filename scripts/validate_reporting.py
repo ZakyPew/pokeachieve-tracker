@@ -156,6 +156,37 @@ class ReportingValidationTests(unittest.TestCase):
         self.assertTrue(self.tracker._is_plausible_badge_byte(78, generation=3))
         self.assertFalse(self.tracker._is_plausible_badge_byte(78, generation=1))
 
+    def test_gen1_party_internal_species_ids_map_to_national_dex(self):
+        class PartyRetroGen1:
+            def read_memory(self, addr: str, num_bytes: int = 1):
+                address = int(addr, 16)
+                if num_bytes == 1:
+                    if address == 0xD163:
+                        return 1
+                    # Party species list entry #1 is Squirtle in Gen1 internal ordering.
+                    if address == 0xD164:
+                        return 177
+                    if address == 0xD16B:
+                        return 177
+                    return 0
+                if num_bytes == 44:
+                    slot = [0] * 44
+                    slot[0] = 177
+                    slot[3] = 5
+                    return slot
+                return [0] * int(num_bytes)
+
+        reader = self.tracker.pokemon_reader
+        original_retro = reader.retroarch
+        try:
+            reader.retroarch = PartyRetroGen1()
+            party = reader.read_party("Pokemon Red")
+            self.assertEqual(len(party), 1)
+            self.assertEqual(party[0]["id"], 7)
+            self.assertEqual(party[0]["level"], 5)
+        finally:
+            reader.retroarch = original_retro
+
     def test_gen3_gym_checks_require_contiguous_badge_progression(self):
         gym6 = Achievement(
             id="emerald_gym_6",

@@ -1601,9 +1601,41 @@ class PokemonMemoryReader:
                 internal_species_map=len(self._gen3_internal_to_national),
             )
 
+    # Gen 1 (RBY) uses internal species ordering in party data.
+    # Source: pret/pokered data/pokemon/dex_order.asm
+    GEN1_INTERNAL_TO_NATIONAL = {
+        1: 112, 2: 115, 3: 32, 4: 35, 5: 21, 6: 100, 7: 34, 8: 80, 9: 2, 10: 103,
+        11: 108, 12: 102, 13: 88, 14: 94, 15: 29, 16: 31, 17: 104, 18: 111, 19: 131,
+        20: 59, 21: 151, 22: 130, 23: 90, 24: 72, 25: 92, 26: 123, 27: 120, 28: 9,
+        29: 127, 30: 114, 33: 58, 34: 95, 35: 22, 36: 16, 37: 79, 38: 64, 39: 75,
+        40: 113, 41: 67, 42: 122, 43: 106, 44: 107, 45: 24, 46: 47, 47: 54, 48: 96,
+        49: 76, 51: 126, 53: 125, 54: 82, 55: 109, 57: 56, 58: 86, 59: 50, 60: 128,
+        64: 83, 65: 48, 66: 149, 70: 84, 71: 60, 72: 124, 73: 146, 74: 144, 75: 145,
+        76: 132, 77: 52, 78: 98, 82: 37, 83: 38, 84: 25, 85: 26, 88: 147, 89: 148,
+        90: 140, 91: 141, 92: 116, 93: 117, 96: 27, 97: 28, 98: 138, 99: 139,
+        100: 39, 101: 40, 102: 133, 103: 136, 104: 135, 105: 134, 106: 66, 107: 41,
+        108: 23, 109: 46, 110: 61, 111: 62, 112: 13, 113: 14, 114: 15, 116: 85,
+        117: 57, 118: 51, 119: 49, 120: 87, 123: 10, 124: 11, 125: 12, 126: 68,
+        128: 55, 129: 97, 130: 42, 131: 150, 132: 143, 133: 129, 136: 89, 138: 99,
+        139: 91, 141: 101, 142: 36, 143: 110, 144: 53, 145: 105, 147: 93, 148: 63,
+        149: 65, 150: 17, 151: 18, 152: 121, 153: 1, 154: 3, 155: 73, 157: 118,
+        158: 119, 163: 77, 164: 78, 165: 19, 166: 20, 167: 33, 168: 30, 169: 74,
+        170: 137, 171: 142, 173: 81, 176: 4, 177: 7, 178: 5, 179: 8, 180: 6,
+        185: 43, 186: 44, 187: 45, 188: 69, 189: 70, 190: 71,
+    }
+
     def get_pokemon_name(self, pokemon_id: int) -> str:
         """Get Pokemon name from ID"""
         return self.POKEMON_NAMES.get(pokemon_id, f"Pokemon #{pokemon_id}")
+
+    def _resolve_gen1_species_id(self, raw_species_id: int) -> int:
+        """Convert Gen 1 internal species IDs to National Dex IDs when possible."""
+        try:
+            species_int = int(raw_species_id) & 0xFF
+        except (TypeError, ValueError):
+            return 0
+        mapped = self.GEN1_INTERNAL_TO_NATIONAL.get(species_int)
+        return int(mapped) if isinstance(mapped, int) and mapped > 0 else int(species_int)
 
     def get_last_party_read_meta(self) -> Dict[str, object]:
         """Return metadata from the most recent party read attempt."""
@@ -1940,6 +1972,16 @@ class PokemonMemoryReader:
         if mid <= 0:
             return "Unknown Move"
         return self._gen3_move_names.get(mid, f"Move #{mid}")
+
+    def _resolve_legacy_move_name(self, move_id: int) -> str:
+        """Resolve Gen 1/2 move labels when canonical tables are unavailable."""
+        try:
+            mid = int(move_id)
+        except (TypeError, ValueError):
+            return "-"
+        if mid <= 0:
+            return "-"
+        return f"Move #{mid}"
 
     def _is_gen3_shiny(self, personality: int, ot_id: int) -> bool:
         """Determine Gen 3 shininess from PID and OTID."""
@@ -3659,14 +3701,22 @@ class PokemonMemoryReader:
 
             level = None
             is_shiny = False
+            moves: List[str] = []
 
             if isinstance(slot_data, list) and len(slot_data) >= slot_size:
                 if all(isinstance(v, int) and 0 <= int(v) <= 0xFF for v in slot_data[:slot_size]):
                     slot_bytes = [int(v) & 0xFF for v in slot_data[:slot_size]]
                     species_id = int(slot_bytes[0])
+                    if int(gen) == 1:
+                        species_id = self._resolve_gen1_species_id(species_id)
 
                     if int(gen) == 2:
                         # GSC party struct: MON_LEVEL at 0x1F, MON_DVS at 0x15-0x16.
+                        for move_offset in (0x02, 0x03, 0x04, 0x05):
+                            if len(slot_bytes) > move_offset:
+                                rendered = self._resolve_legacy_move_name(slot_bytes[move_offset])
+                                if rendered != "-":
+                                    moves.append(rendered)
                         if len(slot_bytes) > 0x1F:
                             level_candidate = int(slot_bytes[0x1F])
                             if level_candidate > 0:
@@ -3674,6 +3724,11 @@ class PokemonMemoryReader:
                         if len(slot_bytes) > 0x16:
                             is_shiny = self._is_gen2_shiny_from_dvs(slot_bytes[0x15], slot_bytes[0x16])
                     else:
+                        for move_offset in (8, 9, 10, 11):
+                            if len(slot_bytes) > move_offset:
+                                rendered = self._resolve_legacy_move_name(slot_bytes[move_offset])
+                                if rendered != "-":
+                                    moves.append(rendered)
                         level_candidate = int(slot_bytes[3]) if len(slot_bytes) > 3 else 0
                         if level_candidate > 0:
                             level = level_candidate
@@ -3685,6 +3740,17 @@ class PokemonMemoryReader:
                 species_id = int(species_id)
             except (TypeError, ValueError):
                 continue
+
+            if int(gen) == 1:
+                # Gen 1 party species list bytes are also internal IDs on most cores.
+                species_list_addr = hex(int(party_count_addr, 16) + 1 + i)
+                species_list_value = self.retroarch.read_memory(species_list_addr)
+                if isinstance(species_list_value, int):
+                    species_list_id = self._resolve_gen1_species_id(species_list_value)
+                    max_species = int(config.get("max_pokemon", 151) or 151)
+                    if 1 <= species_list_id <= max_species:
+                        species_id = species_list_id
+
             if species_id <= 0:
                 continue
 
@@ -3702,9 +3768,10 @@ class PokemonMemoryReader:
             }
             if int(gen) >= 2:
                 member["shiny"] = bool(is_shiny)
+            if moves:
+                member["moves"] = moves[:4]
 
             party.append(member)
-
         expected_count_value = int(count) if isinstance(count, int) and int(count) >= 0 else None
         self._last_party_read_meta.update({
             "expected_count": expected_count_value,
@@ -5968,9 +6035,10 @@ class PokeAchieveGUI:
             "Hatching Egg Hunt",
         ]
         self._hunt_game_options = self._build_hunt_game_options()
-        self._hunt_encounter_catalog: Dict[str, Dict[str, Dict[str, Any]]] = self._build_hunt_encounter_catalog()
-        self._hunt_route_options: Dict[str, List[str]] = self._build_default_hunt_route_options()
-        self._hunt_fishing_options: Dict[str, List[str]] = self._build_default_hunt_fishing_options()
+        # Build these lazily to keep initial window open responsive.
+        self._hunt_encounter_catalog: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        self._hunt_route_options: Dict[str, List[str]] = {}
+        self._hunt_fishing_options: Dict[str, List[str]] = {}
         self.hunt_mode_var = tk.StringVar(value=self._hunt_modes[0])
         self.hunt_game_var = tk.StringVar(value=self._hunt_game_options[0] if self._hunt_game_options else "")
         self.hunt_route_var = tk.StringVar(value="Any Soft Reset")
@@ -6020,9 +6088,27 @@ class PokeAchieveGUI:
         self._hunt_pause_btn: Optional[ttk.Button] = None
 
         self._build_ui()
+        self.root.after(10, self._prime_hunt_catalog_async)
         self._start_status_check()
         self.root.after(250, self._maybe_run_setup_wizard)
     
+    def _prime_hunt_catalog_async(self):
+        """Load hunt encounter catalog in a worker thread to reduce startup jank."""
+
+        def worker():
+            catalog = self._build_hunt_encounter_catalog()
+            self._hunt_encounter_catalog = catalog
+            self._hunt_route_options = self._build_default_hunt_route_options()
+            self._hunt_fishing_options = self._build_default_hunt_fishing_options()
+            self.root.after(0, self._apply_hunt_catalog_ready)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _apply_hunt_catalog_ready(self):
+        """Refresh hunt selectors once async catalog loading completes."""
+        self._update_hunt_mode_controls()
+        self._refresh_hunt_targets()
+
     def _configure_styles(self):
         """Apply a cleaner, modern ttk theme and spacing."""
         style = ttk.Style(self.root)
