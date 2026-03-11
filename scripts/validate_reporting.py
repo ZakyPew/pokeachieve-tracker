@@ -140,6 +140,18 @@ class StubProgressAPI(PokeAchieveAPI):
         return False, {"status": 404, "error": "unexpected"}
 
 
+class StubCatalogUnavailableUnlockAPI(PokeAchieveAPI):
+    def __init__(self):
+        super().__init__(base_url="https://example.invalid", api_key="tracker_test_key")
+        self.calls = []
+        self._achievement_catalog_unavailable_games.add(1)
+
+    def _request(self, method: str, endpoint: str, data: dict = None):
+        self.calls.append((method, endpoint, data))
+        if endpoint == "/api/tracker/unlock":
+            return False, {"status": 404, "error": "Achievement not found"}
+        return False, {"status": 404, "error": "unexpected"}
+
 class ReportingValidationTests(unittest.TestCase):
     def setUp(self):
         self.retro = FakeRetroArch()
@@ -155,6 +167,37 @@ class ReportingValidationTests(unittest.TestCase):
     def test_gen3_badge_plausibility_is_not_contiguous_only(self):
         self.assertTrue(self.tracker._is_plausible_badge_byte(78, generation=3))
         self.assertFalse(self.tracker._is_plausible_badge_byte(78, generation=1))
+
+    def test_gen1_party_internal_species_ids_map_to_national_dex(self):
+        class PartyRetroGen1:
+            def read_memory(self, addr: str, num_bytes: int = 1):
+                address = int(addr, 16)
+                if num_bytes == 1:
+                    if address == 0xD163:
+                        return 1
+                    # Party species list entry #1 is Squirtle in Gen1 internal ordering.
+                    if address == 0xD164:
+                        return 177
+                    if address == 0xD16B:
+                        return 177
+                    return 0
+                if num_bytes == 44:
+                    slot = [0] * 44
+                    slot[0] = 177
+                    slot[3] = 5
+                    return slot
+                return [0] * int(num_bytes)
+
+        reader = self.tracker.pokemon_reader
+        original_retro = reader.retroarch
+        try:
+            reader.retroarch = PartyRetroGen1()
+            party = reader.read_party("Pokemon Red")
+            self.assertEqual(len(party), 1)
+            self.assertEqual(party[0]["id"], 7)
+            self.assertEqual(party[0]["level"], 5)
+        finally:
+            reader.retroarch = original_retro
 
     def test_gen3_gym_checks_require_contiguous_badge_progression(self):
         gym6 = Achievement(
@@ -955,6 +998,44 @@ class ReportingValidationTests(unittest.TestCase):
         self.assertEqual(update["previous_party"], [{"id": 25, "level": 15, "slot": 1}, {"id": 10, "level": 7, "slot": 2}])
         self.assertEqual(update["game"], "Pokemon Emerald")
 
+    def test_gen1_party_change_requires_retry_confirmation(self):
+        self.tracker.game_name = "Pokemon Red"
+        self.tracker._collection_baseline_initialized = True
+        self.tracker._last_pokedex = [1, 4]
+        previous_party = [
+            {"id": 151, "level": 100, "slot": 1},
+            {"id": 150, "level": 100, "slot": 2},
+            {"id": 3, "level": 100, "slot": 3},
+        ]
+        changed_party = [
+            {"id": 151, "level": 100, "slot": 1},
+            {"id": 150, "level": 100, "slot": 2},
+            {"id": 9, "level": 100, "slot": 3},
+        ]
+        self.tracker._last_party = list(previous_party)
+        self.tracker._pending_party_change = None
+
+        self.tracker._read_current_pokedex_caught = lambda: [1, 4]
+        self.tracker.pokemon_reader.read_party = lambda game: list(changed_party)
+        self.tracker.pokemon_reader.get_last_party_read_meta = lambda: {
+            "expected_count": 3,
+            "decoded_count": 3,
+            "incomplete": False,
+        }
+
+        self.tracker.check_collection()
+        self.assertTrue(self.tracker._collection_queue.empty())
+        self.assertEqual(self.tracker._last_party, previous_party)
+        self.assertEqual((self.tracker._pending_party_change or {}).get("mode"), "legacy_churn")
+
+        self.tracker.check_collection()
+        self.assertFalse(self.tracker._collection_queue.empty())
+        update = self.tracker._collection_queue.get_nowait()
+        self.assertEqual(update["previous_party"], previous_party)
+        self.assertEqual(update["party"], changed_party)
+        self.assertEqual(self.tracker._last_party, changed_party)
+        self.assertIsNone(self.tracker._pending_party_change)
+
     def test_party_drop_with_incomplete_decode_requires_retry_confirmation(self):
         self.tracker._collection_baseline_initialized = True
         self.tracker._last_pokedex = [1, 4, 7]
@@ -1018,6 +1099,77 @@ class ReportingValidationTests(unittest.TestCase):
         self.assertEqual(len(self.tracker._last_party), 2)
         self.assertIsNone(self.tracker._pending_party_change)
 
+    def test_collection_starter_pending_allows_party_baseline_probe(self):
+        self.tracker.game_name = "Pokemon Red"
+        self.tracker._collection_baseline_initialized = False
+        self.tracker._is_starter_pending_for_collection = lambda catches: True
+        self.tracker._read_current_pokedex_caught = lambda: []
+        self.tracker._read_current_party = lambda: [{"id": 151, "level": 5, "slot": 1}]
+
+        self.tracker.check_collection()
+        self.assertTrue(self.tracker._collection_baseline_initialized)
+        self.assertEqual(len(self.tracker._last_party), 1)
+        self.assertFalse(self.tracker._collection_queue.empty())
+        update = self.tracker._collection_queue.get_nowait()
+        self.assertEqual(update["catches"], [])
+        self.assertEqual(len(update["party"]), 1)
+
+    def test_gen12_live_party_read_retries_before_skip(self):
+        self.tracker.game_name = "Pokemon Red"
+        self.tracker._collection_baseline_initialized = True
+        self.tracker._last_pokedex = []
+        self.tracker._last_party = []
+        self.tracker._is_starter_pending_for_collection = lambda catches: False
+        self.tracker._read_current_pokedex_caught = lambda: []
+
+        reads = [
+            [],
+            [{"id": 151, "level": 5, "slot": 1}],
+        ]
+        self.tracker._read_current_party = lambda: list(reads.pop(0)) if reads else []
+
+        self.tracker.check_collection()
+        self.assertEqual(len(self.tracker._last_party), 1)
+        self.assertFalse(self.tracker._collection_queue.empty())
+        update = self.tracker._collection_queue.get_nowait()
+        self.assertEqual(update["catches"], [])
+        self.assertEqual(len(update["party"]), 1)
+
+    def test_gen12_baseline_party_probe_retries_before_timeout(self):
+        self.tracker.game_name = "Pokemon Red"
+        self.tracker._collection_baseline_initialized = False
+        self.tracker._is_starter_pending_for_collection = lambda catches: False
+        self.tracker._read_current_pokedex_caught = lambda: []
+
+        reads = [
+            [],
+            [{"id": 151, "level": 5, "slot": 1}],
+        ]
+        self.tracker._read_current_party = lambda: list(reads.pop(0)) if reads else []
+
+        self.tracker.check_collection()
+        self.assertTrue(self.tracker._collection_baseline_initialized)
+        self.assertEqual(len(self.tracker._last_party), 1)
+        self.assertFalse(self.tracker._collection_queue.empty())
+        update = self.tracker._collection_queue.get_nowait()
+        self.assertEqual(update["catches"], [])
+        self.assertEqual(len(update["party"]), 1)
+
+    def test_gen12_empty_baseline_timeout_is_clamped(self):
+        self.tracker.game_name = "Pokemon Red"
+        self.tracker._collection_baseline_initialized = False
+        self.tracker._is_starter_pending_for_collection = lambda catches: False
+        self.tracker._read_current_pokedex_caught = lambda: []
+        self.tracker._read_current_party = lambda: []
+
+        self.tracker.check_collection()
+        self.assertFalse(self.tracker._collection_baseline_initialized)
+
+        self.tracker.check_collection()
+        self.assertTrue(self.tracker._collection_baseline_initialized)
+        self.assertEqual(self.tracker._last_pokedex, [])
+        self.assertTrue(self.tracker._collection_queue.empty())
+
     def test_collection_baseline_defers_empty_party_sync_until_party_ready(self):
         self.tracker._collection_baseline_initialized = False
         self.tracker._read_current_pokedex_caught = lambda: [1, 2, 3]
@@ -1067,6 +1219,29 @@ class ReportingValidationTests(unittest.TestCase):
         update = self.tracker._collection_queue.get_nowait()
         self.assertEqual(len(update["catches"]), 64)
 
+    def test_collection_spike_from_empty_baseline_accepts_confirmed_snapshot(self):
+        self.tracker.game_name = "Pokemon Red"
+        self.tracker._collection_baseline_initialized = True
+        self.tracker._last_pokedex = []
+        self.tracker._last_party = []
+        self.tracker._achievement_poll_count = 120
+
+        full_dex = list(range(1, 152))
+        self.tracker._read_current_pokedex_caught = lambda: full_dex
+        self.tracker.pokemon_reader.read_party = lambda game: []
+
+        # First read is candidate confirmation only.
+        self.tracker.check_collection()
+        self.assertTrue(self.tracker._collection_queue.empty())
+        self.assertEqual(self.tracker._last_pokedex, [])
+
+        # Second identical read is confirmed and should be accepted as baseline reset.
+        self.tracker.check_collection()
+        self.assertFalse(self.tracker._collection_queue.empty())
+        update = self.tracker._collection_queue.get_nowait()
+        self.assertEqual(len(update["catches"]), 151)
+        self.assertEqual(len(self.tracker._last_pokedex), 151)
+
     def test_unlock_reporting_retries_with_numeric_id(self):
         api = StubAPI()
         ok, data = api.post_unlock(3, "emerald_pokedex_complete", "Hoenn Completionist")
@@ -1093,7 +1268,28 @@ class ReportingValidationTests(unittest.TestCase):
         self.assertFalse(any(call[1] == "/progress/update" for call in api.calls))
 
 
+    def test_unlock_skips_when_catalog_unavailable_in_api_key_mode(self):
+        api = StubCatalogUnavailableUnlockAPI()
+        ok, data = api.post_unlock(1, "red_gym_1_brock", "Boulder Badge")
+        self.assertTrue(ok)
+        self.assertEqual(data.get("reason"), "achievement_not_mapped_catalog_unavailable")
+        self.assertFalse(any(call[1] == "/api/tracker/unlock" for call in api.calls))
+
+        # Second call should remain quiet via cache and still avoid API POSTs.
+        ok2, data2 = api.post_unlock(1, "red_gym_1_brock", "Boulder Badge")
+        self.assertTrue(ok2)
+        self.assertIn(data2.get("reason"), {"achievement_not_mapped_catalog_unavailable", "achievement_not_found_cached"})
+        self.assertFalse(any(call[1] == "/api/tracker/unlock" for call in api.calls))
+
 if __name__ == "__main__":
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(ReportingValidationTests)
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     raise SystemExit(0 if result.wasSuccessful() else 1)
+
+
+
+
+
+
+
+

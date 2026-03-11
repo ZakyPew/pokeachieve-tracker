@@ -198,6 +198,7 @@ class PokeAchieveAPI:
         self._public_games_catalog_unsupported = False
         self._achievement_catalog_cache: Dict[int, List[dict]] = {}
         self._achievement_catalog_unavailable_games: Set[int] = set()
+        self._unlock_not_found_cache: Set[Tuple[int, str]] = set()
 
     def _make_url(self, endpoint: str) -> str:
         if endpoint.startswith("http://") or endpoint.startswith("https://"):
@@ -443,15 +444,27 @@ class PokeAchieveAPI:
             return True, self._extract_unlocked_ids(legacy_data, game_id)
 
         return False, []
-    
+
     def post_unlock(self, game_id: int, achievement_id: str, achievement_name: Optional[str] = None) -> tuple[bool, dict]:
         """Post achievement unlock to platform."""
+        achievement_key = str(achievement_id).strip()
+        cache_key = (int(game_id), achievement_key)
+        if cache_key in self._unlock_not_found_cache:
+            return True, {
+                "skipped": True,
+                "reason": "achievement_not_found_cached",
+                "status": 404,
+                "error": "Achievement not found on platform (cached)",
+            }
+
         resolved_initial = None
         if achievement_name:
             resolved_initial = self._resolve_achievement_id(game_id, achievement_name, achievement_id)
 
         catalog_known = bool(self._achievement_catalog_cache.get(game_id))
+        catalog_unavailable = int(game_id) in self._achievement_catalog_unavailable_games and not catalog_known
         if achievement_name and resolved_initial is None and catalog_known:
+            self._unlock_not_found_cache.add(cache_key)
             return True, {
                 "skipped": True,
                 "reason": "achievement_not_mapped",
@@ -459,13 +472,39 @@ class PokeAchieveAPI:
                 "error": "Achievement not mapped to platform catalog",
             }
 
+        # If the public catalog is unavailable and we cannot resolve IDs with this auth mode,
+        # skip noisy unlock POSTs for achievements that likely don't exist server-side.
+        if (
+            achievement_name
+            and resolved_initial is None
+            and catalog_unavailable
+            and (bool(self.api_key) or self._tracker_user_achievements_forbidden)
+        ):
+            self._unlock_not_found_cache.add(cache_key)
+            return True, {
+                "skipped": True,
+                "reason": "achievement_not_mapped_catalog_unavailable",
+                "status": 404,
+                "error": "Achievement mapping unavailable for this API mode",
+            }
+
         primary_id = str(resolved_initial) if resolved_initial is not None else str(achievement_id)
         attempted_ids = set()
 
         def _post_with_id(candidate_id: str) -> tuple[bool, dict]:
+            candidate_text = str(candidate_id).strip()
+            candidate_cache_key = (int(game_id), candidate_text)
+            if candidate_cache_key in self._unlock_not_found_cache:
+                return True, {
+                    "skipped": True,
+                    "reason": "achievement_not_found_cached",
+                    "status": 404,
+                    "error": "Achievement not found on platform (cached)",
+                }
+
             payload = {
                 "game_id": game_id,
-                "achievement_id": str(candidate_id),
+                "achievement_id": candidate_text,
                 "unlocked_at": datetime.now().isoformat(),
             }
             return self._request("POST", "/api/tracker/unlock", payload)
@@ -501,6 +540,9 @@ class PokeAchieveAPI:
 
         # The local tracker may include custom achievements not present on the platform.
         if status == 404 and "achievement not found" in error_text:
+            self._unlock_not_found_cache.add(cache_key)
+            for attempted in attempted_ids:
+                self._unlock_not_found_cache.add((int(game_id), str(attempted).strip()))
             return True, {
                 "skipped": True,
                 "reason": "achievement_not_found",
@@ -519,7 +561,7 @@ class PokeAchieveAPI:
             "unlocked_at": datetime.now().isoformat()
         }
         return self._request("POST", "/progress/update", legacy_payload)
-    
+
     # Pokemon Collection API Methods
     def post_collection_batch(self, pokemon_list: List[Dict]) -> tuple[bool, dict]:
         """Post batch of Pokemon collection updates"""
@@ -1433,6 +1475,28 @@ class PokemonMemoryReader:
     GEN3_INTERNAL_NATIONAL_OFFSET_START = 277
     GEN3_INTERNAL_TO_NATIONAL_OFFSET = 25
     GEN3_UNOWN_NATIONAL_ID = 201
+    # Gen 1 (RBY) party bytes store internal species order, not National Dex IDs.
+    # Source: pret/pokered data/pokemon/dex_order.asm
+    GEN1_INTERNAL_TO_NATIONAL = {
+        1: 112, 2: 115, 3: 32, 4: 35, 5: 21, 6: 100, 7: 34, 8: 80, 9: 2, 10: 103,
+        11: 108, 12: 102, 13: 88, 14: 94, 15: 29, 16: 31, 17: 104, 18: 111, 19: 131,
+        20: 59, 21: 151, 22: 130, 23: 90, 24: 72, 25: 92, 26: 123, 27: 120, 28: 9,
+        29: 127, 30: 114, 33: 58, 34: 95, 35: 22, 36: 16, 37: 79, 38: 64, 39: 75,
+        40: 113, 41: 67, 42: 122, 43: 106, 44: 107, 45: 24, 46: 47, 47: 54, 48: 96,
+        49: 76, 51: 126, 53: 125, 54: 82, 55: 109, 57: 56, 58: 86, 59: 50, 60: 128,
+        64: 83, 65: 48, 66: 149, 70: 84, 71: 60, 72: 124, 73: 146, 74: 144, 75: 145,
+        76: 132, 77: 52, 78: 98, 82: 37, 83: 38, 84: 25, 85: 26, 88: 147, 89: 148,
+        90: 140, 91: 141, 92: 116, 93: 117, 96: 27, 97: 28, 98: 138, 99: 139,
+        100: 39, 101: 40, 102: 133, 103: 136, 104: 135, 105: 134, 106: 66, 107: 41,
+        108: 23, 109: 46, 110: 61, 111: 62, 112: 13, 113: 14, 114: 15, 116: 85,
+        117: 57, 118: 51, 119: 49, 120: 87, 123: 10, 124: 11, 125: 12, 126: 68,
+        128: 55, 129: 97, 130: 42, 131: 150, 132: 143, 133: 129, 136: 89, 138: 99,
+        139: 91, 141: 101, 142: 36, 143: 110, 144: 53, 145: 105, 147: 93, 148: 63,
+        149: 65, 150: 17, 151: 18, 152: 121, 153: 1, 154: 3, 155: 73, 157: 118,
+        158: 119, 163: 77, 164: 78, 165: 19, 166: 20, 167: 33, 168: 30, 169: 74,
+        170: 137, 171: 142, 173: 81, 176: 4, 177: 7, 178: 5, 179: 8, 180: 6,
+        185: 43, 186: 44, 187: 45, 188: 69, 189: 70, 190: 71,
+    }
     GEN3_NATURE_NAMES = [
         "Hardy", "Lonely", "Brave", "Adamant", "Naughty",
         "Bold", "Docile", "Relaxed", "Impish", "Lax",
@@ -1604,6 +1668,15 @@ class PokemonMemoryReader:
     def get_pokemon_name(self, pokemon_id: int) -> str:
         """Get Pokemon name from ID"""
         return self.POKEMON_NAMES.get(pokemon_id, f"Pokemon #{pokemon_id}")
+
+    def _resolve_gen1_species_id(self, raw_species_id: int) -> int:
+        """Convert Gen 1 internal species IDs to National Dex IDs when possible."""
+        try:
+            species_int = int(raw_species_id) & 0xFF
+        except (TypeError, ValueError):
+            return 0
+        mapped = self.GEN1_INTERNAL_TO_NATIONAL.get(species_int)
+        return int(mapped) if isinstance(mapped, int) and mapped > 0 else int(species_int)
 
     def get_last_party_read_meta(self) -> Dict[str, object]:
         """Return metadata from the most recent party read attempt."""
@@ -1941,6 +2014,16 @@ class PokemonMemoryReader:
             return "Unknown Move"
         return self._gen3_move_names.get(mid, f"Move #{mid}")
 
+    def _resolve_legacy_move_name(self, move_id: int) -> str:
+        """Resolve Gen 1/2 move IDs using shared move naming when available."""
+        try:
+            mid = int(move_id)
+        except (TypeError, ValueError):
+            return "Unknown Move"
+        if mid <= 0:
+            return "Unknown Move"
+        return self._gen3_move_names.get(mid, f"Move #{mid}")
+
     def _is_gen3_shiny(self, personality: int, ot_id: int) -> bool:
         """Determine Gen 3 shininess from PID and OTID."""
         shiny_value = self._gen3_shiny_value(personality, ot_id)
@@ -1972,6 +2055,31 @@ class PokemonMemoryReader:
         spc_dv = ss & 0xF
 
         return def_dv == 10 and spd_dv == 10 and spc_dv == 10 and atk_dv in {2, 3, 6, 7, 10, 11, 14, 15}
+
+    def _resolve_gen2_gender_from_dv(self, species_id: int, atk_def_byte: int) -> Optional[str]:
+        """Resolve Gen 2 gender from species gender ratio and Attack DV nibble."""
+        try:
+            sid = int(species_id)
+            ad = int(atk_def_byte) & 0xFF
+        except (TypeError, ValueError):
+            return None
+        if sid <= 0:
+            return None
+
+        gender_rate = self._gen3_gender_rates.get(int(sid))
+        if gender_rate is None:
+            return None
+        if int(gender_rate) < 0:
+            return "Genderless"
+        if int(gender_rate) <= 0:
+            return "Male"
+        if int(gender_rate) >= 8:
+            return "Female"
+
+        # Gen 2 compares Attack DV (0-15) against a species gender threshold.
+        atk_dv = (ad >> 4) & 0xF
+        threshold = int(gender_rate) * 2
+        return "Female" if atk_dv < threshold else "Male"
 
     def _decode_gen3_party_slot_details(self, slot_bytes: List[int], max_species_id: int, allow_checksum_mismatch: bool = False, species_hint_ids: Optional[Set[int]] = None) -> Optional[Dict[str, object]]:
         """Decode species + metadata from encrypted Gen 3 party slot data."""
@@ -3656,14 +3764,27 @@ class PokemonMemoryReader:
 
             species_id = self.retroarch.read_memory(slot_addr)
             slot_data = self.retroarch.read_memory(slot_addr, slot_size)
+            species_normalized = False
 
             level = None
             is_shiny = False
+            gender: Optional[str] = None
+            moves: List[str] = []
 
             if isinstance(slot_data, list) and len(slot_data) >= slot_size:
                 if all(isinstance(v, int) and 0 <= int(v) <= 0xFF for v in slot_data[:slot_size]):
                     slot_bytes = [int(v) & 0xFF for v in slot_data[:slot_size]]
                     species_id = int(slot_bytes[0])
+                    if int(gen) == 1:
+                        species_id = self._resolve_gen1_species_id(species_id)
+                        species_normalized = True
+
+                    move_slice_start = 2 if int(gen) == 2 else 8
+                    move_slice_end = move_slice_start + 4
+                    if len(slot_bytes) > move_slice_start:
+                        for move_id in slot_bytes[move_slice_start:move_slice_end]:
+                            if int(move_id) > 0:
+                                moves.append(self._resolve_legacy_move_name(int(move_id)))
 
                     if int(gen) == 2:
                         # GSC party struct: MON_LEVEL at 0x1F, MON_DVS at 0x15-0x16.
@@ -3673,6 +3794,8 @@ class PokemonMemoryReader:
                                 level = level_candidate
                         if len(slot_bytes) > 0x16:
                             is_shiny = self._is_gen2_shiny_from_dvs(slot_bytes[0x15], slot_bytes[0x16])
+                        if len(slot_bytes) > 0x15:
+                            gender = self._resolve_gen2_gender_from_dv(int(species_id), slot_bytes[0x15])
                     else:
                         level_candidate = int(slot_bytes[3]) if len(slot_bytes) > 3 else 0
                         if level_candidate > 0:
@@ -3685,11 +3808,17 @@ class PokemonMemoryReader:
                 species_id = int(species_id)
             except (TypeError, ValueError):
                 continue
+            if int(gen) == 1 and not species_normalized:
+                species_id = self._resolve_gen1_species_id(species_id)
             if species_id <= 0:
                 continue
 
+            max_species = int(config.get("max_pokemon", 0) or 0)
+            if max_species > 0 and species_id > max_species:
+                continue
+
             if level is None:
-                level_offset = 3
+                level_offset = 0x1F if int(gen) == 2 else 3
                 level_addr = hex(slot_addr_int + level_offset)
                 level_value = self.retroarch.read_memory(level_addr)
                 if isinstance(level_value, int) and int(level_value) > 0:
@@ -3702,6 +3831,10 @@ class PokemonMemoryReader:
             }
             if int(gen) >= 2:
                 member["shiny"] = bool(is_shiny)
+            if isinstance(gender, str) and gender.strip():
+                member["gender"] = gender.strip()
+            if moves:
+                member["moves"] = moves[:4]
 
             party.append(member)
 
@@ -5164,7 +5297,22 @@ class AchievementTracker:
         allow_live_party = self._collection_baseline_initialized and not retroarch_unstable and not starter_pending
         if allow_live_party:
             live_party = self._read_current_party()
-            if live_party or not self._last_party:
+            if (
+                not live_party
+                and self._current_generation() <= 2
+                and not self._last_party
+            ):
+                retry_party = self._read_current_party()
+                if retry_party:
+                    live_party = retry_party
+                    log_event(
+                        logging.INFO,
+                        "party_read_recovered_after_retry",
+                        game=self.game_name,
+                        generation=self._current_generation(),
+                        retry_attempts=2,
+                    )
+            if live_party:
                 current_party = live_party
                 self._party_skip_streak = 0
             else:
@@ -5195,6 +5343,53 @@ class AchievementTracker:
         # First read(s) after game load/start establish a stable baseline.
         if not self._collection_baseline_initialized:
             baseline_confirmations = max(1, int(self._get_validation_profile().get("collection_baseline_confirmations", 2)))
+            baseline_party: List[Dict] = []
+            if not retroarch_unstable:
+                baseline_party = self._read_current_party()
+                if (
+                    not baseline_party
+                    and self._current_generation() <= 2
+                    and not starter_pending
+                ):
+                    retry_party = self._read_current_party()
+                    if retry_party:
+                        baseline_party = retry_party
+                        log_event(
+                            logging.INFO,
+                            "party_read_recovered_after_retry",
+                            game=self.game_name,
+                            generation=self._current_generation(),
+                            retry_attempts=2,
+                            context="baseline_probe",
+                        )
+            if baseline_party:
+                self._last_pokedex = []
+                self._last_party = list(baseline_party)
+                self._collection_baseline_initialized = True
+                self._collection_wait_streak = 0
+                self._baseline_snapshot_pending = False
+                self._baseline_snapshot_wait_polls = 0
+                self._collection_baseline_candidate = []
+                self._collection_baseline_candidate_streak = 0
+
+                log_event(
+                    logging.INFO,
+                    "collection_baseline_established",
+                    game=self.game_name,
+                    catches=0,
+                    party=len(baseline_party),
+                    party_sync_deferred=bool(current_pokedex),
+                    reason="party_detected_before_pokedex_baseline",
+                )
+
+                self._collection_queue.put({
+                    "catches": [],
+                    "party": baseline_party,
+                    "previous_party": [],
+                    "game": self.game_name,
+                    "catch_event_type": "caught",
+                })
+                return
 
             if not current_pokedex:
                 self._collection_wait_streak += 1
@@ -5215,36 +5410,10 @@ class AchievementTracker:
                 if starter_pending:
                     return
 
-                if not retroarch_unstable:
-                    baseline_party = self._read_current_party()
-                    if baseline_party:
-                        self._last_pokedex = []
-                        self._last_party = list(baseline_party)
-                        self._collection_baseline_initialized = True
-                        self._collection_wait_streak = 0
-                        self._baseline_snapshot_pending = False
-                        self._baseline_snapshot_wait_polls = 0
-
-                        log_event(
-                            logging.INFO,
-                            "collection_baseline_established",
-                            game=self.game_name,
-                            catches=0,
-                            party=len(baseline_party),
-                            party_sync_deferred=False,
-                            reason="party_detected_without_pokedex",
-                        )
-
-                        self._collection_queue.put({
-                            "catches": [],
-                            "party": baseline_party,
-                            "previous_party": [],
-                            "game": self.game_name,
-                            "catch_event_type": "caught",
-                        })
-                        return
-
                 empty_wait_polls = max(2, int(self._get_validation_profile().get("collection_empty_baseline_wait_polls", 10)))
+                # Gen1/2 party data can arrive before stable dex bits; don't stall startup on long empty waits.
+                if self._current_generation() <= 2 and not starter_pending:
+                    empty_wait_polls = min(empty_wait_polls, 2)
                 if self._collection_wait_streak >= empty_wait_polls:
                     timeout_party: List[Dict] = []
                     if not retroarch_unstable:
@@ -5422,6 +5591,30 @@ class AchievementTracker:
 
         # Guard against bad memory reads causing impossible bulk catch spikes.
         if len(new_catches) > profile["max_new_catches_per_poll"]:
+            # If we previously timed out on an empty baseline, accept the first stable
+            # non-empty snapshot even when we're outside the startup poll window.
+            confirmed_first_nonempty_snapshot = (not self._last_pokedex) and bool(effective_pokedex)
+            if confirmed_first_nonempty_snapshot:
+                log_event(
+                    logging.INFO,
+                    "collection_baseline_reset",
+                    game=self.game_name,
+                    baseline=0,
+                    observed=len(effective_pokedex),
+                    reason="first_nonempty_confirmed",
+                )
+                self._collection_queue.put({
+                    "catches": list(effective_pokedex),
+                    "previous_party": list(self._last_party),
+                    "party": current_party,
+                    "game": self.game_name,
+                    "catch_event_type": "caught",
+                })
+                self._last_pokedex = list(effective_pokedex)
+                self._last_party = list(current_party)
+                self._bad_read_streak = 0
+                return
+
             startup_window_polls = max(1, int(profile.get("startup_snapshot_window_polls", 30)))
             within_startup_window = self._achievement_poll_count <= startup_window_polls
             likely_startup_snapshot = within_startup_window and len(effective_pokedex) >= max(20, len(self._last_pokedex) + (profile["max_new_catches_per_poll"] * 3))
@@ -5484,7 +5677,8 @@ class AchievementTracker:
         # Find party changes (including slot/order changes and duplicate species).
         party_read_meta = self.pokemon_reader.get_last_party_read_meta() if self.pokemon_reader else {}
         party_changed = current_party != self._last_party
-        drop_pending_set = False
+        party_pending_confirmation = False
+        is_legacy_party = self._current_generation() <= 2
 
         def _party_signature(party_members: List[Dict]) -> tuple:
             signature_rows = []
@@ -5513,11 +5707,18 @@ class AchievementTracker:
                 current_count < previous_count
                 and incomplete_read
             )
+            should_confirm_legacy_change = (
+                is_legacy_party
+                and not baseline_snapshot_queued
+                and previous_count > 0
+                and not should_confirm_drop
+            )
 
             if should_confirm_drop:
                 pending = self._pending_party_change or {}
                 is_same_candidate = (
-                    pending.get("signature") == candidate_signature
+                    pending.get("mode") == "drop"
+                    and pending.get("signature") == candidate_signature
                     and int(pending.get("previous_count", -1)) == int(previous_count)
                 )
                 if is_same_candidate:
@@ -5533,15 +5734,55 @@ class AchievementTracker:
                     )
                 else:
                     self._pending_party_change = {
+                        "mode": "drop",
                         "signature": candidate_signature,
                         "previous_count": int(previous_count),
                     }
-                    drop_pending_set = True
+                    party_pending_confirmation = True
                     log_event(
                         logging.INFO,
                         "party_read_skipped",
                         game=self.game_name,
                         reason="party_drop_pending_confirmation",
+                        previous_count=previous_count,
+                        current_count=current_count,
+                        expected_count=expected_count,
+                        decoded_count=decoded_count,
+                    )
+                    party_changed = False
+                    current_party = list(self._last_party)
+            elif should_confirm_legacy_change:
+                pending = self._pending_party_change or {}
+                is_same_candidate = (
+                    pending.get("mode") == "legacy_churn"
+                    and pending.get("signature") == candidate_signature
+                    and int(pending.get("previous_count", -1)) == int(previous_count)
+                    and int(pending.get("current_count", -1)) == int(current_count)
+                )
+                if is_same_candidate:
+                    self._pending_party_change = None
+                    log_event(
+                        logging.INFO,
+                        "party_change_confirmed_after_retry",
+                        game=self.game_name,
+                        previous_count=previous_count,
+                        current_count=current_count,
+                        expected_count=expected_count,
+                        decoded_count=decoded_count,
+                    )
+                else:
+                    self._pending_party_change = {
+                        "mode": "legacy_churn",
+                        "signature": candidate_signature,
+                        "previous_count": int(previous_count),
+                        "current_count": int(current_count),
+                    }
+                    party_pending_confirmation = True
+                    log_event(
+                        logging.INFO,
+                        "party_read_skipped",
+                        game=self.game_name,
+                        reason="party_change_pending_confirmation",
                         previous_count=previous_count,
                         current_count=current_count,
                         expected_count=expected_count,
@@ -5595,9 +5836,8 @@ class AchievementTracker:
                             log_fields[key] = value
                     log_event(logging.INFO, "party_slot", **log_fields)
         else:
-            if not drop_pending_set and current_party == self._last_party:
+            if not party_pending_confirmation and current_party == self._last_party:
                 self._pending_party_change = None
-
         # Queue updates if there are changes.
         if (new_catches or party_changed) and not baseline_snapshot_queued:
             self._collection_queue.put({
@@ -9943,6 +10183,10 @@ class PokeAchieveGUI:
         self._party_display_last_party = [dict(member) for member in party if isinstance(member, dict)]
         self._party_display_last_game = game or ""
 
+        family = self._get_party_game_family(self._party_display_last_game)
+        show_gen3_details = str(family).startswith("gen3")
+        show_gender_badges = str(family) != "gen1"
+
         by_slot: Dict[int, Dict] = {}
         for member in party:
             if not isinstance(member, dict):
@@ -10006,20 +10250,26 @@ class PokeAchieveGUI:
             gender = member.get("gender") if isinstance(member.get("gender"), str) and member.get("gender").strip() else "Unknown"
             ability = member.get("ability") if isinstance(member.get("ability"), str) and member.get("ability").strip() else "Unknown"
             nature = member.get("nature") if isinstance(member.get("nature"), str) and member.get("nature").strip() else "Unknown"
+            if not show_gen3_details:
+                ability = ""
+                nature = ""
             is_shiny = bool(member.get("shiny", False))
 
             if isinstance(title_label, ttk.Label):
                 title_label.configure(text=f"Lv.{level_text} {name}")
 
             if isinstance(gender_label, ttk.Label):
-                badge_image = self._request_party_gender_badge(gender, game)
-                if badge_image is not None:
-                    gender_label.configure(image=badge_image, text="")
-                    setattr(gender_label, "image", badge_image)
-                else:
+                if not show_gender_badges:
                     gender_label.configure(image="", text="")
                     setattr(gender_label, "image", None)
-
+                else:
+                    badge_image = self._request_party_gender_badge(gender, game)
+                    if badge_image is not None:
+                        gender_label.configure(image=badge_image, text="")
+                        setattr(gender_label, "image", badge_image)
+                    else:
+                        gender_label.configure(image="", text="")
+                        setattr(gender_label, "image", None)
             if isinstance(shiny_label, ttk.Label):
                 if is_shiny:
                     shiny_badge = self._request_party_shiny_badge(game)
@@ -10082,7 +10332,10 @@ class PokeAchieveGUI:
                     setattr(type_label, "image", None)
 
             if isinstance(details_label, ttk.Label):
-                details_label.configure(text=f"Ability: {ability}\nNature: {nature}")
+                if show_gen3_details:
+                    details_label.configure(text=f"Ability: {ability}\nNature: {nature}")
+                else:
+                    details_label.configure(text="")
 
             moves: List[str] = []
             raw_moves = member.get("moves")
@@ -10341,6 +10594,16 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+
+
+
+
+
+
+
 
 
 
