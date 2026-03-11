@@ -63,7 +63,160 @@ def log_event(log_level: int, event: str, **fields):
 
 
 
-def _format_party_slot_line(member: Dict[str, object], *, debug_style: bool, name_resolver: Optional[Callable[[int], str]] = None) -> Optional[str]:
+
+_LEGACY_ITEM_MAPPINGS_CACHE: Optional[Dict[str, Dict[int, Dict[str, object]]]] = None
+_LEGACY_ITEM_MAPPINGS_LOCK = threading.Lock()
+
+
+def _party_game_variant_from_name(game_name: str) -> str:
+    if not isinstance(game_name, str):
+        return "default"
+    lowered = game_name.lower()
+
+    if "firered" in lowered or "fire red" in lowered or "leafgreen" in lowered or "leaf green" in lowered:
+        return "firered-leafgreen"
+    if "emerald" in lowered:
+        return "emerald"
+    if "ruby" in lowered or "sapphire" in lowered:
+        return "ruby-sapphire"
+    if "crystal" in lowered:
+        return "crystal"
+    if "gold" in lowered:
+        return "gold"
+    if "silver" in lowered:
+        return "silver"
+    if "yellow" in lowered:
+        return "yellow"
+    if "red" in lowered or "blue" in lowered:
+        return "red-blue"
+    return "default"
+
+
+def _load_legacy_item_mappings() -> Dict[str, Dict[int, Dict[str, object]]]:
+    global _LEGACY_ITEM_MAPPINGS_CACHE
+    if _LEGACY_ITEM_MAPPINGS_CACHE is not None:
+        return _LEGACY_ITEM_MAPPINGS_CACHE
+
+    with _LEGACY_ITEM_MAPPINGS_LOCK:
+        if _LEGACY_ITEM_MAPPINGS_CACHE is not None:
+            return _LEGACY_ITEM_MAPPINGS_CACHE
+
+        normalized: Dict[str, Dict[int, Dict[str, object]]] = {}
+        mapping_path = Path(__file__).resolve().parent / "legacy_item_mappings.json"
+        try:
+            payload = json.loads(mapping_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            log_event(logging.WARNING, "legacy_item_mappings_unavailable", path=str(mapping_path), error=str(exc))
+            _LEGACY_ITEM_MAPPINGS_CACHE = normalized
+            return normalized
+
+        raw_maps = payload.get("maps") if isinstance(payload, dict) else None
+        if isinstance(raw_maps, dict):
+            for raw_variant, raw_variant_map in raw_maps.items():
+                if not isinstance(raw_variant_map, dict):
+                    continue
+                variant = str(raw_variant).strip().lower()
+                if not variant:
+                    continue
+                normalized_variant: Dict[int, Dict[str, object]] = {}
+                for raw_id, raw_entry in raw_variant_map.items():
+                    try:
+                        item_game_id = int(raw_id)
+                    except (TypeError, ValueError):
+                        continue
+                    if item_game_id <= 0 or not isinstance(raw_entry, dict):
+                        continue
+                    try:
+                        canonical_item_id = int(raw_entry.get("item_id", 0) or 0)
+                    except (TypeError, ValueError):
+                        canonical_item_id = 0
+                    if canonical_item_id <= 0:
+                        continue
+
+                    entry_name = raw_entry.get("name")
+                    item_name = str(entry_name).strip() if isinstance(entry_name, str) and str(entry_name).strip() else f"Item #{canonical_item_id}"
+                    entry_identifier = raw_entry.get("identifier")
+                    item_identifier = str(entry_identifier).strip().lower() if isinstance(entry_identifier, str) and str(entry_identifier).strip() else ""
+                    normalized_variant[item_game_id] = {
+                        "item_id": canonical_item_id,
+                        "name": item_name,
+                        "identifier": item_identifier,
+                    }
+                normalized[variant] = normalized_variant
+
+        _LEGACY_ITEM_MAPPINGS_CACHE = normalized
+        return normalized
+
+
+def _resolve_canonical_held_item(
+    game_name: str,
+    raw_item_id: int,
+    *,
+    gen_hint: Optional[int] = None,
+) -> Dict[str, object]:
+    try:
+        raw_id = int(raw_item_id)
+    except (TypeError, ValueError):
+        raw_id = 0
+    if raw_id <= 0:
+        return {
+            "variant": _party_game_variant_from_name(game_name),
+            "raw_item_id": 0,
+            "canonical_item_id": 0,
+            "name": "",
+            "identifier": "",
+            "source": "empty",
+        }
+
+    if isinstance(gen_hint, int) and gen_hint <= 1:
+        return {
+            "variant": _party_game_variant_from_name(game_name),
+            "raw_item_id": raw_id,
+            "canonical_item_id": 0,
+            "name": "",
+            "identifier": "",
+            "source": "gen1_no_items",
+        }
+
+    variant = _party_game_variant_from_name(game_name)
+    mappings = _load_legacy_item_mappings()
+    variant_map = mappings.get(variant, {})
+    entry = variant_map.get(raw_id) if isinstance(variant_map, dict) else None
+
+    if isinstance(entry, dict):
+        try:
+            canonical_item_id = int(entry.get("item_id", 0) or 0)
+        except (TypeError, ValueError):
+            canonical_item_id = 0
+        item_name = entry.get("name")
+        item_identifier = entry.get("identifier")
+        if canonical_item_id > 0:
+            return {
+                "variant": variant,
+                "raw_item_id": raw_id,
+                "canonical_item_id": canonical_item_id,
+                "name": str(item_name).strip() if isinstance(item_name, str) and str(item_name).strip() else f"Item #{canonical_item_id}",
+                "identifier": str(item_identifier).strip().lower() if isinstance(item_identifier, str) and str(item_identifier).strip() else "",
+                "source": "variant_map",
+            }
+
+    return {
+        "variant": variant,
+        "raw_item_id": raw_id,
+        "canonical_item_id": raw_id,
+        "name": f"Item #{raw_id}",
+        "identifier": "",
+        "source": "fallback_raw_id",
+    }
+
+
+def _format_party_slot_line(
+    member: Dict[str, object],
+    *,
+    debug_style: bool,
+    name_resolver: Optional[Callable[[int], str]] = None,
+    include_held_item: bool = False,
+) -> Optional[str]:
     """Render a party slot line for debug/tracker logs with optional metadata."""
     if not isinstance(member, dict):
         return None
@@ -90,6 +243,17 @@ def _format_party_slot_line(member: Dict[str, object], *, debug_style: bool, nam
                 name = None
     if not isinstance(name, str) or not name.strip():
         name = f"Pokemon #{pokemon_id}" if pokemon_id > 0 else "Unknown"
+    name = name.strip()
+
+    nickname = member.get("nickname")
+    nickname_text = nickname.strip() if isinstance(nickname, str) and nickname.strip() else ""
+
+    def _normalize_name(value: str) -> str:
+        return re.sub(r"[^A-Za-z0-9]+", "", str(value or "")).upper()
+
+    display_name = name
+    if nickname_text and _normalize_name(nickname_text) != _normalize_name(name):
+        display_name = f"{nickname_text} ({name})"
 
     level_int = None
     level_value = member.get("level")
@@ -101,13 +265,13 @@ def _format_party_slot_line(member: Dict[str, object], *, debug_style: bool, nam
         level_int = None
 
     if debug_style:
-        base = f"Party Slot {slot}: {name}"
+        base = f"Party Slot {slot}: {display_name}"
         if level_int is not None:
-            base = f"Party Slot {slot}: {name}, Lv.{level_int}"
+            base = f"Party Slot {slot}: {display_name}, Lv.{level_int}"
     else:
-        base = f"SLOT {slot}: {name}"
+        base = f"SLOT {slot}: {display_name}"
         if level_int is not None:
-            base = f"SLOT {slot}: Lv.{level_int} {name}"
+            base = f"SLOT {slot}: Lv.{level_int} {display_name}"
 
     details: List[str] = []
     details.append("Shiny" if bool(member.get("shiny")) else "Normal")
@@ -115,6 +279,17 @@ def _format_party_slot_line(member: Dict[str, object], *, debug_style: bool, nam
         value = member.get(key)
         if isinstance(value, str) and value.strip():
             details.append(f"{label}: {value.strip()}")
+
+    if include_held_item:
+        held_item_name = member.get("held_item_name") if isinstance(member.get("held_item_name"), str) and member.get("held_item_name").strip() else ""
+        try:
+            held_item_id = int(member.get("held_item_id", 0))
+        except (TypeError, ValueError):
+            held_item_id = 0
+        if held_item_id > 0:
+            details.append(f"Held Item: {held_item_name or f'Item #{held_item_id}'}")
+        elif "held_item_id" in member:
+            details.append("Held Item: None")
 
     moves = member.get("moves")
     if isinstance(moves, list):
@@ -125,7 +300,6 @@ def _format_party_slot_line(member: Dict[str, object], *, debug_style: bool, nam
     if details:
         base = f"{base} / {' / '.join(details)}"
     return base
-
 # Import game configuration system
 sys.path.insert(0, str(Path(__file__).parent.parent))
 try:
@@ -1497,6 +1671,28 @@ class PokemonMemoryReader:
         170: 137, 171: 142, 173: 81, 176: 4, 177: 7, 178: 5, 179: 8, 180: 6,
         185: 43, 186: 44, 187: 45, 188: 69, 189: 70, 190: 71,
     }
+    GEN3_TEXT_TERMINATOR = 0xFF
+    GEN3_TEXT_CHARMAP: Dict[int, str] = {
+        **{0xA1 + idx: ch for idx, ch in enumerate("0123456789")},
+        **{0xBB + idx: ch for idx, ch in enumerate("ABCDEFGHIJKLMNOPQRSTUVWXYZ")},
+        **{0xD5 + idx: ch for idx, ch in enumerate("abcdefghijklmnopqrstuvwxyz")},
+        0x00: " ",
+        0xAB: "!",
+        0xAC: "?",
+        0xAD: ".",
+        0xAE: "-",
+        0xB0: "...",
+        0xB1: '"',
+        0xB2: "'",
+        0xB3: "?",
+        0xB4: "?",
+        0xB5: "$",
+        0xB6: ":",
+        0xB7: ";",
+        0xB8: ",",
+        0xB9: "/",
+        0xBA: " ",
+    }
     GEN3_NATURE_NAMES = [
         "Hardy", "Lonely", "Brave", "Adamant", "Naughty",
         "Bold", "Docile", "Relaxed", "Impish", "Lax",
@@ -1668,6 +1864,47 @@ class PokemonMemoryReader:
     def get_pokemon_name(self, pokemon_id: int) -> str:
         """Get Pokemon name from ID"""
         return self.POKEMON_NAMES.get(pokemon_id, f"Pokemon #{pokemon_id}")
+
+    @staticmethod
+    def _normalize_comparable_name(value: object) -> str:
+        """Normalize names for nickname/species comparisons."""
+        return re.sub(r"[^A-Za-z0-9]+", "", str(value or "")).upper()
+
+    def _decode_gen3_text(self, raw_bytes: object) -> str:
+        """Decode Gen 3 text bytes using a conservative character map."""
+        if not isinstance(raw_bytes, (list, tuple, bytes, bytearray)):
+            return ""
+
+        rendered: List[str] = []
+        for raw_value in raw_bytes:
+            try:
+                byte_value = int(raw_value) & 0xFF
+            except (TypeError, ValueError):
+                continue
+            if byte_value == int(self.GEN3_TEXT_TERMINATOR):
+                break
+            if byte_value == 0xFE:
+                rendered.append(" ")
+                continue
+            mapped = self.GEN3_TEXT_CHARMAP.get(byte_value)
+            if isinstance(mapped, str):
+                rendered.append(mapped)
+            elif 32 <= byte_value <= 126:
+                rendered.append(chr(byte_value))
+            else:
+                rendered.append("?")
+
+        text = "".join(rendered).replace("\x00", "").strip()
+        return re.sub(r"\s+", " ", text)
+
+    def _resolve_gen3_nickname(self, raw_nickname_bytes: object, species_name: str) -> Optional[str]:
+        """Return a custom nickname when it differs from species name."""
+        nickname = self._decode_gen3_text(raw_nickname_bytes)
+        if not nickname:
+            return None
+        if self._normalize_comparable_name(nickname) == self._normalize_comparable_name(species_name):
+            return None
+        return nickname
 
     def _resolve_gen1_species_id(self, raw_species_id: int) -> int:
         """Convert Gen 1 internal species IDs to National Dex IDs when possible."""
@@ -2188,6 +2425,9 @@ class PokemonMemoryReader:
                 if normalized_species is None or normalized_species <= 0 or normalized_species > int(max_national_species):
                     return None
 
+                species_name = self.get_pokemon_name(int(normalized_species))
+                nickname = self._resolve_gen3_nickname(candidate_bytes[8:18], species_name)
+
                 level = int(candidate_bytes[84]) if len(candidate_bytes) > 84 else 0
                 level_value: Optional[int] = None
                 if 0 < level <= 100:
@@ -2282,11 +2522,15 @@ class PokemonMemoryReader:
                 return {
                     "species": int(species_internal),
                     "normalized_species": int(normalized_species),
+                    "name": species_name,
+                    "nickname": nickname,
                     "level": level_value,
                     "gender": gender_name,
                     "nature": nature_name,
                     "ability": ability_name,
                     "moves": move_names[:4],
+                    "held_item_id": int(held_item_id),
+                    "held_item_name": f"Item #{int(held_item_id)}" if int(held_item_id) > 0 else None,
                     "shiny": bool(is_shiny),
                     "is_egg": bool(is_egg),
                     "_score": int(plausibility),
@@ -2294,7 +2538,6 @@ class PokemonMemoryReader:
                     "_ot_id": int(ot_id),
                     "_shiny_xor": int(shiny_xor),
                 }
-
             best_details: Optional[Dict[str, object]] = None
             best_score_key: Optional[Tuple[int, int]] = None
             for order_idx, order_tuple in enumerate(order_candidates):
@@ -2786,6 +3029,8 @@ class PokemonMemoryReader:
                 enable_offset_scan = False
                 try_double_bulk = False
             skip_zero_count = bool(config.get("party_skip_scan_on_zero_count", 1 if used_pointer_layout else 0))
+            allow_count_underread_probe = bool(config.get("party_probe_full_on_low_count", 1))
+            log_budget_hit_on_complete = bool(config.get("party_log_budget_hit_on_complete", 0))
             try:
                 party_decode_budget_ms = max(200, int(config.get("party_decode_budget_ms", 1200)))
                 if pointer_static_preferred:
@@ -2932,9 +3177,8 @@ class PokemonMemoryReader:
             best_start_addr = ordered_pairs[0][1]
             best_stride = int(slot_size)
             best_expected_count = int(count) if count_valid else None
-            best_score: Tuple[int, ...] = (
-                -1, -1, -10**9, -10**9, -1, -1, -1, -1, -10**9, -10**9, -10**9, -10**9, -10**9, -10**9, -10**9
-            )
+            best_score: Tuple[int, ...] = tuple([-10**9] * 16)
+            best_count_underread_recovered = False
             perfect_candidate_found = False
 
 
@@ -2997,10 +3241,39 @@ class PokemonMemoryReader:
                         except (TypeError, ValueError):
                             detail_norm = 0
                         if detail_norm in (0, int(normalized_species)):
+                            detail_name = resolved_details.get("name")
+                            if isinstance(detail_name, str) and detail_name.strip():
+                                member["name"] = detail_name.strip()
+
+                            detail_nickname = resolved_details.get("nickname")
+                            if isinstance(detail_nickname, str) and detail_nickname.strip():
+                                member["nickname"] = detail_nickname.strip()
+
                             for key in ("gender", "nature", "ability"):
                                 value = resolved_details.get(key)
                                 if isinstance(value, str) and value.strip():
                                     member[key] = value.strip()
+
+                            try:
+                                held_item_id = int(resolved_details.get("held_item_id", 0) or 0)
+                            except (TypeError, ValueError):
+                                held_item_id = 0
+                            held_item_lookup = _resolve_canonical_held_item(game_name, held_item_id, gen_hint=3)
+                            member["held_item_id"] = max(0, int(held_item_lookup.get("raw_item_id", 0) or 0))
+                            if int(member.get("held_item_id", 0)) > 0:
+                                try:
+                                    canonical_item_id = int(held_item_lookup.get("canonical_item_id", 0) or 0)
+                                except (TypeError, ValueError):
+                                    canonical_item_id = 0
+                                if canonical_item_id > 0:
+                                    member["held_item_canonical_id"] = canonical_item_id
+                                held_item_name = held_item_lookup.get("name")
+                                if isinstance(held_item_name, str) and held_item_name.strip():
+                                    member["held_item_name"] = held_item_name.strip()
+                                held_item_identifier = held_item_lookup.get("identifier")
+                                if isinstance(held_item_identifier, str) and held_item_identifier.strip():
+                                    member["held_item_identifier"] = held_item_identifier.strip().lower()
+
                             member["shiny"] = bool(resolved_details.get("shiny", False))
                             member["is_egg"] = bool(resolved_details.get("is_egg", False))
                             moves = resolved_details.get("moves")
@@ -3260,27 +3533,49 @@ class PokemonMemoryReader:
                 local_count = _read_count_candidate(count_candidate)
                 local_count_valid = isinstance(local_count, int) and 0 <= int(local_count) <= 6
 
+                slots_to_scan_candidates: List[int] = []
                 if ignore_party_count:
                     if local_count_valid and int(local_count) == 0:
-                        slots_to_scan = 0
+                        slots_to_scan_candidates.append(0)
                     else:
-                        slots_to_scan = 6
+                        slots_to_scan_candidates.append(6)
                 else:
                     if local_count_valid:
                         if int(local_count) > 0:
-                            slots_to_scan = int(local_count)
+                            slots_to_scan_candidates.append(int(local_count))
+                            # Some cores transiently under-read the party count (e.g. 5 instead of 6)
+                            # during startup. Probe full-party once so we can recover immediately.
+                            if allow_count_underread_probe and int(local_count) == 5:
+                                slots_to_scan_candidates.append(6)
                         elif skip_zero_count:
-                            slots_to_scan = int(hinted_slot_count) if hinted_slot_count is not None and int(hinted_slot_count) > 0 else 0
+                            slots_to_scan_candidates.append(
+                                int(hinted_slot_count)
+                                if hinted_slot_count is not None and int(hinted_slot_count) > 0
+                                else 0
+                            )
                         else:
-                            slots_to_scan = 6
+                            slots_to_scan_candidates.append(6)
                     elif hinted_slot_count is not None and int(hinted_slot_count) > 0:
                         # After starter selection, a tiny caught set (often size 1) is a useful
                         # lower-bound hint even when party_count is transiently unreadable.
-                        slots_to_scan = int(hinted_slot_count)
+                        slots_to_scan_candidates.append(int(hinted_slot_count))
                     else:
-                        slots_to_scan = 6
+                        slots_to_scan_candidates.append(6)
 
-                if int(slots_to_scan) <= 0:
+                ordered_slot_counts: List[int] = []
+                seen_slot_counts = set()
+                for candidate_slot_count in slots_to_scan_candidates:
+                    try:
+                        normalized_slot_count = int(candidate_slot_count)
+                    except (TypeError, ValueError):
+                        continue
+                    normalized_slot_count = max(0, min(6, normalized_slot_count))
+                    if normalized_slot_count in seen_slot_counts:
+                        continue
+                    seen_slot_counts.add(normalized_slot_count)
+                    ordered_slot_counts.append(normalized_slot_count)
+
+                if not ordered_slot_counts:
                     continue
 
                 try:
@@ -3324,115 +3619,143 @@ class PokemonMemoryReader:
                     seen_strides.add(int(stride))
                     ordered_strides.append(int(stride))
 
-                for base in ordered_bases:
-                    if _decode_budget_exceeded():
-                        budget_exceeded = True
-                        break
-                    for slot_stride in ordered_strides:
+                for slots_to_scan in ordered_slot_counts:
+                    if int(slots_to_scan) <= 0:
+                        continue
+                    for base in ordered_bases:
                         if _decode_budget_exceeded():
                             budget_exceeded = True
                             break
-
-                        candidate_party, failures = _decode_party_candidate(base, slot_stride, int(slots_to_scan))
-
-                        slot_numbers = [
-                            int(member.get("slot", 0))
-                            for member in candidate_party
-                            if int(member.get("slot", 0)) > 0
-                        ]
-                        contiguous_prefix_len = 0
-                        for slot_number in slot_numbers:
-                            if slot_number == contiguous_prefix_len + 1:
-                                contiguous_prefix_len += 1
-                            else:
+                        for slot_stride in ordered_strides:
+                            if _decode_budget_exceeded():
+                                budget_exceeded = True
                                 break
 
-                        normalized_party = candidate_party[:contiguous_prefix_len]
-                        non_prefix_slots = max(0, len(slot_numbers) - contiguous_prefix_len)
-                        starts_at_one = 1 if slot_numbers and slot_numbers[0] == 1 else 0
-                        contiguous_only = 1 if slot_numbers and non_prefix_slots == 0 else 0
+                            candidate_party, failures = _decode_party_candidate(base, slot_stride, int(slots_to_scan))
 
-                        gap_penalty = 0
-                        first_slot = 99
-                        if slot_numbers:
-                            first_slot = slot_numbers[0]
-                            expected = list(range(first_slot, first_slot + len(slot_numbers)))
-                            gap_penalty = sum(1 for actual, exp in zip(slot_numbers, expected) if actual != exp)
+                            slot_numbers = [
+                                int(member.get("slot", 0))
+                                for member in candidate_party
+                                if int(member.get("slot", 0)) > 0
+                            ]
+                            contiguous_prefix_len = 0
+                            for slot_number in slot_numbers:
+                                if slot_number == contiguous_prefix_len + 1:
+                                    contiguous_prefix_len += 1
+                                else:
+                                    break
 
-                        count_bonus = 0
-                        count_exact = 0
-                        count_mismatch = 0
-                        if local_count_valid and int(local_count) > 0:
-                            count_bonus = 1
-                            count_mismatch = abs(contiguous_prefix_len - int(local_count))
-                            if contiguous_prefix_len == int(local_count):
-                                count_exact = 1
+                            normalized_party = candidate_party[:contiguous_prefix_len]
+                            non_prefix_slots = max(0, len(slot_numbers) - contiguous_prefix_len)
+                            starts_at_one = 1 if slot_numbers and slot_numbers[0] == 1 else 0
+                            contiguous_only = 1 if slot_numbers and non_prefix_slots == 0 else 0
 
-                        caught_overlap = contiguous_prefix_len
-                        caught_unknown = 0
-                        caught_bonus = 0
-                        if use_caught_plausibility and contiguous_prefix_len > 0:
-                            caught_bonus = 1
-                            caught_overlap = sum(
-                                1
-                                for member in normalized_party
-                                if int(member.get("id", 0)) in caught_ids_set
-                            )
-                            caught_unknown = max(0, contiguous_prefix_len - int(caught_overlap))
+                            gap_penalty = 0
+                            first_slot = 99
+                            if slot_numbers:
+                                first_slot = slot_numbers[0]
+                                expected = list(range(first_slot, first_slot + len(slot_numbers)))
+                                gap_penalty = sum(1 for actual, exp in zip(slot_numbers, expected) if actual != exp)
 
-                        base_penalty = abs(int(base) - int(start_base))
-                        stride_penalty = abs(int(slot_stride) - int(slot_size))
+                            count_bonus = 0
+                            count_exact = 0
+                            count_mismatch = 0
+                            if local_count_valid and int(local_count) > 0:
+                                count_bonus = 1
+                                count_mismatch = abs(contiguous_prefix_len - int(local_count))
+                                if contiguous_prefix_len == int(local_count):
+                                    count_exact = 1
 
-                        # Prefer a contiguous 1..N prefix, then count agreement and minimal fallback deviation.
-                        # When we have a stable caught list, also prefer party candidates that are actually caught.
-                        score = (
-                            count_exact,
-                            caught_bonus,
-                            caught_overlap,
-                            -caught_unknown,
-                            contiguous_prefix_len,
-                            contiguous_only,
-                            starts_at_one,
-                            count_bonus,
-                            -count_mismatch,
-                            -non_prefix_slots,
-                            -failures,
-                            -gap_penalty,
-                            -base_penalty,
-                            -stride_penalty,
-                            len(candidate_party),
-                        )
-
-                        if score > best_score:
-                            best_score = score
-                            best_base = base
-                            best_stride = int(slot_stride)
-                            best_party = normalized_party
-                            best_raw_party_len = len(candidate_party)
-                            best_raw_slots = slot_numbers
-                            best_count_addr = count_candidate
-                            best_start_addr = start_candidate
-                            best_expected_count = int(local_count) if local_count_valid else None
-
+                            count_underread_recovered = 0
                             if (
-                                count_exact == 1
+                                allow_count_underread_probe
+                                and local_count_valid
+                                and int(local_count) == 5
+                                and int(slots_to_scan) == 6
+                                and contiguous_prefix_len > int(local_count)
                                 and contiguous_only == 1
+                                and starts_at_one == 1
                                 and int(failures) == 0
-                                and int(base) == int(start_base)
-                                and int(slot_stride) == int(slot_size)
-                                and str(count_candidate) == str(primary_count_addr)
-                                and str(start_candidate) == str(primary_start_addr)
                             ):
-                                perfect_candidate_found = True
+                                count_underread_recovered = 1
 
-                        if perfect_candidate_found:
+                            caught_overlap = contiguous_prefix_len
+                            caught_unknown = 0
+                            caught_bonus = 0
+                            if use_caught_plausibility and contiguous_prefix_len > 0:
+                                caught_bonus = 1
+                                caught_overlap = sum(
+                                    1
+                                    for member in normalized_party
+                                    if int(member.get("id", 0)) in caught_ids_set
+                                )
+                                caught_unknown = max(0, contiguous_prefix_len - int(caught_overlap))
+
+                            base_penalty = abs(int(base) - int(start_base))
+                            stride_penalty = abs(int(slot_stride) - int(slot_size))
+
+                            # Prefer recovered full-party reads when count under-reads, then
+                            # contiguous 1..N with count agreement and minimal fallback deviation.
+                            # When we have a stable caught list, also prefer candidates that are caught.
+                            score = (
+                                count_underread_recovered,
+                                count_exact,
+                                caught_bonus,
+                                caught_overlap,
+                                -caught_unknown,
+                                contiguous_prefix_len,
+                                contiguous_only,
+                                starts_at_one,
+                                count_bonus,
+                                -count_mismatch,
+                                -non_prefix_slots,
+                                -failures,
+                                -gap_penalty,
+                                -base_penalty,
+                                -stride_penalty,
+                                len(candidate_party),
+                            )
+
+                            if score > best_score:
+                                best_score = score
+                                best_base = base
+                                best_stride = int(slot_stride)
+                                best_party = normalized_party
+                                best_raw_party_len = len(candidate_party)
+                                best_raw_slots = slot_numbers
+                                best_count_addr = count_candidate
+                                best_start_addr = start_candidate
+                                best_count_underread_recovered = bool(count_underread_recovered == 1)
+                                if best_count_underread_recovered:
+                                    best_expected_count = len(normalized_party)
+                                else:
+                                    best_expected_count = int(local_count) if local_count_valid else None
+
+                                underread_probe_pending = (
+                                    allow_count_underread_probe
+                                    and local_count_valid
+                                    and int(local_count) == 5
+                                    and int(slots_to_scan) == int(local_count)
+                                )
+                                if (
+                                    count_exact == 1
+                                    and contiguous_only == 1
+                                    and int(failures) == 0
+                                    and int(base) == int(start_base)
+                                    and int(slot_stride) == int(slot_size)
+                                    and str(count_candidate) == str(primary_count_addr)
+                                    and str(start_candidate) == str(primary_start_addr)
+                                    and not underread_probe_pending
+                                ):
+                                    perfect_candidate_found = True
+
+                            if perfect_candidate_found:
+                                break
+
+                        if budget_exceeded or perfect_candidate_found:
                             break
-
                     if budget_exceeded or perfect_candidate_found:
                         break
-                if budget_exceeded or perfect_candidate_found:
-                    break
-
                 if budget_exceeded or perfect_candidate_found:
                     break
             # If fallback search settled on a non-canonical stride/base with an incomplete decode,
@@ -3482,7 +3805,26 @@ class PokemonMemoryReader:
                             failures=int(canonical_failures),
                         )
 
-            if budget_exceeded:
+            budget_expected_int: Optional[int] = int(best_expected_count) if isinstance(best_expected_count, int) else None
+            budget_hit_incomplete = (
+                budget_expected_int is None
+                or int(budget_expected_int) <= 0
+                or len(best_party) < int(budget_expected_int)
+            )
+            budget_hit_degraded = (
+                best_raw_party_len > len(best_party)
+                or int(best_stride) != int(slot_size)
+            )
+            should_log_budget_hit = bool(
+                budget_exceeded
+                and (
+                    log_budget_hit_on_complete
+                    or budget_hit_incomplete
+                    or budget_hit_degraded
+                )
+            )
+
+            if should_log_budget_hit:
                 budget_key = f"{game_name}:{best_count_addr}:{best_start_addr}"
                 now = time.monotonic()
                 last_log = float(self._party_budget_hit_last_log.get(budget_key, 0.0))
@@ -3503,7 +3845,6 @@ class PokemonMemoryReader:
                     )
                 else:
                     self._party_budget_hit_suppressed[budget_key] = int(self._party_budget_hit_suppressed.get(budget_key, 0)) + 1
-
             interleaved_recovery_meta: Optional[Dict[str, object]] = None
             interleaved_recovery_miss_meta: Optional[Dict[str, object]] = None
             # Recover interleaved half-party candidates (e.g. Emerald 3/6 at stride 200).
@@ -3710,7 +4051,15 @@ class PokemonMemoryReader:
                     kept=len(best_party),
                     slots=best_raw_slots,
                 )
-
+            if selection_changed and best_count_underread_recovered:
+                log_event(
+                    logging.INFO,
+                    "gen3_party_count_underread_recovered",
+                    game=game_name,
+                    decoded=len(best_party),
+                    count_addr=best_count_addr,
+                    start_addr=best_start_addr,
+                )
             expected_count_value = int(best_expected_count) if isinstance(best_expected_count, int) and int(best_expected_count) >= 0 else None
             self._last_party_read_meta.update({
                 "expected_count": expected_count_value,
@@ -3768,6 +4117,7 @@ class PokemonMemoryReader:
 
             level = None
             is_shiny = False
+            held_item_id: Optional[int] = None
             gender: Optional[str] = None
             moves: List[str] = []
 
@@ -3778,6 +4128,10 @@ class PokemonMemoryReader:
                     if int(gen) == 1:
                         species_id = self._resolve_gen1_species_id(species_id)
                         species_normalized = True
+
+                    if int(gen) == 2 and len(slot_bytes) > 1:
+                        held_item_candidate = int(slot_bytes[1]) & 0xFF
+                        held_item_id = int(held_item_candidate) if held_item_candidate >= 0 else 0
 
                     move_slice_start = 2 if int(gen) == 2 else 8
                     move_slice_end = move_slice_start + 4
@@ -3831,6 +4185,22 @@ class PokemonMemoryReader:
             }
             if int(gen) >= 2:
                 member["shiny"] = bool(is_shiny)
+                raw_held_item_id = int(held_item_id) if isinstance(held_item_id, int) and int(held_item_id) >= 0 else 0
+                held_item_lookup = _resolve_canonical_held_item(game_name, raw_held_item_id, gen_hint=int(gen))
+                member["held_item_id"] = int(held_item_lookup.get("raw_item_id", 0) or 0)
+                if int(member["held_item_id"]) > 0:
+                    try:
+                        canonical_item_id = int(held_item_lookup.get("canonical_item_id", 0) or 0)
+                    except (TypeError, ValueError):
+                        canonical_item_id = 0
+                    if canonical_item_id > 0:
+                        member["held_item_canonical_id"] = canonical_item_id
+                    held_item_name = held_item_lookup.get("name")
+                    if isinstance(held_item_name, str) and held_item_name.strip():
+                        member["held_item_name"] = held_item_name.strip()
+                    held_item_identifier = held_item_lookup.get("identifier")
+                    if isinstance(held_item_identifier, str) and held_item_identifier.strip():
+                        member["held_item_identifier"] = held_item_identifier.strip().lower()
             if isinstance(gender, str) and gender.strip():
                 member["gender"] = gender.strip()
             if moves:
@@ -4586,6 +4956,34 @@ class AchievementTracker:
             if isinstance(raw_name, str) and raw_name.strip():
                 normalized_member["name"] = raw_name.strip()
 
+            raw_nickname = member.get("nickname")
+            if isinstance(raw_nickname, str) and raw_nickname.strip():
+                normalized_member["nickname"] = raw_nickname.strip()
+
+            raw_held_item_id = member.get("held_item_id")
+            if raw_held_item_id is not None:
+                try:
+                    normalized_member["held_item_id"] = max(0, int(raw_held_item_id))
+                except (TypeError, ValueError):
+                    normalized_member["held_item_id"] = 0
+
+            raw_canonical_held_item_id = member.get("held_item_canonical_id")
+            if raw_canonical_held_item_id is not None:
+                try:
+                    canonical_id = max(0, int(raw_canonical_held_item_id))
+                except (TypeError, ValueError):
+                    canonical_id = 0
+                if canonical_id > 0:
+                    normalized_member["held_item_canonical_id"] = canonical_id
+
+            raw_held_item_name = member.get("held_item_name")
+            if isinstance(raw_held_item_name, str) and raw_held_item_name.strip() and int(normalized_member.get("held_item_id", 0)) > 0:
+                normalized_member["held_item_name"] = raw_held_item_name.strip()
+
+            raw_held_item_identifier = member.get("held_item_identifier")
+            if isinstance(raw_held_item_identifier, str) and raw_held_item_identifier.strip() and int(normalized_member.get("held_item_id", 0)) > 0:
+                normalized_member["held_item_identifier"] = raw_held_item_identifier.strip().lower()
+
             for key in ("gender", "nature", "ability"):
                 value = member.get(key)
                 if isinstance(value, str) and value.strip():
@@ -4620,6 +5018,171 @@ class AchievementTracker:
 
         normalized_party.sort(key=lambda member: int(member.get("slot", 0)))
         return normalized_party
+
+    def _resolve_member_held_item(self, member: Dict[str, object]) -> Dict[str, object]:
+        if not isinstance(member, dict):
+            return {"raw_item_id": 0, "canonical_item_id": 0, "name": "", "identifier": "", "source": "invalid_member"}
+        try:
+            raw_item_id = int(member.get("held_item_id", 0) or 0)
+        except (TypeError, ValueError):
+            raw_item_id = 0
+        if raw_item_id <= 0:
+            return {"raw_item_id": 0, "canonical_item_id": 0, "name": "", "identifier": "", "source": "empty"}
+
+        try:
+            canonical_item_id = int(member.get("held_item_canonical_id", 0) or 0)
+        except (TypeError, ValueError):
+            canonical_item_id = 0
+
+        item_name = member.get("held_item_name") if isinstance(member.get("held_item_name"), str) else ""
+        item_name = item_name.strip() if isinstance(item_name, str) else ""
+        item_identifier = member.get("held_item_identifier") if isinstance(member.get("held_item_identifier"), str) else ""
+        item_identifier = item_identifier.strip().lower() if isinstance(item_identifier, str) else ""
+
+        gen_hint: Optional[int] = None
+        if self.pokemon_reader and isinstance(self.game_name, str) and self.game_name:
+            try:
+                config = self.pokemon_reader.get_game_config(self.game_name)
+                if isinstance(config, dict):
+                    gen_hint = int(config.get("gen", 0) or 0)
+            except (TypeError, ValueError):
+                gen_hint = None
+
+        if canonical_item_id <= 0 or not item_name:
+            resolved = _resolve_canonical_held_item(self.game_name, raw_item_id, gen_hint=gen_hint)
+            try:
+                resolved_canonical = int(resolved.get("canonical_item_id", 0) or 0)
+            except (TypeError, ValueError):
+                resolved_canonical = 0
+            if canonical_item_id <= 0 and resolved_canonical > 0:
+                canonical_item_id = resolved_canonical
+            if not item_name:
+                maybe_name = resolved.get("name")
+                if isinstance(maybe_name, str) and maybe_name.strip():
+                    item_name = maybe_name.strip()
+            if not item_identifier:
+                maybe_identifier = resolved.get("identifier")
+                if isinstance(maybe_identifier, str) and maybe_identifier.strip():
+                    item_identifier = maybe_identifier.strip().lower()
+
+        if canonical_item_id <= 0:
+            canonical_item_id = raw_item_id
+        if not item_name:
+            item_name = f"Item #{canonical_item_id}"
+
+        return {
+            "raw_item_id": int(raw_item_id),
+            "canonical_item_id": int(canonical_item_id),
+            "name": item_name,
+            "identifier": item_identifier,
+            "source": "member_resolved",
+        }
+
+    def _party_member_identity_for_item_transition(self, member: Dict[str, object]) -> Optional[Tuple[object, ...]]:
+        if not isinstance(member, dict):
+            return None
+        try:
+            slot = int(member.get("slot", 0) or 0)
+            pokemon_id = int(member.get("id", 0) or 0)
+        except (TypeError, ValueError):
+            return None
+        if slot <= 0 or pokemon_id <= 0:
+            return None
+
+        try:
+            personality = int(member.get("_personality")) & 0xFFFFFFFF
+            ot_id = int(member.get("_ot_id")) & 0xFFFFFFFF
+            return (slot, pokemon_id, personality, ot_id)
+        except (TypeError, ValueError):
+            pass
+
+        level_value = member.get("level")
+        try:
+            level = int(level_value) if level_value is not None else 0
+        except (TypeError, ValueError):
+            level = 0
+        return (slot, pokemon_id, level)
+
+    def _log_party_held_item_transitions(self, previous_party: List[Dict], current_party: List[Dict]) -> None:
+        if not isinstance(previous_party, list) or not isinstance(current_party, list):
+            return
+        if not previous_party or not current_party:
+            return
+
+        prev_by_identity: Dict[Tuple[object, ...], Dict[str, object]] = {}
+        curr_by_identity: Dict[Tuple[object, ...], Dict[str, object]] = {}
+
+        for member in previous_party:
+            identity = self._party_member_identity_for_item_transition(member)
+            if identity is not None:
+                prev_by_identity[identity] = member
+
+        for member in current_party:
+            identity = self._party_member_identity_for_item_transition(member)
+            if identity is not None:
+                curr_by_identity[identity] = member
+
+        for identity, previous_member in prev_by_identity.items():
+            current_member = curr_by_identity.get(identity)
+            if not isinstance(current_member, dict):
+                continue
+
+            prev_item = self._resolve_member_held_item(previous_member)
+            curr_item = self._resolve_member_held_item(current_member)
+
+            prev_raw = int(prev_item.get("raw_item_id", 0) or 0)
+            curr_raw = int(curr_item.get("raw_item_id", 0) or 0)
+            prev_canonical = int(prev_item.get("canonical_item_id", 0) or 0)
+            curr_canonical = int(curr_item.get("canonical_item_id", 0) or 0)
+
+            if prev_raw == curr_raw and prev_canonical == curr_canonical:
+                continue
+
+            try:
+                slot = int(current_member.get("slot", previous_member.get("slot", 0)) or 0)
+            except (TypeError, ValueError):
+                slot = 0
+            try:
+                pokemon_id = int(current_member.get("id", previous_member.get("id", 0)) or 0)
+            except (TypeError, ValueError):
+                pokemon_id = 0
+            if slot <= 0 or pokemon_id <= 0:
+                continue
+
+            pokemon_name = current_member.get("name") if isinstance(current_member.get("name"), str) and current_member.get("name").strip() else ""
+            if not pokemon_name and self.pokemon_reader:
+                pokemon_name = self.pokemon_reader.get_pokemon_name(pokemon_id)
+            if not pokemon_name:
+                pokemon_name = f"Pokemon #{pokemon_id}"
+
+            if prev_raw <= 0 < curr_raw:
+                event_name = "party_held_item_given"
+                action = "given"
+            elif curr_raw <= 0 < prev_raw:
+                event_name = "party_held_item_removed"
+                action = "removed"
+            else:
+                event_name = "party_held_item_changed"
+                action = "changed"
+
+            log_event(
+                logging.INFO,
+                event_name,
+                game=self.game_name,
+                game_variant=_party_game_variant_from_name(self.game_name),
+                slot=slot,
+                pokemon_id=pokemon_id,
+                pokemon_name=pokemon_name,
+                action=action,
+                previous_raw_item_id=prev_raw,
+                previous_item_id=prev_canonical,
+                previous_item_name=str(prev_item.get("name", "") or ""),
+                previous_item_identifier=str(prev_item.get("identifier", "") or ""),
+                current_raw_item_id=curr_raw,
+                current_item_id=curr_canonical,
+                current_item_name=str(curr_item.get("name", "") or ""),
+                current_item_identifier=str(curr_item.get("identifier", "") or ""),
+            )
 
     def _is_starter_pending_for_collection(self, current_pokedex: Optional[List[int]] = None) -> bool:
         """True when game progression has not reached starter selection yet."""
@@ -5810,8 +6373,13 @@ class AchievementTracker:
                     "gender": member.get("gender"),
                     "nature": member.get("nature"),
                     "ability": member.get("ability"),
+                    "held_item_id": member.get("held_item_id"),
+                    "held_item_canonical_id": member.get("held_item_canonical_id"),
+                    "held_item_name": member.get("held_item_name"),
+                    "held_item_identifier": member.get("held_item_identifier"),
                     "moves": member.get("moves") if isinstance(member.get("moves"), list) else [],
                 })
+            self._log_party_held_item_transitions(self._last_party, current_party)
             log_event(
                 logging.INFO,
                 "party_state_changed",
@@ -6194,11 +6762,21 @@ class PokeAchieveGUI:
         self._species_type_cache: Dict[int, Dict[str, object]] = {}
         self._species_type_pending: Set[int] = set()
         self._species_type_failed: Set[int] = set()
+        self._party_item_name_cache: Dict[int, str] = {}
+        self._party_item_name_pending: Set[int] = set()
+        self._party_item_name_failed: Set[int] = set()
+        self._party_item_sprite_cache: Dict[int, object] = {}
+        self._party_item_sprite_pending: Set[int] = set()
+        self._party_item_sprite_failed: Set[int] = set()
+        self._party_item_resolution_cache: Dict[Tuple[str, int], Dict[str, object]] = {}
         self._party_display_last_party: List[Dict] = []
         self._party_display_last_game = ""
         self._party_sprite_size = 64
         self._party_sprite_cache_dir = self.data_dir / "sprites"
         self._party_sprite_cache_dir.mkdir(exist_ok=True)
+        self._party_item_sprite_size = 20
+        self._party_item_sprite_cache_dir = self.data_dir / "item_sprites"
+        self._party_item_sprite_cache_dir.mkdir(exist_ok=True)
         self._party_gender_badge_assets_dir = self.script_dir / "gui" / "assets" / "gender_badges"
         if not self._party_gender_badge_assets_dir.exists():
             self._party_gender_badge_assets_dir = self.script_dir / "assets" / "gender_badges"
@@ -6667,6 +7245,19 @@ class PokeAchieveGUI:
             type2_label = ttk.Label(type_frame, text="")
             type2_label.pack(side=tk.LEFT, padx=(0, 0))
 
+            held_item_frame = ttk.Frame(card)
+            held_item_frame.pack(fill=tk.X, pady=(0, 4))
+            held_item_icon_label = ttk.Label(held_item_frame, text="", width=0)
+            held_item_icon_label.pack(side=tk.LEFT, padx=(0, 4))
+            held_item_text_label = ttk.Label(
+                held_item_frame,
+                text="-",
+                justify=tk.LEFT,
+                anchor=tk.W,
+                wraplength=132,
+            )
+            held_item_text_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
             details_label = ttk.Label(
                 card,
                 text="Ability: -\nNature: -",
@@ -6692,6 +7283,8 @@ class PokeAchieveGUI:
                 "sprite": sprite_label,
                 "type1": type1_label,
                 "type2": type2_label,
+                "held_item_icon": held_item_icon_label,
+                "held_item_text": held_item_text_label,
                 "details": details_label,
                 "moves": moves_label,
             }
@@ -9701,27 +10294,7 @@ class PokeAchieveGUI:
         self.catches_list.configure(state='disabled')
 
     def _get_party_game_variant(self, game: str) -> str:
-        if not isinstance(game, str):
-            return "default"
-        lowered = game.lower()
-
-        if "firered" in lowered or "fire red" in lowered or "leafgreen" in lowered or "leaf green" in lowered:
-            return "firered-leafgreen"
-        if "emerald" in lowered:
-            return "emerald"
-        if "ruby" in lowered or "sapphire" in lowered:
-            return "ruby-sapphire"
-        if "crystal" in lowered:
-            return "crystal"
-        if "gold" in lowered:
-            return "gold"
-        if "silver" in lowered:
-            return "silver"
-        if "yellow" in lowered:
-            return "yellow"
-        if "red" in lowered or "blue" in lowered:
-            return "red-blue"
-        return "default"
+        return _party_game_variant_from_name(game)
 
     def _get_party_game_family(self, game: str) -> str:
         variant = self._get_party_game_variant(game)
@@ -10178,6 +10751,301 @@ class PokeAchieveGUI:
         ).start()
         return None
 
+
+    @staticmethod
+    def _humanize_api_identifier(identifier: object) -> str:
+        if not isinstance(identifier, str):
+            return ""
+        cleaned = identifier.strip().replace("_", "-")
+        if not cleaned:
+            return ""
+        return " ".join(part[:1].upper() + part[1:] for part in cleaned.split("-") if part)
+
+    def _party_item_sprite_cache_path(self, item_id: int) -> Path:
+        return self._party_item_sprite_cache_dir / f"v3_{int(item_id)}.png"
+
+    def _load_party_item_sprite_from_file(self, path: Path) -> Optional[object]:
+        if not path.exists():
+            return None
+        if PIL_AVAILABLE:
+            try:
+                with Image.open(path) as raw_img:
+                    image = raw_img.convert("RGBA")
+                if hasattr(Image, "Resampling"):
+                    image = image.resize((self._party_item_sprite_size, self._party_item_sprite_size), Image.Resampling.NEAREST)
+                else:
+                    image = image.resize((self._party_item_sprite_size, self._party_item_sprite_size), Image.NEAREST)
+                return ImageTk.PhotoImage(image)
+            except Exception as exc:
+                log_event(logging.DEBUG, "party_item_sprite_pil_load_failed", path=str(path), error=str(exc))
+        try:
+            return tk.PhotoImage(file=str(path))
+        except Exception as exc:
+            log_event(logging.DEBUG, "party_item_sprite_tk_load_failed", path=str(path), error=str(exc))
+            return None
+
+    def _resolve_party_held_item_lookup(
+        self,
+        raw_item_id: int,
+        game: str,
+        *,
+        canonical_item_id: Optional[int] = None,
+        item_identifier: str = "",
+        item_name: str = "",
+    ) -> Dict[str, object]:
+        try:
+            raw_id = int(raw_item_id)
+        except (TypeError, ValueError):
+            raw_id = 0
+        if raw_id <= 0:
+            return {
+                "raw_item_id": 0,
+                "canonical_item_id": 0,
+                "name": "",
+                "identifier": "",
+                "source": "empty",
+            }
+
+        variant = self._get_party_game_variant(game)
+        cache_key = (str(variant), int(raw_id))
+        cached = self._party_item_resolution_cache.get(cache_key)
+
+        resolved: Dict[str, object]
+        if isinstance(cached, dict):
+            resolved = dict(cached)
+        else:
+            family = self._get_party_game_family(game)
+            if family == "gen1":
+                gen_hint = 1
+            elif family == "gen2":
+                gen_hint = 2
+            elif str(family).startswith("gen3"):
+                gen_hint = 3
+            else:
+                gen_hint = None
+            resolved = _resolve_canonical_held_item(game, raw_id, gen_hint=gen_hint)
+            self._party_item_resolution_cache[cache_key] = dict(resolved)
+
+        try:
+            resolved_canonical_id = int(resolved.get("canonical_item_id", 0) or 0)
+        except (TypeError, ValueError):
+            resolved_canonical_id = 0
+
+        try:
+            canonical_hint_id = int(canonical_item_id or 0)
+        except (TypeError, ValueError):
+            canonical_hint_id = 0
+        if canonical_hint_id > 0:
+            resolved_canonical_id = canonical_hint_id
+
+        resolved_name = resolved.get("name") if isinstance(resolved.get("name"), str) else ""
+        if isinstance(item_name, str) and item_name.strip():
+            resolved_name = item_name.strip()
+
+        resolved_identifier = resolved.get("identifier") if isinstance(resolved.get("identifier"), str) else ""
+        if isinstance(item_identifier, str) and item_identifier.strip():
+            resolved_identifier = item_identifier.strip().lower()
+
+        if resolved_canonical_id <= 0:
+            resolved_canonical_id = raw_id
+        if not resolved_name:
+            resolved_name = f"Item #{resolved_canonical_id}"
+
+        final = {
+            "raw_item_id": int(raw_id),
+            "canonical_item_id": int(resolved_canonical_id),
+            "name": str(resolved_name),
+            "identifier": str(resolved_identifier).strip().lower(),
+            "source": resolved.get("source", "resolved"),
+        }
+        self._party_item_resolution_cache[cache_key] = dict(final)
+        return final
+
+    def _queue_party_item_fetch(self, canonical_item_id: int, item_identifier: str = "", item_name: str = ""):
+        try:
+            canonical_id = int(canonical_item_id)
+        except (TypeError, ValueError):
+            canonical_id = 0
+        if canonical_id <= 0:
+            return
+        if canonical_id in self._party_item_name_pending or canonical_id in self._party_item_sprite_pending:
+            return
+        self._party_item_name_pending.add(canonical_id)
+        self._party_item_sprite_pending.add(canonical_id)
+        threading.Thread(
+            target=self._party_item_fetch_worker,
+            args=(canonical_id, str(item_identifier or "").strip().lower(), str(item_name or "").strip()),
+            daemon=True,
+        ).start()
+
+    def _party_item_fetch_worker(self, canonical_item_id: int, item_identifier_hint: str = "", item_name_hint: str = ""):
+        item_name = ""
+        raw_item_slug = ""
+        sprite_urls: List[str] = []
+        sprite_bytes: Optional[bytes] = None
+        error_text = ""
+
+        if isinstance(item_name_hint, str) and item_name_hint.strip() and not re.fullmatch(r"Item\s*#\s*\d+", item_name_hint.strip(), flags=re.IGNORECASE):
+            item_name = item_name_hint.strip()
+        if isinstance(item_identifier_hint, str) and item_identifier_hint.strip():
+            raw_item_slug = item_identifier_hint.strip().lower()
+
+        if not item_name or not raw_item_slug:
+            try:
+                request = urllib.request.Request(
+                    f"https://pokeapi.co/api/v2/item/{int(canonical_item_id)}",
+                    headers={"User-Agent": "PokeAchieveTracker/1.0"},
+                )
+                with urllib.request.urlopen(request, timeout=6) as response:
+                    payload_raw = response.read()
+                payload = json.loads(payload_raw.decode("utf-8"))
+                if isinstance(payload, dict):
+                    raw_name = payload.get("name")
+                    if isinstance(raw_name, str) and raw_name.strip():
+                        if not raw_item_slug:
+                            raw_item_slug = raw_name.strip().lower()
+                        if not item_name:
+                            item_name = self._humanize_api_identifier(raw_name)
+                    sprites = payload.get("sprites")
+                    if isinstance(sprites, dict):
+                        default_url = sprites.get("default")
+                        if isinstance(default_url, str) and default_url.strip():
+                            sprite_urls.append(default_url.strip())
+            except Exception as exc:
+                error_text = str(exc)
+
+        if raw_item_slug:
+            for url in (
+                f"https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/{raw_item_slug}.png",
+                f"https://cdn.jsdelivr.net/gh/PokeAPI/sprites@master/sprites/items/{raw_item_slug}.png",
+            ):
+                if url not in sprite_urls:
+                    sprite_urls.append(url)
+
+        for url in sprite_urls:
+            try:
+                request = urllib.request.Request(url, headers={"User-Agent": "PokeAchieveTracker/1.0"})
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    sprite_bytes = response.read()
+                if sprite_bytes:
+                    break
+            except Exception as exc:
+                error_text = str(exc)
+
+        def _complete():
+            self._party_item_name_pending.discard(int(canonical_item_id))
+            self._party_item_sprite_pending.discard(int(canonical_item_id))
+
+            if item_name and not re.fullmatch(r"Item\s*#\s*\d+", item_name, flags=re.IGNORECASE):
+                self._party_item_name_cache[int(canonical_item_id)] = item_name
+                self._party_item_name_failed.discard(int(canonical_item_id))
+            else:
+                self._party_item_name_failed.add(int(canonical_item_id))
+
+            loaded_sprite: Optional[object] = None
+            if sprite_bytes:
+                sprite_path = self._party_item_sprite_cache_path(int(canonical_item_id))
+                try:
+                    sprite_path.write_bytes(sprite_bytes)
+                    loaded_sprite = self._load_party_item_sprite_from_file(sprite_path)
+                except Exception as exc:
+                    log_event(logging.DEBUG, "party_item_sprite_write_failed", item_id=int(canonical_item_id), error=str(exc))
+
+            if loaded_sprite is not None:
+                self._party_item_sprite_cache[int(canonical_item_id)] = loaded_sprite
+                self._party_item_sprite_failed.discard(int(canonical_item_id))
+            else:
+                self._party_item_sprite_failed.add(int(canonical_item_id))
+                if error_text:
+                    log_event(logging.DEBUG, "party_item_fetch_failed", item_id=int(canonical_item_id), error=error_text)
+
+            if self._party_display_last_party:
+                self._update_party_display(self._party_display_last_party, self._party_display_last_game)
+
+        try:
+            self.root.after(0, _complete)
+        except Exception:
+            pass
+
+    def _request_party_held_item_name(
+        self,
+        item_id: int,
+        game: str = "",
+        canonical_item_id: Optional[int] = None,
+        item_identifier: str = "",
+        item_name: str = "",
+    ) -> str:
+        lookup = self._resolve_party_held_item_lookup(
+            item_id,
+            game,
+            canonical_item_id=canonical_item_id,
+            item_identifier=item_identifier,
+            item_name=item_name,
+        )
+
+        canonical_id = int(lookup.get("canonical_item_id", 0) or 0)
+        if canonical_id <= 0:
+            return "None"
+
+        resolved_name = str(lookup.get("name") or "").strip()
+        if resolved_name and not re.fullmatch(r"Item\s*#\s*\d+", resolved_name, flags=re.IGNORECASE):
+            self._party_item_name_cache[canonical_id] = resolved_name
+            return resolved_name
+
+        cached_name = self._party_item_name_cache.get(canonical_id)
+        if isinstance(cached_name, str) and cached_name.strip():
+            return cached_name.strip()
+
+        self._queue_party_item_fetch(
+            canonical_id,
+            item_identifier=str(lookup.get("identifier") or ""),
+            item_name=resolved_name,
+        )
+        return resolved_name or f"Item #{canonical_id}"
+
+    def _request_party_held_item_sprite(
+        self,
+        item_id: int,
+        game: str = "",
+        canonical_item_id: Optional[int] = None,
+        item_identifier: str = "",
+        item_name: str = "",
+    ) -> Optional[object]:
+        lookup = self._resolve_party_held_item_lookup(
+            item_id,
+            game,
+            canonical_item_id=canonical_item_id,
+            item_identifier=item_identifier,
+            item_name=item_name,
+        )
+
+        canonical_id = int(lookup.get("canonical_item_id", 0) or 0)
+        if canonical_id <= 0:
+            return None
+
+        cached = self._party_item_sprite_cache.get(canonical_id)
+        if cached is not None:
+            return cached
+
+        sprite_path = self._party_item_sprite_cache_path(canonical_id)
+        if sprite_path.exists():
+            loaded = self._load_party_item_sprite_from_file(sprite_path)
+            if loaded is not None:
+                self._party_item_sprite_cache[canonical_id] = loaded
+                return loaded
+            try:
+                sprite_path.unlink()
+            except OSError:
+                pass
+
+        if canonical_id not in self._party_item_sprite_failed:
+            self._queue_party_item_fetch(
+                canonical_id,
+                item_identifier=str(lookup.get("identifier") or ""),
+                item_name=str(lookup.get("name") or ""),
+            )
+        return None
+
     def _update_party_display(self, party: List[Dict], game: str = ""):
         """Update party display in collection tab using horizontal slot cards."""
         self._party_display_last_party = [dict(member) for member in party if isinstance(member, dict)]
@@ -10186,6 +11054,8 @@ class PokeAchieveGUI:
         family = self._get_party_game_family(self._party_display_last_game)
         show_gen3_details = str(family).startswith("gen3")
         show_gender_badges = str(family) != "gen1"
+        show_held_items = str(family) != "gen1"
+        show_held_item_sprites = str(family).startswith("gen3")
 
         by_slot: Dict[int, Dict] = {}
         for member in party:
@@ -10206,6 +11076,8 @@ class PokeAchieveGUI:
             sprite_label = widgets.get("sprite")
             type1_label = widgets.get("type1")
             type2_label = widgets.get("type2")
+            held_item_icon_label = widgets.get("held_item_icon")
+            held_item_text_label = widgets.get("held_item_text")
             details_label = widgets.get("details")
             moves_label = widgets.get("moves")
             member = by_slot.get(slot)
@@ -10226,6 +11098,11 @@ class PokeAchieveGUI:
                     if isinstance(type_label, ttk.Label):
                         type_label.configure(image="", text="")
                         setattr(type_label, "image", None)
+                if isinstance(held_item_icon_label, ttk.Label):
+                    held_item_icon_label.configure(image="", text="")
+                    setattr(held_item_icon_label, "image", None)
+                if isinstance(held_item_text_label, ttk.Label):
+                    held_item_text_label.configure(text="")
                 if isinstance(details_label, ttk.Label):
                     details_label.configure(text="")
                 if isinstance(moves_label, ttk.Label):
@@ -10238,6 +11115,14 @@ class PokeAchieveGUI:
                 name = self._get_pokemon_name(pokemon_id)
             if not name:
                 name = "Unknown"
+
+            nickname_text = member.get("nickname") if isinstance(member.get("nickname"), str) and member.get("nickname").strip() else ""
+            display_name = name
+            if nickname_text:
+                normalized_nickname = re.sub(r"[^A-Za-z0-9]+", "", nickname_text).upper()
+                normalized_name = re.sub(r"[^A-Za-z0-9]+", "", str(name)).upper()
+                if normalized_nickname and normalized_nickname != normalized_name:
+                    display_name = f"{nickname_text} ({name})"
 
             level_text = "--"
             try:
@@ -10255,8 +11140,32 @@ class PokeAchieveGUI:
                 nature = ""
             is_shiny = bool(member.get("shiny", False))
 
+            try:
+                held_item_id = int(member.get("held_item_id", 0) or 0)
+            except (TypeError, ValueError):
+                held_item_id = 0
+            if held_item_id < 0:
+                held_item_id = 0
+
+            try:
+                held_item_canonical_id = int(member.get("held_item_canonical_id", 0) or 0)
+            except (TypeError, ValueError):
+                held_item_canonical_id = 0
+            if held_item_canonical_id < 0:
+                held_item_canonical_id = 0
+
+            held_item_identifier = ""
+            raw_held_item_identifier = member.get("held_item_identifier")
+            if isinstance(raw_held_item_identifier, str) and raw_held_item_identifier.strip():
+                held_item_identifier = raw_held_item_identifier.strip().lower()
+
+            held_item_name = ""
+            raw_held_item_name = member.get("held_item_name")
+            if isinstance(raw_held_item_name, str) and raw_held_item_name.strip():
+                held_item_name = raw_held_item_name.strip()
+
             if isinstance(title_label, ttk.Label):
-                title_label.configure(text=f"Lv.{level_text} {name}")
+                title_label.configure(text=f"Lv.{level_text} {display_name}")
 
             if isinstance(gender_label, ttk.Label):
                 if not show_gender_badges:
@@ -10330,6 +11239,44 @@ class PokeAchieveGUI:
                 else:
                     type_label.configure(image="", text="")
                     setattr(type_label, "image", None)
+
+            if isinstance(held_item_icon_label, ttk.Label):
+                if show_held_item_sprites and held_item_id > 0:
+                    item_sprite = self._request_party_held_item_sprite(
+                        int(held_item_id),
+                        game,
+                        canonical_item_id=int(held_item_canonical_id),
+                        item_identifier=held_item_identifier,
+                        item_name=held_item_name,
+                    )
+                    if item_sprite is not None:
+                        held_item_icon_label.configure(image=item_sprite, text="")
+                        setattr(held_item_icon_label, "image", item_sprite)
+                    else:
+                        held_item_icon_label.configure(image="", text="")
+                        setattr(held_item_icon_label, "image", None)
+                else:
+                    held_item_icon_label.configure(image="", text="")
+                    setattr(held_item_icon_label, "image", None)
+
+            if isinstance(held_item_text_label, ttk.Label):
+                if show_held_items:
+                    if held_item_id > 0:
+                        resolved_item_name = held_item_name
+                        if (not resolved_item_name) or re.fullmatch(r"Item\s*#\s*\d+", str(resolved_item_name), flags=re.IGNORECASE):
+                            resolved_item_name = self._request_party_held_item_name(
+                                int(held_item_id),
+                                game,
+                                canonical_item_id=int(held_item_canonical_id),
+                                item_identifier=held_item_identifier,
+                                item_name=held_item_name,
+                            )
+                        fallback_item_id = int(held_item_canonical_id) if int(held_item_canonical_id) > 0 else int(held_item_id)
+                        held_item_text_label.configure(text=str(resolved_item_name or f"Item #{fallback_item_id}"))
+                    else:
+                        held_item_text_label.configure(text="None")
+                else:
+                    held_item_text_label.configure(text="")
 
             if isinstance(details_label, ttk.Label):
                 if show_gen3_details:
@@ -10594,7 +11541,6 @@ def main():
 
 if __name__ == "__main__":
     main()
-
 
 
 

@@ -302,6 +302,61 @@ class ReportingValidationTests(unittest.TestCase):
             reader.get_game_config = original_config_getter
             reader._decode_gen3_party_species = original_decode
 
+    def test_gen3_party_recovers_sixth_slot_when_count_underreads_five(self):
+        class PartyRetroUnderread:
+            def read_memory(self, addr: str, num_bytes: int = 1):
+                address = int(addr, 16)
+                if num_bytes == 1:
+                    if address == 0x3000:
+                        return 5
+                    return 0
+
+                if num_bytes == 100:
+                    slot = [0] * 100
+                    if address >= 0x3004 and (address - 0x3004) % 100 == 0:
+                        idx = (address - 0x3004) // 100
+                        if 0 <= idx < 6:
+                            slot[0] = int(idx) + 1
+                            slot[84] = 12 + int(idx)
+                    return slot
+
+                return 0
+
+        reader = self.tracker.pokemon_reader
+        original_retro = reader.retroarch
+        original_config_getter = reader.get_game_config
+        original_decode = reader._decode_gen3_party_species
+
+        reader.retroarch = PartyRetroUnderread()
+        reader.get_game_config = lambda game_name: {
+            "gen": 3,
+            "layout_id": "gen3_emerald",
+            "party_count": "0x3000",
+            "party_start": "0x3004",
+            "party_slot_size": 100,
+            "party_use_pointer_layout": 0,
+            "party_max_pairs": 1,
+            "party_enable_offset_scan": 0,
+            "party_allow_double_stride": 0,
+            "party_try_double_bulk": 0,
+            "party_probe_full_on_low_count": 1,
+        }
+
+        def fake_decode(slot_data, max_species_id, allow_checksum_mismatch=False):
+            marker = int(slot_data[0]) if isinstance(slot_data, list) and len(slot_data) > 0 else 0
+            if 1 <= marker <= 6:
+                return marker
+            return None
+
+        reader._decode_gen3_party_species = fake_decode
+        try:
+            party = reader.read_party("Pokemon Emerald")
+            self.assertEqual(len(party), 6)
+            self.assertEqual([int(member.get("slot", 0)) for member in party], [1, 2, 3, 4, 5, 6])
+        finally:
+            reader.retroarch = original_retro
+            reader.get_game_config = original_config_getter
+            reader._decode_gen3_party_species = original_decode
     def test_gen3_party_prefers_contiguous_slots_when_scores_tie(self):
         class PartyRetro:
             def read_memory(self, addr: str, num_bytes: int = 1):
@@ -1285,6 +1340,7 @@ if __name__ == "__main__":
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(ReportingValidationTests)
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     raise SystemExit(0 if result.wasSuccessful() else 1)
+
 
 
 
