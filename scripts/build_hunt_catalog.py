@@ -36,6 +36,13 @@ FISHING_METHODS = {
     "feebas-tile-fishing",
 }
 
+ROD_METHOD_TO_NAME = {
+    "old-rod": "Old Rod",
+    "good-rod": "Good Rod",
+    "super-rod": "Super Rod",
+    "feebas-tile-fishing": "Super Rod",
+}
+
 SURF_METHODS = {
     "surf",
     "roaming-water",
@@ -164,6 +171,7 @@ def build_catalog() -> Dict[str, Dict[str, Dict[str, List[int]]]]:
     random_surf: Dict[str, Dict[str, Set[int]]] = {g: {} for g in games}
     random_dive: Dict[str, Dict[str, Set[int]]] = {g: {} for g in games}
     fishing: Dict[str, Dict[str, Set[int]]] = {g: {} for g in games}
+    fishing_by_rod: Dict[str, Dict[str, Dict[str, Set[int]]]] = {g: {} for g in games}
 
     area_urls = iter_location_area_urls()
     print(f"location areas: {len(area_urls)}")
@@ -244,6 +252,14 @@ def build_catalog() -> Dict[str, Dict[str, Dict[str, List[int]]]]:
 
                     if any(m in FISHING_METHODS for m in method_names):
                         fishing[game_name].setdefault(display_name, set()).add(species_id)
+                        rod_names = {"Any Rod"}
+                        for method_name in method_names:
+                            mapped = ROD_METHOD_TO_NAME.get(method_name)
+                            if mapped:
+                                rod_names.add(mapped)
+                        rod_bucket = fishing_by_rod[game_name].setdefault(display_name, {})
+                        for rod_name in rod_names:
+                            rod_bucket.setdefault(rod_name, set()).add(species_id)
 
             if idx % 200 == 0:
                 print(f"processed: {idx}/{len(area_urls)}")
@@ -274,6 +290,8 @@ def build_catalog() -> Dict[str, Dict[str, Dict[str, List[int]]]]:
 
         fishing_entries: Dict[str, List[int]] = {}
         fishing_union: Set[int] = set()
+        fishing_rod_entries: Dict[str, Dict[str, List[int]]] = {}
+        any_rod_union: Dict[str, Set[int]] = {"Any Rod": set(), "Old Rod": set(), "Good Rod": set(), "Super Rod": set()}
         for location_name in sort_locations(list(fishing[game_name].keys())):
             ids = sorted(fishing[game_name].get(location_name, set()))
             if not ids:
@@ -281,9 +299,25 @@ def build_catalog() -> Dict[str, Dict[str, Dict[str, List[int]]]]:
             fishing_entries[location_name] = ids
             fishing_union.update(ids)
 
+            per_rod_sets = fishing_by_rod[game_name].get(location_name, {})
+            any_ids = set(per_rod_sets.get("Any Rod", set())) or set(ids)
+            rod_payload: Dict[str, List[int]] = {"Any Rod": sorted(any_ids)}
+            any_rod_union["Any Rod"].update(any_ids)
+            for rod_name in ("Old Rod", "Good Rod", "Super Rod"):
+                rod_ids = set(per_rod_sets.get(rod_name, set()))
+                rod_payload[rod_name] = sorted(rod_ids)
+                any_rod_union[rod_name].update(rod_ids)
+            fishing_rod_entries[location_name] = rod_payload
+
+        fishing_rod_entries = {
+            "Any Fishing Spot": {rod: sorted(ids) for rod, ids in any_rod_union.items()},
+            **fishing_rod_entries,
+        }
+
         output[game_name] = {
             "random": {"Any Route / Area": sorted(random_union), **random_entries},
             "fishing": {"Any Fishing Spot": sorted(fishing_union), **fishing_entries},
+            "fishing_rods": fishing_rod_entries,
             "soft_reset": {
                 "Any Soft Reset": [],
                 "Starters": [],

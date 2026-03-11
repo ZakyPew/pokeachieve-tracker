@@ -5975,13 +5975,16 @@ class PokeAchieveGUI:
             "Fishing Encounter Hunt",
             "Hatching Egg Hunt",
         ]
+        self._hunt_rod_options: List[str] = ["Any Rod", "Old Rod", "Good Rod", "Super Rod"]
         self._hunt_game_options = self._build_hunt_game_options()
         self._hunt_encounter_catalog: Dict[str, Dict[str, Dict[str, Any]]] = self._build_hunt_encounter_catalog()
         self._hunt_route_options: Dict[str, List[str]] = self._build_default_hunt_route_options()
         self._hunt_fishing_options: Dict[str, List[str]] = self._build_default_hunt_fishing_options()
+
         self.hunt_mode_var = tk.StringVar(value=self._hunt_modes[0])
         self.hunt_game_var = tk.StringVar(value=self._hunt_game_options[0] if self._hunt_game_options else "")
         self.hunt_route_var = tk.StringVar(value="Any Soft Reset")
+        self.hunt_rod_var = tk.StringVar(value=self._hunt_rod_options[0])
         self.hunt_target_var = tk.StringVar(value="")
         self.hunt_profiles_file = self.data_dir / "hunt_profiles.json"
         self._hunt_profiles = self._load_hunt_profiles()
@@ -6021,6 +6024,8 @@ class PokeAchieveGUI:
         self._hunt_available_window_id: Optional[int] = None
         self._hunt_route_label: Optional[ttk.Label] = None
         self._hunt_route_combo: Optional[ttk.Combobox] = None
+        self._hunt_rod_label: Optional[ttk.Label] = None
+        self._hunt_rod_combo: Optional[ttk.Combobox] = None
         self._hunt_target_combo: Optional[ttk.Combobox] = None
         self._hunt_game_combo: Optional[ttk.Combobox] = None
         self._hunt_mode_combo: Optional[ttk.Combobox] = None
@@ -6118,16 +6123,19 @@ class PokeAchieveGUI:
 
         return game_store
 
-    def _build_hunt_profile_key(self, mode: str, route_name: str, target_id: int) -> str:
+    def _build_hunt_profile_key(self, mode: str, route_name: str, target_id: int, rod_name: str = "") -> str:
         safe_mode = (mode or "").strip()
         safe_route = (route_name or "").strip()
+        safe_rod = (rod_name or "").strip() if safe_mode == "Fishing Encounter Hunt" else self._hunt_rod_options[0]
+        if not safe_rod:
+            safe_rod = self._hunt_rod_options[0]
         try:
             safe_target_id = int(target_id)
         except (TypeError, ValueError):
             safe_target_id = 0
         if safe_target_id < 0:
             safe_target_id = 0
-        return f"{safe_mode}|{safe_route}|{safe_target_id}"
+        return f"{safe_mode}|{safe_route}|{safe_rod}|{safe_target_id}"
     def _load_validation_profiles(self):
         profile_path = self.script_dir / "profiles.json"
         if not profile_path.exists():
@@ -6528,6 +6536,7 @@ class PokeAchieveGUI:
 
             random_entries = game_block.get("random") if isinstance(game_block.get("random"), dict) else {}
             fishing_entries = game_block.get("fishing") if isinstance(game_block.get("fishing"), dict) else {}
+            fishing_rod_entries = game_block.get("fishing_rods") if isinstance(game_block.get("fishing_rods"), dict) else {}
 
             normalized_random: Dict[str, List[int]] = {}
             for key, value in random_entries.items():
@@ -6537,11 +6546,68 @@ class PokeAchieveGUI:
                 normalized_random[key] = self._normalize_hunt_species_ids_for_game(game_name, ids)
 
             normalized_fishing: Dict[str, List[int]] = {}
+            normalized_fishing_rods: Dict[str, Dict[str, List[int]]] = {}
+
             for key, value in fishing_entries.items():
                 if not isinstance(key, str):
                     continue
+                if isinstance(value, dict):
+                    per_rod: Dict[str, List[int]] = {}
+                    merged_ids: Set[int] = set()
+                    for raw_rod, raw_ids in value.items():
+                        rod_key = str(raw_rod or "").strip().title()
+                        if not rod_key:
+                            continue
+                        if rod_key == "Any":
+                            rod_key = self._hunt_rod_options[0]
+                        ids = raw_ids if isinstance(raw_ids, list) else []
+                        normalized_ids = self._normalize_hunt_species_ids_for_game(game_name, ids)
+                        if not normalized_ids:
+                            continue
+                        per_rod[rod_key] = normalized_ids
+                        merged_ids.update(normalized_ids)
+                    merged_list = sorted(merged_ids)
+                    normalized_fishing[key] = merged_list
+                    if per_rod:
+                        any_ids = per_rod.get(self._hunt_rod_options[0], merged_list)
+                        normalized_fishing_rods[key] = {
+                            rod_name: list(per_rod.get(rod_name, any_ids)) for rod_name in self._hunt_rod_options
+                        }
+                    continue
+
                 ids = value if isinstance(value, list) else []
-                normalized_fishing[key] = self._normalize_hunt_species_ids_for_game(game_name, ids)
+                normalized_ids = self._normalize_hunt_species_ids_for_game(game_name, ids)
+                normalized_fishing[key] = normalized_ids
+                if normalized_ids:
+                    normalized_fishing_rods[key] = {
+                        rod_name: list(normalized_ids) for rod_name in self._hunt_rod_options
+                    }
+
+            for key, value in fishing_rod_entries.items():
+                if not isinstance(key, str) or not isinstance(value, dict):
+                    continue
+                per_rod: Dict[str, List[int]] = {}
+                merged_ids: Set[int] = set()
+                for raw_rod, raw_ids in value.items():
+                    rod_key = str(raw_rod or "").strip().title()
+                    if rod_key == "Any":
+                        rod_key = self._hunt_rod_options[0]
+                    if not rod_key:
+                        continue
+                    ids = raw_ids if isinstance(raw_ids, list) else []
+                    normalized_ids = self._normalize_hunt_species_ids_for_game(game_name, ids)
+                    if not normalized_ids:
+                        continue
+                    per_rod[rod_key] = normalized_ids
+                    merged_ids.update(normalized_ids)
+                if not merged_ids:
+                    continue
+                merged_list = sorted(merged_ids)
+                normalized_fishing[key] = merged_list
+                any_ids = per_rod.get(self._hunt_rod_options[0], merged_list)
+                normalized_fishing_rods[key] = {
+                    rod_name: list(per_rod.get(rod_name, any_ids)) for rod_name in self._hunt_rod_options
+                }
 
             all_random_ids: Set[int] = set()
             for key, ids in normalized_random.items():
@@ -6559,12 +6625,29 @@ class PokeAchieveGUI:
                 all_fishing_ids.update(normalized_fishing["Any Fishing Spot"])
             normalized_fishing["Any Fishing Spot"] = sorted(all_fishing_ids)
 
+            all_rod_map: Dict[str, Set[int]] = {rod: set() for rod in self._hunt_rod_options}
+            for location_name, rod_map in normalized_fishing_rods.items():
+                if location_name == "Any Fishing Spot" or not isinstance(rod_map, dict):
+                    continue
+                for rod in self._hunt_rod_options:
+                    all_rod_map[rod].update(rod_map.get(rod, []))
+            if not any(all_rod_map.values()):
+                fallback_ids = normalized_fishing.get("Any Fishing Spot", [])
+                normalized_fishing_rods["Any Fishing Spot"] = {
+                    rod: list(fallback_ids) for rod in self._hunt_rod_options
+                }
+            else:
+                normalized_fishing_rods["Any Fishing Spot"] = {
+                    rod: sorted(ids) for rod, ids in all_rod_map.items()
+                }
+
             soft_reset_for_game = soft_reset_metadata.get(game_name)
             if not isinstance(soft_reset_for_game, dict):
                 soft_reset_for_game = dict(default_soft_reset)
 
             game_block["random"] = normalized_random
             game_block["fishing"] = normalized_fishing
+            game_block["fishing_rods"] = normalized_fishing_rods
             game_block["soft_reset"] = soft_reset_for_game
             catalog[game_name] = game_block
 
@@ -6961,6 +7044,29 @@ class PokeAchieveGUI:
 
         return []
 
+    def _get_hunt_rod_values(self, game_name: str, mode: Optional[str] = None) -> List[str]:
+        mode_value = (mode or self.hunt_mode_var.get()).strip()
+        if mode_value != "Fishing Encounter Hunt":
+            return [self._hunt_rod_options[0]]
+
+        rod_values: Set[str] = set(self._hunt_rod_options)
+        game_data = self._hunt_encounter_catalog.get(game_name, {}) if isinstance(self._hunt_encounter_catalog, dict) else {}
+        fishing_rods = game_data.get("fishing_rods") if isinstance(game_data.get("fishing_rods"), dict) else {}
+        route_name = str(self.hunt_route_var.get() or "").strip()
+
+        if route_name and route_name in fishing_rods and isinstance(fishing_rods.get(route_name), dict):
+            rod_values.update(str(key).strip() for key in fishing_rods[route_name].keys() if str(key).strip())
+        elif "Any Fishing Spot" in fishing_rods and isinstance(fishing_rods.get("Any Fishing Spot"), dict):
+            rod_values.update(str(key).strip() for key in fishing_rods["Any Fishing Spot"].keys() if str(key).strip())
+
+        ordered = [self._hunt_rod_options[0]]
+        for rod in self._hunt_rod_options[1:]:
+            if rod in rod_values:
+                ordered.append(rod)
+        extras = sorted(v for v in rod_values if v and v not in ordered)
+        ordered.extend(extras)
+        return ordered
+
     def _get_hunt_all_species_ids(self, game_name: str) -> List[int]:
         reader = self.tracker.pokemon_reader if self.tracker else None
         if not reader:
@@ -6987,9 +7093,16 @@ class PokeAchieveGUI:
             seen.add(pid)
         return ordered
 
-    def _get_hunt_species_ids_for_selection(self, game_name: str, mode: Optional[str] = None, route_name: Optional[str] = None) -> List[int]:
+    def _get_hunt_species_ids_for_selection(
+        self,
+        game_name: str,
+        mode: Optional[str] = None,
+        route_name: Optional[str] = None,
+        rod_name: Optional[str] = None,
+    ) -> List[int]:
         mode_value = (mode or self.hunt_mode_var.get()).strip()
         route_value = (route_name or self.hunt_route_var.get()).strip()
+        rod_value = (rod_name or self.hunt_rod_var.get()).strip() or self._hunt_rod_options[0]
         game_data = self._hunt_encounter_catalog.get(game_name, {})
 
         if mode_value == "Soft Reset Hunt":
@@ -7020,12 +7133,24 @@ class PokeAchieveGUI:
 
         if mode_value == "Fishing Encounter Hunt":
             entries = game_data.get("fishing", {})
-            if route_value and route_value in entries:
-                species_ids = list(entries.get(route_value, []))
-            elif "Any Fishing Spot" in entries:
-                species_ids = list(entries.get("Any Fishing Spot", []))
-            else:
-                species_ids = [pid for values in entries.values() for pid in values]
+            rod_entries = game_data.get("fishing_rods", {}) if isinstance(game_data.get("fishing_rods"), dict) else {}
+
+            species_ids: List[int] = []
+            if route_value and isinstance(rod_entries.get(route_value), dict):
+                route_rods = rod_entries.get(route_value, {})
+                species_ids = list(route_rods.get(rod_value) or route_rods.get(self._hunt_rod_options[0]) or [])
+            elif isinstance(rod_entries.get("Any Fishing Spot"), dict):
+                any_rods = rod_entries.get("Any Fishing Spot", {})
+                species_ids = list(any_rods.get(rod_value) or any_rods.get(self._hunt_rod_options[0]) or [])
+
+            if not species_ids:
+                if route_value and route_value in entries:
+                    species_ids = list(entries.get(route_value, []))
+                elif "Any Fishing Spot" in entries:
+                    species_ids = list(entries.get("Any Fishing Spot", []))
+                else:
+                    species_ids = [pid for values in entries.values() for pid in values]
+
             normalized = self._normalize_hunt_species_ids_for_game(game_name, species_ids)
             return normalized or self._get_hunt_all_species_ids(game_name)
 
@@ -7094,6 +7219,18 @@ class PokeAchieveGUI:
         )
         self._hunt_route_combo.grid(row=0, column=5, sticky="ew", padx=4, pady=4)
         self._hunt_route_combo.bind("<<ComboboxSelected>>", self._on_hunt_route_selected)
+
+        self._hunt_rod_label = ttk.Label(controls, text="Rod:")
+        self._hunt_rod_label.grid(row=0, column=6, sticky="w", padx=4, pady=4)
+        self._hunt_rod_combo = ttk.Combobox(
+            controls,
+            textvariable=self.hunt_rod_var,
+            values=self._hunt_rod_options,
+            state="readonly",
+            width=14,
+        )
+        self._hunt_rod_combo.grid(row=0, column=7, sticky="ew", padx=4, pady=4)
+        self._hunt_rod_combo.bind("<<ComboboxSelected>>", self._on_hunt_rod_selected)
 
         ttk.Label(controls, text="Target:").grid(row=1, column=0, sticky="w", padx=4, pady=4)
         self._hunt_target_combo = ttk.Combobox(
@@ -7244,6 +7381,10 @@ class PokeAchieveGUI:
         if keep_active and not self._hunt_active:
             self._start_hunt(silent=True, emit_log=False, persist=True)
 
+    def _on_hunt_rod_selected(self, _event=None):
+        self._refresh_hunt_targets()
+        self._save_current_hunt_profile(active_override=self._hunt_active, set_last_profile_key=False)
+
     def _on_hunt_target_selected(self, _event=None):
         keep_active = bool(self._hunt_active)
         self._update_hunt_target_display()
@@ -7258,11 +7399,13 @@ class PokeAchieveGUI:
 
         mode = self.hunt_mode_var.get().strip()
         route_name = self.hunt_route_var.get().strip()
+        rod_name = self.hunt_rod_var.get().strip() if mode == "Fishing Encounter Hunt" else self._hunt_rod_options[0]
         target_id = self._get_hunt_target_pokemon_id()
-        profile_key = self._build_hunt_profile_key(mode, route_name, target_id)
+        profile_key = self._build_hunt_profile_key(mode, route_name, target_id, rod_name)
         profile: Dict[str, Any] = {
             "mode": mode,
             "route": route_name,
+            "rod": rod_name,
             "target_id": target_id,
             "counter": int(max(0, self._hunt_counter)),
             "phase_count": int(max(0, self._hunt_phase_count)),
@@ -7320,6 +7463,9 @@ class PokeAchieveGUI:
             profile_mode = self._hunt_modes[0]
 
         route_name = str(profile.get("route") or "").strip()
+        rod_name = str(profile.get("rod") or self._hunt_rod_options[0]).strip()
+        if not rod_name:
+            rod_name = self._hunt_rod_options[0]
         try:
             target_id = int(profile.get("target_id", 0))
         except (TypeError, ValueError):
@@ -7361,6 +7507,15 @@ class PokeAchieveGUI:
             else:
                 self.hunt_route_var.set("")
 
+            rod_values = self._get_hunt_rod_values(game_name, profile_mode)
+            if profile_mode == "Fishing Encounter Hunt":
+                if rod_name in rod_values:
+                    self.hunt_rod_var.set(rod_name)
+                else:
+                    self.hunt_rod_var.set(rod_values[0] if rod_values else self._hunt_rod_options[0])
+            else:
+                self.hunt_rod_var.set(self._hunt_rod_options[0])
+
             self._refresh_hunt_targets()
 
             target_display = self._resolve_hunt_target_display(game_name, target_id)
@@ -7383,6 +7538,7 @@ class PokeAchieveGUI:
                     game=game_name,
                     mode=profile_mode,
                     route=self.hunt_route_var.get().strip(),
+                    rod=self.hunt_rod_var.get().strip(),
                     target=self.hunt_target_var.get().strip(),
                     profile_active=bool(profile_active),
                 )
@@ -7399,16 +7555,32 @@ class PokeAchieveGUI:
         if not isinstance(profiles, dict):
             profiles = {}
 
-        profile_key = self._build_hunt_profile_key(
-            self.hunt_mode_var.get().strip(),
-            self.hunt_route_var.get().strip(),
-            self._get_hunt_target_pokemon_id(),
-        )
-        profile = profiles.get(profile_key)
+        mode_value = self.hunt_mode_var.get().strip()
+        route_value = self.hunt_route_var.get().strip()
+        target_id = self._get_hunt_target_pokemon_id()
+        rod_value = self.hunt_rod_var.get().strip() if mode_value == "Fishing Encounter Hunt" else self._hunt_rod_options[0]
+
+        if mode_value == "Fishing Encounter Hunt":
+            key_candidates = [self._build_hunt_profile_key(mode_value, route_value, target_id, rod_value)]
+        else:
+            key_candidates = [
+                self._build_hunt_profile_key(mode_value, route_value, target_id, rod_value),
+                f"{mode_value}|{route_value}|{target_id}",
+            ]
+
+        profile = None
+        resolved_key = ""
+        for candidate_key in key_candidates:
+            candidate = profiles.get(candidate_key)
+            if isinstance(candidate, dict):
+                profile = candidate
+                resolved_key = candidate_key
+                break
+
         if isinstance(profile, dict):
             self._apply_hunt_profile(game_name, profile, auto_start=auto_start)
             if isinstance(game_store, dict):
-                game_store["last_profile_key"] = profile_key
+                game_store["last_profile_key"] = resolved_key or key_candidates[0]
                 self._save_hunt_profiles()
             return True
 
@@ -7508,6 +7680,13 @@ class PokeAchieveGUI:
             current_route = self.hunt_route_var.get().strip()
             if current_route not in route_values:
                 self.hunt_route_var.set(route_values[0] if route_values else "")
+
+        rod_values = self._get_hunt_rod_values(game_name, mode)
+        if self._hunt_rod_combo is not None:
+            self._hunt_rod_combo.configure(values=rod_values)
+            current_rod = self.hunt_rod_var.get().strip()
+            if current_rod not in rod_values:
+                self.hunt_rod_var.set(rod_values[0] if rod_values else self._hunt_rod_options[0])
 
         species_options = self._get_hunt_species_options(game_name)
         display_values = [f"{pid:03d} {name}" for pid, name in species_options]
@@ -7633,8 +7812,12 @@ class PokeAchieveGUI:
 
         if mode == "Wild Encounter Hunt" and route_value:
             context_details.append(f"Route: {route_value}")
-        elif mode == "Fishing Encounter Hunt" and route_value:
-            context_details.append(f"Fishing Spot: {route_value}")
+        elif mode == "Fishing Encounter Hunt":
+            if route_value:
+                context_details.append(f"Fishing Spot: {route_value}")
+            rod_value = self.hunt_rod_var.get().strip()
+            if rod_value:
+                context_details.append(f"Rod: {rod_value}")
         elif mode == "Soft Reset Hunt" and route_value:
             context_details.append(f"Category: {route_value}")
         elif mode == "Hatching Egg Hunt":
@@ -7690,11 +7873,33 @@ class PokeAchieveGUI:
         if isinstance(self._hunt_route_combo, ttk.Combobox):
             self._hunt_route_combo.configure(state="readonly" if route_enabled else "disabled")
 
+        rod_enabled = mode == "Fishing Encounter Hunt"
+        if isinstance(self._hunt_rod_label, ttk.Label):
+            self._hunt_rod_label.configure(text="Rod:")
+            if rod_enabled:
+                if not self._hunt_rod_label.winfo_ismapped():
+                    self._hunt_rod_label.grid(row=0, column=6, sticky="w", padx=4, pady=4)
+            elif self._hunt_rod_label.winfo_ismapped():
+                self._hunt_rod_label.grid_remove()
+        if isinstance(self._hunt_rod_combo, ttk.Combobox):
+            rod_values = self._get_hunt_rod_values(self.hunt_game_var.get().strip(), mode)
+            self._hunt_rod_combo.configure(values=rod_values)
+            if self.hunt_rod_var.get().strip() not in rod_values:
+                self.hunt_rod_var.set(rod_values[0] if rod_values else self._hunt_rod_options[0])
+            self._hunt_rod_combo.configure(state="readonly" if rod_enabled else "disabled")
+            if rod_enabled:
+                if not self._hunt_rod_combo.winfo_ismapped():
+                    self._hunt_rod_combo.grid(row=0, column=7, sticky="ew", padx=4, pady=4)
+            else:
+                self.hunt_rod_var.set(self._hunt_rod_options[0])
+                if self._hunt_rod_combo.winfo_ismapped():
+                    self._hunt_rod_combo.grid_remove()
+
         if isinstance(self._hunt_mode_hint_label, ttk.Label):
             hints = {
                 "Soft Reset Hunt": "Choose category + target. Available Pokemon shows event cards.",
                 "Wild Encounter Hunt": "Choose route + target. Target list is filtered to that route.",
-                "Fishing Encounter Hunt": "Choose fishing spot + target. Target list is filtered to that fishing spot.",
+                "Fishing Encounter Hunt": "Choose fishing spot + rod + target. Target list is filtered by both.",
                 "Hatching Egg Hunt": "Choose target species. Counter increments when eggs hatch into that target.",
             }
             self._hunt_mode_hint_label.configure(text=hints.get(mode, ""))
