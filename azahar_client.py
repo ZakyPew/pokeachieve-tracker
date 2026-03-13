@@ -37,7 +37,6 @@ class AzaharRPCClient:
         self.socket: Optional[socket.socket] = None
         self.connected = False
         self.packet_id = 0
-        self.server_addr = (host, port)
         self.current_process: Optional[int] = None
         
     def _next_packet_id(self) -> int:
@@ -56,7 +55,7 @@ class AzaharRPCClient:
             packet_type,
             len(data)
         )
-        self.socket.sendto(header + data, self.server_addr)
+        self.socket.sendto(header + data, (self.host, self.port))
     
     def _recv_packet(self) -> Tuple[PacketType, bytes]:
         """Receive a packet from the RPC server via UDP"""
@@ -81,11 +80,48 @@ class AzaharRPCClient:
             self.socket.settimeout(5.0)
             self.connected = True
             self.packet_id = 0
+
+            # Verify the RPC endpoint is reachable before reporting connected.
+            if self.get_process_list() is None:
+                self.disconnect()
+                return False
             return True
         except Exception as e:
             print(f"Failed to create socket: {e}")
             self.connected = False
             return False
+
+    def get_current_game(self) -> Optional[str]:
+        """Best-effort game detection from process names/title IDs."""
+        processes = self.get_process_list()
+        if not processes:
+            return None
+
+        title_map = {
+            0x0004000000055D00: "Pokemon X",
+            0x0004000000055E00: "Pokemon Y",
+            0x000400000011C400: "Pokemon Omega Ruby",
+            0x000400000011C500: "Pokemon Alpha Sapphire",
+            0x0004000000164800: "Pokemon Sun",
+            0x0004000000175E00: "Pokemon Moon",
+            0x00040000001B5000: "Pokemon Ultra Sun",
+            0x00040000001B5100: "Pokemon Ultra Moon",
+        }
+
+        for proc in processes:
+            title_id = int(proc.get("title_id", 0) or 0)
+            if title_id in title_map:
+                return title_map[title_id]
+
+        for proc in processes:
+            name = str(proc.get("name", "")).strip()
+            if not name:
+                continue
+            lower_name = name.lower()
+            if any(x in lower_name for x in ["pokemon", "poke", "kujira", "sun", "moon", "omega", "alpha", "x", "y"]):
+                return name
+
+        return None
     
     def disconnect(self):
         """Close UDP socket"""
