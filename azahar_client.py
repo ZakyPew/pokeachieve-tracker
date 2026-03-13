@@ -135,7 +135,7 @@ class AzaharRPCClient:
         """Check if socket is active"""
         return self.connected and self.socket is not None
     
-    def read_memory(self, address, size: int = 1) -> Optional[int]:
+    def read_memory(self, address, size: int = 1):
         """
         Read memory from 3DS guest
         
@@ -144,7 +144,8 @@ class AzaharRPCClient:
             size: Number of bytes to read (1, 2, or 4)
         
         Returns:
-            Integer value or None on error
+            For size=1/2/4, returns an integer value.
+            For larger sizes, returns a byte list for compatibility with RetroArch bulk reads.
         """
         if not self.connected:
             return None
@@ -164,14 +165,15 @@ class AzaharRPCClient:
                     return None
                 result += chunk
                 offset += chunk_size
-            # Convert to int based on requested size
+            # Convert to int or list based on requested size
             if len(result) >= size:
                 if size == 1:
                     return result[0]
                 elif size == 2:
                     return struct.unpack('<H', result[:2])[0]
-                elif size >= 4:
+                elif size == 4:
                     return struct.unpack('<I', result[:4])[0]
+                return [int(v) & 0xFF for v in result[:size]]
             return None
         
         data = self._read_memory_raw(address, size)
@@ -184,7 +186,9 @@ class AzaharRPCClient:
         elif len(data) == 2:
             return struct.unpack('<H', data)[0]
         elif len(data) >= 4:
-            return struct.unpack('<I', data[:4])[0]
+            if size == 4:
+                return struct.unpack('<I', data[:4])[0]
+            return [int(v) & 0xFF for v in data[:size]]
         return None
     
     def _read_memory_raw(self, address: int, size: int) -> Optional[bytes]:
