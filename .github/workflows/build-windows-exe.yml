@@ -3,8 +3,13 @@ name: Build Windows EXE
 on:
   workflow_dispatch:
   push:
+    branches:
+      - main
     tags:
-      - 'v*'
+      - "v*"
+  pull_request:
+    branches:
+      - main
 
 jobs:
   build-windows:
@@ -17,20 +22,23 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
       - name: Install build dependencies
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
-          python -m pip install cx_Freeze requests psutil pywin32 pillow tkinter-tooltip
+          if (Test-Path requirements.txt) {
+            python -m pip install -r requirements.txt
+          }
+          python -m pip install cx_Freeze
 
-      - name: Build directory executable
+      - name: Build Windows executable
         shell: pwsh
         run: |
           python setup_directory_build.py build
 
-      - name: Add release docs to build directory
+      - name: Add docs to build directory
         shell: pwsh
         run: |
           Copy-Item README.md build/PokeAchieveTracker/ -Force
