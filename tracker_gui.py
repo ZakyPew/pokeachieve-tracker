@@ -27,6 +27,14 @@ from datetime import datetime
 from hashlib import sha256
 from dataclasses import dataclass, asdict
 
+# Import Azahar RPC client for 3DS support (Gen 6/7)
+try:
+    from azahar_client import AzaharRPCClient
+    AZAHAR_AVAILABLE = True
+except ImportError:
+    AzaharRPCClient = None
+    AZAHAR_AVAILABLE = False
+
 try:
     from PIL import Image, ImageTk, ImageOps, ImageDraw
     PIL_AVAILABLE = True
@@ -8017,18 +8025,33 @@ class PokeAchieveGUI:
         # Load config
         self.config = self._load_config()
         
+        # Emulator selection (retroarch for Gen 1/2/3, azahar for Gen 6/7)
+        self.emulator_type = self.config.get("emulator", "retroarch")
+        
         # Components
         self.retroarch = RetroArchClient(
             host=self.config.get("retroarch_host", "127.0.0.1"),
             port=int(self.config.get("retroarch_port", 55355))
         )
+        
+        # Azahar client for 3DS (Gen 6/7) support
+        self.azahar = None
+        if AZAHAR_AVAILABLE:
+            self.azahar = AzaharRPCClient(
+                host=self.config.get("azahar_host", "127.0.0.1"),
+                port=int(self.config.get("azahar_port", 45987))
+            )
+        
+        # Active memory client based on emulator selection
+        self.memory_client = self._get_memory_client()
+        
         self.api = None
         if self.config.get("api_key"):
             self.api = PokeAchieveAPI(
                 base_url=self.config.get("api_url", "https://pokeachieve.com"),
                 api_key=self.config["api_key"]
             )
-        self.tracker = AchievementTracker(self.retroarch, self.api)
+        self.tracker = AchievementTracker(self.memory_client, self.api)
         self.video_encounter_reader = OBSVideoEncounterReader(
             config=self.config,
             species_lookup=dict(PokemonMemoryReader.POKEMON_NAMES),
@@ -8168,6 +8191,12 @@ class PokeAchieveGUI:
         self._build_ui()
         self._start_status_check()
         self.root.after(250, self._maybe_run_setup_wizard)
+    
+    def _get_memory_client(self):
+        """Get the active memory client based on emulator config (retroarch or azahar)"""
+        if self.emulator_type == "azahar" and self.azahar:
+            return self.azahar
+        return self.retroarch
     
     def _configure_styles(self):
         """Apply a cleaner, modern ttk theme and spacing."""
@@ -13573,6 +13602,34 @@ Tuning Tips
         retro_frame = ttk.LabelFrame(dialog, text="RetroArch", padding="10")
         retro_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 10))
         retro_frame.columnconfigure(1, weight=1)
+        
+        # Emulator selection frame
+        emu_frame = ttk.LabelFrame(dialog, text="Emulator Selection", padding="10")
+        emu_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=(0, 10))
+        emu_frame.columnconfigure(1, weight=1)
+        
+        ttk.Label(emu_frame, text="Emulator:").grid(row=0, column=0, sticky="w", pady=5)
+        emu_var = tk.StringVar(value=self.config.get("emulator", "retroarch"))
+        emu_combo = ttk.Combobox(emu_frame, textvariable=emu_var, values=["retroarch", "azahar"], state="readonly")
+        emu_combo.grid(row=0, column=1, sticky="ew", padx=(10, 0), pady=5)
+        ttk.Label(emu_frame, text="Select based on game generation:", foreground="#666666").grid(row=1, column=0, columnspan=2, sticky="w")
+        ttk.Label(emu_frame, text="• RetroArch: Gen 1/2/3 (GB/GBC/GBA)", foreground="#666666").grid(row=2, column=0, columnspan=2, sticky="w", padx=(10, 0))
+        ttk.Label(emu_frame, text="• Azahar: Gen 6/7 (3DS) - Enable RPC in Debug settings", foreground="#666666").grid(row=3, column=0, columnspan=2, sticky="w", padx=(10, 0))
+        if not AZAHAR_AVAILABLE:
+            ttk.Label(emu_frame, text="(Azahar client not available)", foreground="red").grid(row=4, column=0, columnspan=2, sticky="w")
+        
+        # Azahar settings frame
+        azahar_frame = ttk.LabelFrame(dialog, text="Azahar (Gen 6/7)", padding="10")
+        azahar_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 10))
+        azahar_frame.columnconfigure(1, weight=1)
+        ttk.Label(azahar_frame, text="Host:").grid(row=0, column=0, sticky="w", pady=5)
+        azahar_host_entry = ttk.Entry(azahar_frame)
+        azahar_host_entry.insert(0, self.config.get("azahar_host", "127.0.0.1"))
+        azahar_host_entry.grid(row=0, column=1, sticky="ew", padx=(10, 0), pady=5)
+        ttk.Label(azahar_frame, text="Port:").grid(row=1, column=0, sticky="w", pady=5)
+        azahar_port_entry = ttk.Entry(azahar_frame)
+        azahar_port_entry.insert(0, str(self.config.get("azahar_port", 45987)))
+        azahar_port_entry.grid(row=1, column=1, sticky="ew", padx=(10, 0), pady=5)
         ttk.Label(retro_frame, text="Host:").grid(row=0, column=0, sticky="w", pady=5)
         host_entry = ttk.Entry(retro_frame)
         host_entry.insert(0, self.config.get("retroarch_host", "127.0.0.1"))
@@ -13786,9 +13843,11 @@ Tuning Tips
         ttk.Button(preview_frame, text="Test OBS Feed", command=test_video_feed).grid(row=0, column=0, sticky="w")
 
         def save():
-            normalized_url = PokeAchieveAPI.normalize_base_url(url_entry.get())
-            self.config["api_url"] = normalized_url
-            self.config["api_key"] = key_entry.get()
+            # Save emulator selection
+            self.config["emulator"] = emu_var.get()
+            self.emulator_type = emu_var.get()
+            
+            # Save RetroArch settings
             self.config["retroarch_host"] = host_entry.get().strip() or "127.0.0.1"
             try:
                 self.config["retroarch_port"] = int(port_entry.get())
@@ -13796,6 +13855,25 @@ Tuning Tips
                 self.config["retroarch_port"] = 55355
             self.retroarch.host = self.config["retroarch_host"]
             self.retroarch.port = int(self.config["retroarch_port"])
+            
+            # Save Azahar settings
+            self.config["azahar_host"] = azahar_host_entry.get().strip() or "127.0.0.1"
+            try:
+                self.config["azahar_port"] = int(azahar_port_entry.get())
+            except ValueError:
+                self.config["azahar_port"] = 45987
+            if self.azahar:
+                self.azahar.host = self.config["azahar_host"]
+                self.azahar.port = int(self.config["azahar_port"])
+            
+            # Update active memory client
+            self.memory_client = self._get_memory_client()
+            self.tracker.retroarch = self.memory_client
+            
+            # Save API settings
+            normalized_url = PokeAchieveAPI.normalize_base_url(url_entry.get())
+            self.config["api_url"] = normalized_url
+            self.config["api_key"] = key_entry.get()
 
             self.config.update(_collect_video_settings())
             self.video_encounter_reader.update_config(self.config)
@@ -13820,7 +13898,7 @@ Tuning Tips
                     )
             if normalized_url != (url_entry.get() or "").strip():
                 self._log(f"Normalized API URL to {normalized_url}", "info")
-            self._log("Settings saved")
+            self._log(f"Settings saved - using {self.emulator_type}")
             dialog.destroy()
             self._test_api_connection()
 
