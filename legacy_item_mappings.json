@@ -1,0 +1,6575 @@
+{
+  "generated_utc": "2026-03-11T11:35:20Z",
+  "maps": {
+    "crystal": {
+      "1": {
+        "identifier": "master-ball",
+        "item_id": 1,
+        "name": "Master Ball"
+      },
+      "10": {
+        "identifier": "burn-heal",
+        "item_id": 19,
+        "name": "Burn Heal"
+      },
+      "102": {
+        "identifier": "black-glasses",
+        "item_id": 217,
+        "name": "Black Glasses"
+      },
+      "103": {
+        "identifier": "slowpoke-tail",
+        "item_id": 473,
+        "name": "Slowpoke Tail"
+      },
+      "105": {
+        "identifier": "stick",
+        "item_id": 236,
+        "name": "Leek"
+      },
+      "106": {
+        "identifier": "smoke-ball",
+        "item_id": 205,
+        "name": "Smoke Ball"
+      },
+      "107": {
+        "identifier": "never-melt-ice",
+        "item_id": 223,
+        "name": "Never-Melt Ice"
+      },
+      "108": {
+        "identifier": "magnet",
+        "item_id": 219,
+        "name": "Magnet"
+      },
+      "11": {
+        "identifier": "ice-heal",
+        "item_id": 20,
+        "name": "Ice Heal"
+      },
+      "110": {
+        "identifier": "pearl",
+        "item_id": 88,
+        "name": "Pearl"
+      },
+      "111": {
+        "identifier": "big-pearl",
+        "item_id": 89,
+        "name": "Big Pearl"
+      },
+      "112": {
+        "identifier": "everstone",
+        "item_id": 206,
+        "name": "Everstone"
+      },
+      "113": {
+        "identifier": "spell-tag",
+        "item_id": 224,
+        "name": "Spell Tag"
+      },
+      "114": {
+        "identifier": "rage-candy-bar",
+        "item_id": 466,
+        "name": "Rage Candy Bar"
+      },
+      "116": {
+        "identifier": "blue-card",
+        "item_id": 472,
+        "name": "Blue Card"
+      },
+      "117": {
+        "identifier": "miracle-seed",
+        "item_id": 216,
+        "name": "Miracle Seed"
+      },
+      "118": {
+        "identifier": "thick-club",
+        "item_id": 235,
+        "name": "Thick Club"
+      },
+      "119": {
+        "identifier": "focus-band",
+        "item_id": 207,
+        "name": "Focus Band"
+      },
+      "12": {
+        "identifier": "awakening",
+        "item_id": 21,
+        "name": "Awakening"
+      },
+      "121": {
+        "identifier": "energy-powder",
+        "item_id": 34,
+        "name": "Energy Powder"
+      },
+      "122": {
+        "identifier": "energy-root",
+        "item_id": 35,
+        "name": "Energy Root"
+      },
+      "123": {
+        "identifier": "heal-powder",
+        "item_id": 36,
+        "name": "Heal Powder"
+      },
+      "124": {
+        "identifier": "revival-herb",
+        "item_id": 37,
+        "name": "Revival Herb"
+      },
+      "125": {
+        "identifier": "hard-stone",
+        "item_id": 215,
+        "name": "Hard Stone"
+      },
+      "126": {
+        "identifier": "lucky-egg",
+        "item_id": 208,
+        "name": "Lucky Egg"
+      },
+      "127": {
+        "identifier": "card-key",
+        "item_id": 475,
+        "name": "Card Key"
+      },
+      "128": {
+        "identifier": "machine-part",
+        "item_id": 480,
+        "name": "Machine Part"
+      },
+      "13": {
+        "identifier": "paralyze-heal",
+        "item_id": 22,
+        "name": "Paralyze Heal"
+      },
+      "130": {
+        "identifier": "lost-item",
+        "item_id": 478,
+        "name": "Lost Item"
+      },
+      "131": {
+        "identifier": "stardust",
+        "item_id": 90,
+        "name": "Stardust"
+      },
+      "132": {
+        "identifier": "star-piece",
+        "item_id": 91,
+        "name": "Star Piece"
+      },
+      "133": {
+        "identifier": "basement-key",
+        "item_id": 476,
+        "name": "Basement Key"
+      },
+      "134": {
+        "identifier": "pass",
+        "item_id": 479,
+        "name": "Pass"
+      },
+      "138": {
+        "identifier": "charcoal",
+        "item_id": 226,
+        "name": "Charcoal"
+      },
+      "139": {
+        "identifier": "berry-juice",
+        "item_id": 43,
+        "name": "Berry Juice"
+      },
+      "14": {
+        "identifier": "full-restore",
+        "item_id": 23,
+        "name": "Full Restore"
+      },
+      "140": {
+        "identifier": "scope-lens",
+        "item_id": 209,
+        "name": "Scope Lens"
+      },
+      "143": {
+        "identifier": "metal-coat",
+        "item_id": 210,
+        "name": "Metal Coat"
+      },
+      "144": {
+        "identifier": "dragon-fang",
+        "item_id": 227,
+        "name": "Dragon Fang"
+      },
+      "146": {
+        "identifier": "leftovers",
+        "item_id": 211,
+        "name": "Leftovers"
+      },
+      "15": {
+        "identifier": "max-potion",
+        "item_id": 24,
+        "name": "Max Potion"
+      },
+      "151": {
+        "identifier": "dragon-scale",
+        "item_id": 212,
+        "name": "Dragon Scale"
+      },
+      "156": {
+        "identifier": "sacred-ash",
+        "item_id": 44,
+        "name": "Sacred Ash"
+      },
+      "157": {
+        "identifier": "heavy-ball",
+        "item_id": 452,
+        "name": "Heavy Ball"
+      },
+      "159": {
+        "identifier": "level-ball",
+        "item_id": 450,
+        "name": "Level Ball"
+      },
+      "16": {
+        "identifier": "hyper-potion",
+        "item_id": 25,
+        "name": "Hyper Potion"
+      },
+      "160": {
+        "identifier": "lure-ball",
+        "item_id": 449,
+        "name": "Lure Ball"
+      },
+      "161": {
+        "identifier": "fast-ball",
+        "item_id": 453,
+        "name": "Fast Ball"
+      },
+      "163": {
+        "identifier": "light-ball",
+        "item_id": 213,
+        "name": "Light Ball"
+      },
+      "164": {
+        "identifier": "friend-ball",
+        "item_id": 454,
+        "name": "Friend Ball"
+      },
+      "165": {
+        "identifier": "moon-ball",
+        "item_id": 451,
+        "name": "Moon Ball"
+      },
+      "166": {
+        "identifier": "love-ball",
+        "item_id": 455,
+        "name": "Love Ball"
+      },
+      "169": {
+        "identifier": "sun-stone",
+        "item_id": 80,
+        "name": "Sun Stone"
+      },
+      "17": {
+        "identifier": "super-potion",
+        "item_id": 26,
+        "name": "Super Potion"
+      },
+      "172": {
+        "identifier": "up-grade",
+        "item_id": 229,
+        "name": "Upgrade"
+      },
+      "175": {
+        "identifier": "squirt-bottle",
+        "item_id": 448,
+        "name": "Squirt Bottle"
+      },
+      "177": {
+        "identifier": "park-ball",
+        "item_id": 456,
+        "name": "Park Ball"
+      },
+      "178": {
+        "identifier": "rainbow-wing",
+        "item_id": 482,
+        "name": "Rainbow Wing"
+      },
+      "18": {
+        "identifier": "potion",
+        "item_id": 17,
+        "name": "Potion"
+      },
+      "19": {
+        "identifier": "escape-rope",
+        "item_id": 78,
+        "name": "Escape Rope"
+      },
+      "2": {
+        "identifier": "ultra-ball",
+        "item_id": 2,
+        "name": "Ultra Ball"
+      },
+      "20": {
+        "identifier": "repel",
+        "item_id": 79,
+        "name": "Repel"
+      },
+      "22": {
+        "identifier": "fire-stone",
+        "item_id": 82,
+        "name": "Fire Stone"
+      },
+      "23": {
+        "identifier": "thunder-stone",
+        "item_id": 83,
+        "name": "Thunder Stone"
+      },
+      "24": {
+        "identifier": "water-stone",
+        "item_id": 84,
+        "name": "Water Stone"
+      },
+      "26": {
+        "identifier": "hp-up",
+        "item_id": 45,
+        "name": "HP Up"
+      },
+      "27": {
+        "identifier": "protein",
+        "item_id": 46,
+        "name": "Protein"
+      },
+      "28": {
+        "identifier": "iron",
+        "item_id": 47,
+        "name": "Iron"
+      },
+      "29": {
+        "identifier": "carbos",
+        "item_id": 48,
+        "name": "Carbos"
+      },
+      "3": {
+        "identifier": "bright-powder",
+        "item_id": 190,
+        "name": "Bright Powder"
+      },
+      "30": {
+        "identifier": "lucky-punch",
+        "item_id": 233,
+        "name": "Lucky Punch"
+      },
+      "31": {
+        "identifier": "calcium",
+        "item_id": 49,
+        "name": "Calcium"
+      },
+      "32": {
+        "identifier": "rare-candy",
+        "item_id": 50,
+        "name": "Rare Candy"
+      },
+      "33": {
+        "identifier": "x-accuracy",
+        "item_id": 60,
+        "name": "X Accuracy"
+      },
+      "34": {
+        "identifier": "leaf-stone",
+        "item_id": 85,
+        "name": "Leaf Stone"
+      },
+      "35": {
+        "identifier": "metal-powder",
+        "item_id": 234,
+        "name": "Metal Powder"
+      },
+      "36": {
+        "identifier": "nugget",
+        "item_id": 92,
+        "name": "Nugget"
+      },
+      "37": {
+        "identifier": "poke-doll",
+        "item_id": 63,
+        "name": "Pok\u00e9 Doll"
+      },
+      "38": {
+        "identifier": "full-heal",
+        "item_id": 27,
+        "name": "Full Heal"
+      },
+      "39": {
+        "identifier": "revive",
+        "item_id": 28,
+        "name": "Revive"
+      },
+      "4": {
+        "identifier": "great-ball",
+        "item_id": 3,
+        "name": "Great Ball"
+      },
+      "40": {
+        "identifier": "max-revive",
+        "item_id": 29,
+        "name": "Max Revive"
+      },
+      "41": {
+        "identifier": "guard-spec",
+        "item_id": 55,
+        "name": "Guard Spec."
+      },
+      "42": {
+        "identifier": "super-repel",
+        "item_id": 76,
+        "name": "Super Repel"
+      },
+      "43": {
+        "identifier": "max-repel",
+        "item_id": 77,
+        "name": "Max Repel"
+      },
+      "44": {
+        "identifier": "dire-hit",
+        "item_id": 56,
+        "name": "Dire Hit"
+      },
+      "46": {
+        "identifier": "fresh-water",
+        "item_id": 30,
+        "name": "Fresh Water"
+      },
+      "47": {
+        "identifier": "soda-pop",
+        "item_id": 31,
+        "name": "Soda Pop"
+      },
+      "48": {
+        "identifier": "lemonade",
+        "item_id": 32,
+        "name": "Lemonade"
+      },
+      "49": {
+        "identifier": "x-attack",
+        "item_id": 57,
+        "name": "X Attack"
+      },
+      "5": {
+        "identifier": "poke-ball",
+        "item_id": 4,
+        "name": "Pok\u00e9 Ball"
+      },
+      "52": {
+        "identifier": "x-speed",
+        "item_id": 59,
+        "name": "X Speed"
+      },
+      "54": {
+        "identifier": "coin-case",
+        "item_id": 421,
+        "name": "Coin Case"
+      },
+      "56": {
+        "identifier": "poke-flute",
+        "item_id": 544,
+        "name": "Pok\u00e9 Flute"
+      },
+      "57": {
+        "identifier": "exp-share",
+        "item_id": 193,
+        "name": "Exp. Share"
+      },
+      "58": {
+        "identifier": "old-rod",
+        "item_id": 422,
+        "name": "Old Rod"
+      },
+      "59": {
+        "identifier": "good-rod",
+        "item_id": 423,
+        "name": "Good Rod"
+      },
+      "6": {
+        "identifier": "town-map",
+        "item_id": 419,
+        "name": "Town Map"
+      },
+      "60": {
+        "identifier": "silver-leaf",
+        "item_id": 1030,
+        "name": "Silver Leaf"
+      },
+      "61": {
+        "identifier": "super-rod",
+        "item_id": 424,
+        "name": "Super Rod"
+      },
+      "62": {
+        "identifier": "pp-up",
+        "item_id": 51,
+        "name": "PP Up"
+      },
+      "63": {
+        "identifier": "ether",
+        "item_id": 38,
+        "name": "Ether"
+      },
+      "64": {
+        "identifier": "max-ether",
+        "item_id": 39,
+        "name": "Max Ether"
+      },
+      "66": {
+        "identifier": "red-scale",
+        "item_id": 477,
+        "name": "Red Scale"
+      },
+      "67": {
+        "identifier": "secret-potion",
+        "item_id": 441,
+        "name": "Secret Potion"
+      },
+      "68": {
+        "identifier": "ss-ticket",
+        "item_id": 433,
+        "name": "S.S. Ticket"
+      },
+      "69": {
+        "identifier": "mystery-egg",
+        "item_id": 483,
+        "name": "Mystery Egg"
+      },
+      "7": {
+        "identifier": "bicycle",
+        "item_id": 427,
+        "name": "Bicycle"
+      },
+      "70": {
+        "identifier": "clear-bell",
+        "item_id": 474,
+        "name": "Clear Bell"
+      },
+      "71": {
+        "identifier": "silver-wing",
+        "item_id": 481,
+        "name": "Silver Wing"
+      },
+      "72": {
+        "identifier": "moomoo-milk",
+        "item_id": 33,
+        "name": "Moomoo Milk"
+      },
+      "73": {
+        "identifier": "quick-claw",
+        "item_id": 194,
+        "name": "Quick Claw"
+      },
+      "75": {
+        "identifier": "gold-leaf",
+        "item_id": 1029,
+        "name": "Gold Leaf"
+      },
+      "76": {
+        "identifier": "soft-sand",
+        "item_id": 214,
+        "name": "Soft Sand"
+      },
+      "77": {
+        "identifier": "sharp-beak",
+        "item_id": 221,
+        "name": "Sharp Beak"
+      },
+      "8": {
+        "identifier": "moon-stone",
+        "item_id": 81,
+        "name": "Moon Stone"
+      },
+      "81": {
+        "identifier": "poison-barb",
+        "item_id": 222,
+        "name": "Poison Barb"
+      },
+      "82": {
+        "identifier": "kings-rock",
+        "item_id": 198,
+        "name": "King\u2019s Rock"
+      },
+      "85": {
+        "identifier": "red-apricorn",
+        "item_id": 458,
+        "name": "Red Apricorn"
+      },
+      "86": {
+        "identifier": "tiny-mushroom",
+        "item_id": 86,
+        "name": "Tiny Mushroom"
+      },
+      "87": {
+        "identifier": "big-mushroom",
+        "item_id": 87,
+        "name": "Big Mushroom"
+      },
+      "88": {
+        "identifier": "silver-powder",
+        "item_id": 199,
+        "name": "Silver Powder"
+      },
+      "9": {
+        "identifier": "antidote",
+        "item_id": 18,
+        "name": "Antidote"
+      },
+      "91": {
+        "identifier": "amulet-coin",
+        "item_id": 200,
+        "name": "Amulet Coin"
+      },
+      "94": {
+        "identifier": "cleanse-tag",
+        "item_id": 201,
+        "name": "Cleanse Tag"
+      },
+      "95": {
+        "identifier": "mystic-water",
+        "item_id": 220,
+        "name": "Mystic Water"
+      },
+      "96": {
+        "identifier": "twisted-spoon",
+        "item_id": 225,
+        "name": "Twisted Spoon"
+      },
+      "98": {
+        "identifier": "black-belt",
+        "item_id": 218,
+        "name": "Black Belt"
+      }
+    },
+    "emerald": {
+      "1": {
+        "identifier": "master-ball",
+        "item_id": 1,
+        "name": "Master Ball"
+      },
+      "10": {
+        "identifier": "timer-ball",
+        "item_id": 10,
+        "name": "Timer Ball"
+      },
+      "103": {
+        "identifier": "tiny-mushroom",
+        "item_id": 86,
+        "name": "Tiny Mushroom"
+      },
+      "104": {
+        "identifier": "big-mushroom",
+        "item_id": 87,
+        "name": "Big Mushroom"
+      },
+      "106": {
+        "identifier": "pearl",
+        "item_id": 88,
+        "name": "Pearl"
+      },
+      "107": {
+        "identifier": "big-pearl",
+        "item_id": 89,
+        "name": "Big Pearl"
+      },
+      "108": {
+        "identifier": "stardust",
+        "item_id": 90,
+        "name": "Stardust"
+      },
+      "109": {
+        "identifier": "star-piece",
+        "item_id": 91,
+        "name": "Star Piece"
+      },
+      "11": {
+        "identifier": "luxury-ball",
+        "item_id": 11,
+        "name": "Luxury Ball"
+      },
+      "110": {
+        "identifier": "nugget",
+        "item_id": 92,
+        "name": "Nugget"
+      },
+      "111": {
+        "identifier": "heart-scale",
+        "item_id": 93,
+        "name": "Heart Scale"
+      },
+      "12": {
+        "identifier": "premier-ball",
+        "item_id": 12,
+        "name": "Premier Ball"
+      },
+      "121": {
+        "identifier": "orange-mail",
+        "item_id": 515,
+        "name": "Orange Mail"
+      },
+      "122": {
+        "identifier": "harbor-mail",
+        "item_id": 516,
+        "name": "Harbor Mail"
+      },
+      "123": {
+        "identifier": "glitter-mail",
+        "item_id": 517,
+        "name": "Glitter Mail"
+      },
+      "124": {
+        "identifier": "mech-mail",
+        "item_id": 518,
+        "name": "Mech Mail"
+      },
+      "125": {
+        "identifier": "wood-mail",
+        "item_id": 519,
+        "name": "Wood Mail"
+      },
+      "126": {
+        "identifier": "wave-mail",
+        "item_id": 520,
+        "name": "Wave Mail"
+      },
+      "127": {
+        "identifier": "bead-mail",
+        "item_id": 521,
+        "name": "Bead Mail"
+      },
+      "128": {
+        "identifier": "shadow-mail",
+        "item_id": 522,
+        "name": "Shadow Mail"
+      },
+      "129": {
+        "identifier": "tropic-mail",
+        "item_id": 523,
+        "name": "Tropic Mail"
+      },
+      "13": {
+        "identifier": "potion",
+        "item_id": 17,
+        "name": "Potion"
+      },
+      "130": {
+        "identifier": "dream-mail",
+        "item_id": 524,
+        "name": "Dream Mail"
+      },
+      "131": {
+        "identifier": "fab-mail",
+        "item_id": 525,
+        "name": "Fab Mail"
+      },
+      "132": {
+        "identifier": "retro-mail",
+        "item_id": 526,
+        "name": "Retro Mail"
+      },
+      "133": {
+        "identifier": "cheri-berry",
+        "item_id": 126,
+        "name": "Cheri Berry"
+      },
+      "134": {
+        "identifier": "chesto-berry",
+        "item_id": 127,
+        "name": "Chesto Berry"
+      },
+      "135": {
+        "identifier": "pecha-berry",
+        "item_id": 128,
+        "name": "Pecha Berry"
+      },
+      "136": {
+        "identifier": "rawst-berry",
+        "item_id": 129,
+        "name": "Rawst Berry"
+      },
+      "137": {
+        "identifier": "aspear-berry",
+        "item_id": 130,
+        "name": "Aspear Berry"
+      },
+      "138": {
+        "identifier": "leppa-berry",
+        "item_id": 131,
+        "name": "Leppa Berry"
+      },
+      "139": {
+        "identifier": "oran-berry",
+        "item_id": 132,
+        "name": "Oran Berry"
+      },
+      "14": {
+        "identifier": "antidote",
+        "item_id": 18,
+        "name": "Antidote"
+      },
+      "140": {
+        "identifier": "persim-berry",
+        "item_id": 133,
+        "name": "Persim Berry"
+      },
+      "141": {
+        "identifier": "lum-berry",
+        "item_id": 134,
+        "name": "Lum Berry"
+      },
+      "142": {
+        "identifier": "sitrus-berry",
+        "item_id": 135,
+        "name": "Sitrus Berry"
+      },
+      "143": {
+        "identifier": "figy-berry",
+        "item_id": 136,
+        "name": "Figy Berry"
+      },
+      "144": {
+        "identifier": "wiki-berry",
+        "item_id": 137,
+        "name": "Wiki Berry"
+      },
+      "145": {
+        "identifier": "mago-berry",
+        "item_id": 138,
+        "name": "Mago Berry"
+      },
+      "146": {
+        "identifier": "aguav-berry",
+        "item_id": 139,
+        "name": "Aguav Berry"
+      },
+      "147": {
+        "identifier": "iapapa-berry",
+        "item_id": 140,
+        "name": "Iapapa Berry"
+      },
+      "148": {
+        "identifier": "razz-berry",
+        "item_id": 141,
+        "name": "Razz Berry"
+      },
+      "149": {
+        "identifier": "bluk-berry",
+        "item_id": 142,
+        "name": "Bluk Berry"
+      },
+      "15": {
+        "identifier": "burn-heal",
+        "item_id": 19,
+        "name": "Burn Heal"
+      },
+      "150": {
+        "identifier": "nanab-berry",
+        "item_id": 143,
+        "name": "Nanab Berry"
+      },
+      "151": {
+        "identifier": "wepear-berry",
+        "item_id": 144,
+        "name": "Wepear Berry"
+      },
+      "152": {
+        "identifier": "pinap-berry",
+        "item_id": 145,
+        "name": "Pinap Berry"
+      },
+      "153": {
+        "identifier": "pomeg-berry",
+        "item_id": 146,
+        "name": "Pomeg Berry"
+      },
+      "154": {
+        "identifier": "kelpsy-berry",
+        "item_id": 147,
+        "name": "Kelpsy Berry"
+      },
+      "155": {
+        "identifier": "qualot-berry",
+        "item_id": 148,
+        "name": "Qualot Berry"
+      },
+      "156": {
+        "identifier": "hondew-berry",
+        "item_id": 149,
+        "name": "Hondew Berry"
+      },
+      "157": {
+        "identifier": "grepa-berry",
+        "item_id": 150,
+        "name": "Grepa Berry"
+      },
+      "158": {
+        "identifier": "tamato-berry",
+        "item_id": 151,
+        "name": "Tamato Berry"
+      },
+      "159": {
+        "identifier": "cornn-berry",
+        "item_id": 152,
+        "name": "Cornn Berry"
+      },
+      "16": {
+        "identifier": "ice-heal",
+        "item_id": 20,
+        "name": "Ice Heal"
+      },
+      "160": {
+        "identifier": "magost-berry",
+        "item_id": 153,
+        "name": "Magost Berry"
+      },
+      "161": {
+        "identifier": "rabuta-berry",
+        "item_id": 154,
+        "name": "Rabuta Berry"
+      },
+      "162": {
+        "identifier": "nomel-berry",
+        "item_id": 155,
+        "name": "Nomel Berry"
+      },
+      "163": {
+        "identifier": "spelon-berry",
+        "item_id": 156,
+        "name": "Spelon Berry"
+      },
+      "164": {
+        "identifier": "pamtre-berry",
+        "item_id": 157,
+        "name": "Pamtre Berry"
+      },
+      "165": {
+        "identifier": "watmel-berry",
+        "item_id": 158,
+        "name": "Watmel Berry"
+      },
+      "166": {
+        "identifier": "durin-berry",
+        "item_id": 159,
+        "name": "Durin Berry"
+      },
+      "167": {
+        "identifier": "belue-berry",
+        "item_id": 160,
+        "name": "Belue Berry"
+      },
+      "168": {
+        "identifier": "liechi-berry",
+        "item_id": 178,
+        "name": "Liechi Berry"
+      },
+      "169": {
+        "identifier": "ganlon-berry",
+        "item_id": 179,
+        "name": "Ganlon Berry"
+      },
+      "17": {
+        "identifier": "awakening",
+        "item_id": 21,
+        "name": "Awakening"
+      },
+      "170": {
+        "identifier": "salac-berry",
+        "item_id": 180,
+        "name": "Salac Berry"
+      },
+      "171": {
+        "identifier": "petaya-berry",
+        "item_id": 181,
+        "name": "Petaya Berry"
+      },
+      "172": {
+        "identifier": "apicot-berry",
+        "item_id": 182,
+        "name": "Apicot Berry"
+      },
+      "173": {
+        "identifier": "lansat-berry",
+        "item_id": 183,
+        "name": "Lansat Berry"
+      },
+      "174": {
+        "identifier": "starf-berry",
+        "item_id": 184,
+        "name": "Starf Berry"
+      },
+      "175": {
+        "identifier": "enigma-berry",
+        "item_id": 185,
+        "name": "Enigma Berry"
+      },
+      "179": {
+        "identifier": "bright-powder",
+        "item_id": 190,
+        "name": "Bright Powder"
+      },
+      "18": {
+        "identifier": "paralyze-heal",
+        "item_id": 22,
+        "name": "Paralyze Heal"
+      },
+      "180": {
+        "identifier": "white-herb",
+        "item_id": 191,
+        "name": "White Herb"
+      },
+      "181": {
+        "identifier": "macho-brace",
+        "item_id": 192,
+        "name": "Macho Brace"
+      },
+      "182": {
+        "identifier": "exp-share",
+        "item_id": 193,
+        "name": "Exp. Share"
+      },
+      "183": {
+        "identifier": "quick-claw",
+        "item_id": 194,
+        "name": "Quick Claw"
+      },
+      "184": {
+        "identifier": "soothe-bell",
+        "item_id": 195,
+        "name": "Soothe Bell"
+      },
+      "185": {
+        "identifier": "mental-herb",
+        "item_id": 196,
+        "name": "Mental Herb"
+      },
+      "186": {
+        "identifier": "choice-band",
+        "item_id": 197,
+        "name": "Choice Band"
+      },
+      "187": {
+        "identifier": "kings-rock",
+        "item_id": 198,
+        "name": "King\u2019s Rock"
+      },
+      "188": {
+        "identifier": "silver-powder",
+        "item_id": 199,
+        "name": "Silver Powder"
+      },
+      "189": {
+        "identifier": "amulet-coin",
+        "item_id": 200,
+        "name": "Amulet Coin"
+      },
+      "19": {
+        "identifier": "full-restore",
+        "item_id": 23,
+        "name": "Full Restore"
+      },
+      "190": {
+        "identifier": "cleanse-tag",
+        "item_id": 201,
+        "name": "Cleanse Tag"
+      },
+      "191": {
+        "identifier": "soul-dew",
+        "item_id": 202,
+        "name": "Soul Dew"
+      },
+      "192": {
+        "identifier": "deep-sea-tooth",
+        "item_id": 203,
+        "name": "Deep Sea Tooth"
+      },
+      "193": {
+        "identifier": "deep-sea-scale",
+        "item_id": 204,
+        "name": "Deep Sea Scale"
+      },
+      "194": {
+        "identifier": "smoke-ball",
+        "item_id": 205,
+        "name": "Smoke Ball"
+      },
+      "195": {
+        "identifier": "everstone",
+        "item_id": 206,
+        "name": "Everstone"
+      },
+      "196": {
+        "identifier": "focus-band",
+        "item_id": 207,
+        "name": "Focus Band"
+      },
+      "197": {
+        "identifier": "lucky-egg",
+        "item_id": 208,
+        "name": "Lucky Egg"
+      },
+      "198": {
+        "identifier": "scope-lens",
+        "item_id": 209,
+        "name": "Scope Lens"
+      },
+      "199": {
+        "identifier": "metal-coat",
+        "item_id": 210,
+        "name": "Metal Coat"
+      },
+      "2": {
+        "identifier": "ultra-ball",
+        "item_id": 2,
+        "name": "Ultra Ball"
+      },
+      "20": {
+        "identifier": "max-potion",
+        "item_id": 24,
+        "name": "Max Potion"
+      },
+      "200": {
+        "identifier": "leftovers",
+        "item_id": 211,
+        "name": "Leftovers"
+      },
+      "201": {
+        "identifier": "dragon-scale",
+        "item_id": 212,
+        "name": "Dragon Scale"
+      },
+      "202": {
+        "identifier": "light-ball",
+        "item_id": 213,
+        "name": "Light Ball"
+      },
+      "203": {
+        "identifier": "soft-sand",
+        "item_id": 214,
+        "name": "Soft Sand"
+      },
+      "204": {
+        "identifier": "hard-stone",
+        "item_id": 215,
+        "name": "Hard Stone"
+      },
+      "205": {
+        "identifier": "miracle-seed",
+        "item_id": 216,
+        "name": "Miracle Seed"
+      },
+      "206": {
+        "identifier": "black-glasses",
+        "item_id": 217,
+        "name": "Black Glasses"
+      },
+      "207": {
+        "identifier": "black-belt",
+        "item_id": 218,
+        "name": "Black Belt"
+      },
+      "208": {
+        "identifier": "magnet",
+        "item_id": 219,
+        "name": "Magnet"
+      },
+      "209": {
+        "identifier": "mystic-water",
+        "item_id": 220,
+        "name": "Mystic Water"
+      },
+      "21": {
+        "identifier": "hyper-potion",
+        "item_id": 25,
+        "name": "Hyper Potion"
+      },
+      "210": {
+        "identifier": "sharp-beak",
+        "item_id": 221,
+        "name": "Sharp Beak"
+      },
+      "211": {
+        "identifier": "poison-barb",
+        "item_id": 222,
+        "name": "Poison Barb"
+      },
+      "212": {
+        "identifier": "never-melt-ice",
+        "item_id": 223,
+        "name": "Never-Melt Ice"
+      },
+      "213": {
+        "identifier": "spell-tag",
+        "item_id": 224,
+        "name": "Spell Tag"
+      },
+      "214": {
+        "identifier": "twisted-spoon",
+        "item_id": 225,
+        "name": "Twisted Spoon"
+      },
+      "215": {
+        "identifier": "charcoal",
+        "item_id": 226,
+        "name": "Charcoal"
+      },
+      "216": {
+        "identifier": "dragon-fang",
+        "item_id": 227,
+        "name": "Dragon Fang"
+      },
+      "217": {
+        "identifier": "silk-scarf",
+        "item_id": 228,
+        "name": "Silk Scarf"
+      },
+      "218": {
+        "identifier": "up-grade",
+        "item_id": 229,
+        "name": "Upgrade"
+      },
+      "219": {
+        "identifier": "shell-bell",
+        "item_id": 230,
+        "name": "Shell Bell"
+      },
+      "22": {
+        "identifier": "super-potion",
+        "item_id": 26,
+        "name": "Super Potion"
+      },
+      "220": {
+        "identifier": "sea-incense",
+        "item_id": 231,
+        "name": "Sea Incense"
+      },
+      "221": {
+        "identifier": "lax-incense",
+        "item_id": 232,
+        "name": "Lax Incense"
+      },
+      "222": {
+        "identifier": "lucky-punch",
+        "item_id": 233,
+        "name": "Lucky Punch"
+      },
+      "223": {
+        "identifier": "metal-powder",
+        "item_id": 234,
+        "name": "Metal Powder"
+      },
+      "224": {
+        "identifier": "thick-club",
+        "item_id": 235,
+        "name": "Thick Club"
+      },
+      "225": {
+        "identifier": "stick",
+        "item_id": 236,
+        "name": "Leek"
+      },
+      "23": {
+        "identifier": "full-heal",
+        "item_id": 27,
+        "name": "Full Heal"
+      },
+      "24": {
+        "identifier": "revive",
+        "item_id": 28,
+        "name": "Revive"
+      },
+      "25": {
+        "identifier": "max-revive",
+        "item_id": 29,
+        "name": "Max Revive"
+      },
+      "254": {
+        "identifier": "red-scarf",
+        "item_id": 237,
+        "name": "Red Scarf"
+      },
+      "255": {
+        "identifier": "blue-scarf",
+        "item_id": 238,
+        "name": "Blue Scarf"
+      },
+      "256": {
+        "identifier": "pink-scarf",
+        "item_id": 239,
+        "name": "Pink Scarf"
+      },
+      "257": {
+        "identifier": "green-scarf",
+        "item_id": 240,
+        "name": "Green Scarf"
+      },
+      "258": {
+        "identifier": "yellow-scarf",
+        "item_id": 241,
+        "name": "Yellow Scarf"
+      },
+      "259": {
+        "identifier": "mach-bike",
+        "item_id": 527,
+        "name": "Mach Bike"
+      },
+      "26": {
+        "identifier": "fresh-water",
+        "item_id": 30,
+        "name": "Fresh Water"
+      },
+      "260": {
+        "identifier": "coin-case",
+        "item_id": 421,
+        "name": "Coin Case"
+      },
+      "261": {
+        "identifier": "dowsing-machine",
+        "item_id": 465,
+        "name": "Dowsing Machine"
+      },
+      "262": {
+        "identifier": "old-rod",
+        "item_id": 422,
+        "name": "Old Rod"
+      },
+      "263": {
+        "identifier": "good-rod",
+        "item_id": 423,
+        "name": "Good Rod"
+      },
+      "264": {
+        "identifier": "super-rod",
+        "item_id": 424,
+        "name": "Super Rod"
+      },
+      "265": {
+        "identifier": "ss-ticket",
+        "item_id": 433,
+        "name": "S.S. Ticket"
+      },
+      "266": {
+        "identifier": "contest-pass",
+        "item_id": 434,
+        "name": "Contest Pass"
+      },
+      "268": {
+        "identifier": "wailmer-pail",
+        "item_id": 529,
+        "name": "Wailmer Pail"
+      },
+      "269": {
+        "identifier": "devon-goods",
+        "item_id": 530,
+        "name": "Devon Goods"
+      },
+      "27": {
+        "identifier": "soda-pop",
+        "item_id": 31,
+        "name": "Soda Pop"
+      },
+      "270": {
+        "identifier": "soot-sack",
+        "item_id": 531,
+        "name": "Soot Sack"
+      },
+      "271": {
+        "identifier": "basement-key",
+        "item_id": 476,
+        "name": "Basement Key"
+      },
+      "272": {
+        "identifier": "acro-bike",
+        "item_id": 528,
+        "name": "Acro Bike"
+      },
+      "273": {
+        "identifier": "pokeblock-case",
+        "item_id": 532,
+        "name": "Pok\u00e9block Case"
+      },
+      "274": {
+        "identifier": "letter",
+        "item_id": 533,
+        "name": "Letter"
+      },
+      "275": {
+        "identifier": "eon-ticket",
+        "item_id": 534,
+        "name": "Eon Ticket"
+      },
+      "276": {
+        "identifier": "red-orb",
+        "item_id": 467,
+        "name": "Red Orb"
+      },
+      "277": {
+        "identifier": "blue-orb",
+        "item_id": 468,
+        "name": "Blue Orb"
+      },
+      "278": {
+        "identifier": "scanner",
+        "item_id": 535,
+        "name": "Scanner"
+      },
+      "279": {
+        "identifier": "go-goggles",
+        "item_id": 536,
+        "name": "Go-Goggles"
+      },
+      "28": {
+        "identifier": "lemonade",
+        "item_id": 32,
+        "name": "Lemonade"
+      },
+      "280": {
+        "identifier": "meteorite",
+        "item_id": 537,
+        "name": "Meteorite"
+      },
+      "281": {
+        "identifier": "rm-1-key",
+        "item_id": 538,
+        "name": "Rm. 1 Key"
+      },
+      "282": {
+        "identifier": "rm-2-key",
+        "item_id": 539,
+        "name": "Rm. 2 Key"
+      },
+      "283": {
+        "identifier": "rm-4-key",
+        "item_id": 540,
+        "name": "Rm. 4 Key"
+      },
+      "284": {
+        "identifier": "rm-6-key",
+        "item_id": 541,
+        "name": "Rm. 6 Key"
+      },
+      "285": {
+        "identifier": "storage-key",
+        "item_id": 440,
+        "name": "Storage Key"
+      },
+      "286": {
+        "identifier": "root-fossil",
+        "item_id": 99,
+        "name": "Root Fossil"
+      },
+      "287": {
+        "identifier": "claw-fossil",
+        "item_id": 100,
+        "name": "Claw Fossil"
+      },
+      "288": {
+        "identifier": "devon-scope",
+        "item_id": 542,
+        "name": "Devon Scope"
+      },
+      "289": {
+        "identifier": "tm01",
+        "item_id": 305,
+        "name": "TM01"
+      },
+      "29": {
+        "identifier": "moomoo-milk",
+        "item_id": 33,
+        "name": "Moomoo Milk"
+      },
+      "290": {
+        "identifier": "tm02",
+        "item_id": 306,
+        "name": "TM02"
+      },
+      "291": {
+        "identifier": "tm03",
+        "item_id": 307,
+        "name": "TM03"
+      },
+      "292": {
+        "identifier": "tm04",
+        "item_id": 308,
+        "name": "TM04"
+      },
+      "293": {
+        "identifier": "tm05",
+        "item_id": 309,
+        "name": "TM05"
+      },
+      "294": {
+        "identifier": "tm06",
+        "item_id": 310,
+        "name": "TM06"
+      },
+      "295": {
+        "identifier": "tm07",
+        "item_id": 311,
+        "name": "TM07"
+      },
+      "296": {
+        "identifier": "tm08",
+        "item_id": 312,
+        "name": "TM08"
+      },
+      "297": {
+        "identifier": "tm09",
+        "item_id": 313,
+        "name": "TM09"
+      },
+      "298": {
+        "identifier": "tm10",
+        "item_id": 314,
+        "name": "TM10"
+      },
+      "299": {
+        "identifier": "tm11",
+        "item_id": 315,
+        "name": "TM11"
+      },
+      "3": {
+        "identifier": "great-ball",
+        "item_id": 3,
+        "name": "Great Ball"
+      },
+      "30": {
+        "identifier": "energy-powder",
+        "item_id": 34,
+        "name": "Energy Powder"
+      },
+      "300": {
+        "identifier": "tm12",
+        "item_id": 316,
+        "name": "TM12"
+      },
+      "301": {
+        "identifier": "tm13",
+        "item_id": 317,
+        "name": "TM13"
+      },
+      "302": {
+        "identifier": "tm14",
+        "item_id": 318,
+        "name": "TM14"
+      },
+      "303": {
+        "identifier": "tm15",
+        "item_id": 319,
+        "name": "TM15"
+      },
+      "304": {
+        "identifier": "tm16",
+        "item_id": 320,
+        "name": "TM16"
+      },
+      "305": {
+        "identifier": "tm17",
+        "item_id": 321,
+        "name": "TM17"
+      },
+      "306": {
+        "identifier": "tm18",
+        "item_id": 322,
+        "name": "TM18"
+      },
+      "307": {
+        "identifier": "tm19",
+        "item_id": 323,
+        "name": "TM19"
+      },
+      "308": {
+        "identifier": "tm20",
+        "item_id": 324,
+        "name": "TM20"
+      },
+      "309": {
+        "identifier": "tm21",
+        "item_id": 325,
+        "name": "TM21"
+      },
+      "31": {
+        "identifier": "energy-root",
+        "item_id": 35,
+        "name": "Energy Root"
+      },
+      "310": {
+        "identifier": "tm22",
+        "item_id": 326,
+        "name": "TM22"
+      },
+      "311": {
+        "identifier": "tm23",
+        "item_id": 327,
+        "name": "TM23"
+      },
+      "312": {
+        "identifier": "tm24",
+        "item_id": 328,
+        "name": "TM24"
+      },
+      "313": {
+        "identifier": "tm25",
+        "item_id": 329,
+        "name": "TM25"
+      },
+      "314": {
+        "identifier": "tm26",
+        "item_id": 330,
+        "name": "TM26"
+      },
+      "315": {
+        "identifier": "tm27",
+        "item_id": 331,
+        "name": "TM27"
+      },
+      "316": {
+        "identifier": "tm28",
+        "item_id": 332,
+        "name": "TM28"
+      },
+      "317": {
+        "identifier": "tm29",
+        "item_id": 333,
+        "name": "TM29"
+      },
+      "318": {
+        "identifier": "tm30",
+        "item_id": 334,
+        "name": "TM30"
+      },
+      "319": {
+        "identifier": "tm31",
+        "item_id": 335,
+        "name": "TM31"
+      },
+      "32": {
+        "identifier": "heal-powder",
+        "item_id": 36,
+        "name": "Heal Powder"
+      },
+      "320": {
+        "identifier": "tm32",
+        "item_id": 336,
+        "name": "TM32"
+      },
+      "321": {
+        "identifier": "tm33",
+        "item_id": 337,
+        "name": "TM33"
+      },
+      "322": {
+        "identifier": "tm34",
+        "item_id": 338,
+        "name": "TM34"
+      },
+      "323": {
+        "identifier": "tm35",
+        "item_id": 339,
+        "name": "TM35"
+      },
+      "324": {
+        "identifier": "tm36",
+        "item_id": 340,
+        "name": "TM36"
+      },
+      "325": {
+        "identifier": "tm37",
+        "item_id": 341,
+        "name": "TM37"
+      },
+      "326": {
+        "identifier": "tm38",
+        "item_id": 342,
+        "name": "TM38"
+      },
+      "327": {
+        "identifier": "tm39",
+        "item_id": 343,
+        "name": "TM39"
+      },
+      "328": {
+        "identifier": "tm40",
+        "item_id": 344,
+        "name": "TM40"
+      },
+      "329": {
+        "identifier": "tm41",
+        "item_id": 345,
+        "name": "TM41"
+      },
+      "33": {
+        "identifier": "revival-herb",
+        "item_id": 37,
+        "name": "Revival Herb"
+      },
+      "330": {
+        "identifier": "tm42",
+        "item_id": 346,
+        "name": "TM42"
+      },
+      "331": {
+        "identifier": "tm43",
+        "item_id": 347,
+        "name": "TM43"
+      },
+      "332": {
+        "identifier": "tm44",
+        "item_id": 348,
+        "name": "TM44"
+      },
+      "333": {
+        "identifier": "tm45",
+        "item_id": 349,
+        "name": "TM45"
+      },
+      "334": {
+        "identifier": "tm46",
+        "item_id": 350,
+        "name": "TM46"
+      },
+      "335": {
+        "identifier": "tm47",
+        "item_id": 351,
+        "name": "TM47"
+      },
+      "336": {
+        "identifier": "tm48",
+        "item_id": 352,
+        "name": "TM48"
+      },
+      "337": {
+        "identifier": "tm49",
+        "item_id": 353,
+        "name": "TM49"
+      },
+      "338": {
+        "identifier": "tm50",
+        "item_id": 354,
+        "name": "TM50"
+      },
+      "339": {
+        "identifier": "hm01",
+        "item_id": 397,
+        "name": "HM01"
+      },
+      "34": {
+        "identifier": "ether",
+        "item_id": 38,
+        "name": "Ether"
+      },
+      "340": {
+        "identifier": "hm02",
+        "item_id": 398,
+        "name": "HM02"
+      },
+      "341": {
+        "identifier": "hm03",
+        "item_id": 399,
+        "name": "HM03"
+      },
+      "342": {
+        "identifier": "hm04",
+        "item_id": 400,
+        "name": "HM04"
+      },
+      "343": {
+        "identifier": "hm05",
+        "item_id": 401,
+        "name": "HM05"
+      },
+      "344": {
+        "identifier": "hm06",
+        "item_id": 402,
+        "name": "HM06"
+      },
+      "345": {
+        "identifier": "hm07",
+        "item_id": 403,
+        "name": "HM07"
+      },
+      "346": {
+        "identifier": "hm08",
+        "item_id": 404,
+        "name": "HM08"
+      },
+      "349": {
+        "identifier": "oaks-parcel",
+        "item_id": 543,
+        "name": "Oak\u2019s Parcel"
+      },
+      "35": {
+        "identifier": "max-ether",
+        "item_id": 39,
+        "name": "Max Ether"
+      },
+      "350": {
+        "identifier": "poke-flute",
+        "item_id": 544,
+        "name": "Pok\u00e9 Flute"
+      },
+      "351": {
+        "identifier": "secret-key",
+        "item_id": 445,
+        "name": "Secret Key"
+      },
+      "352": {
+        "identifier": "bike-voucher",
+        "item_id": 545,
+        "name": "Bike Voucher"
+      },
+      "353": {
+        "identifier": "gold-teeth",
+        "item_id": 546,
+        "name": "Gold Teeth"
+      },
+      "354": {
+        "identifier": "old-amber",
+        "item_id": 103,
+        "name": "Old Amber"
+      },
+      "355": {
+        "identifier": "card-key",
+        "item_id": 475,
+        "name": "Card Key"
+      },
+      "356": {
+        "identifier": "lift-key",
+        "item_id": 547,
+        "name": "Lift Key"
+      },
+      "357": {
+        "identifier": "helix-fossil",
+        "item_id": 101,
+        "name": "Helix Fossil"
+      },
+      "358": {
+        "identifier": "dome-fossil",
+        "item_id": 102,
+        "name": "Dome Fossil"
+      },
+      "359": {
+        "identifier": "silph-scope",
+        "item_id": 548,
+        "name": "Silph Scope"
+      },
+      "36": {
+        "identifier": "elixir",
+        "item_id": 40,
+        "name": "Elixir"
+      },
+      "360": {
+        "identifier": "bicycle",
+        "item_id": 427,
+        "name": "Bicycle"
+      },
+      "361": {
+        "identifier": "town-map",
+        "item_id": 419,
+        "name": "Town Map"
+      },
+      "362": {
+        "identifier": "vs-seeker",
+        "item_id": 420,
+        "name": "Vs. Seeker"
+      },
+      "363": {
+        "identifier": "fame-checker",
+        "item_id": 549,
+        "name": "Fame Checker"
+      },
+      "364": {
+        "identifier": "tm-case",
+        "item_id": 550,
+        "name": "TM Case"
+      },
+      "365": {
+        "identifier": "berry-pouch",
+        "item_id": 551,
+        "name": "Berry Pouch"
+      },
+      "366": {
+        "identifier": "teachy-tv",
+        "item_id": 552,
+        "name": "Teachy TV"
+      },
+      "367": {
+        "identifier": "tri-pass",
+        "item_id": 553,
+        "name": "Tri-Pass"
+      },
+      "368": {
+        "identifier": "rainbow-pass",
+        "item_id": 554,
+        "name": "Rainbow Pass"
+      },
+      "369": {
+        "identifier": "tea",
+        "item_id": 555,
+        "name": "Tea"
+      },
+      "37": {
+        "identifier": "max-elixir",
+        "item_id": 41,
+        "name": "Max Elixir"
+      },
+      "370": {
+        "identifier": "mysticticket",
+        "item_id": 556,
+        "name": "MysticTicket"
+      },
+      "371": {
+        "identifier": "auroraticket",
+        "item_id": 557,
+        "name": "AuroraTicket"
+      },
+      "372": {
+        "identifier": "powder-jar",
+        "item_id": 558,
+        "name": "Powder Jar"
+      },
+      "373": {
+        "identifier": "ruby",
+        "item_id": 559,
+        "name": "Ruby"
+      },
+      "374": {
+        "identifier": "sapphire",
+        "item_id": 560,
+        "name": "Sapphire"
+      },
+      "375": {
+        "identifier": "magma-emblem",
+        "item_id": 561,
+        "name": "Magma Emblem"
+      },
+      "376": {
+        "identifier": "old-sea-map",
+        "item_id": 562,
+        "name": "Old Sea Map"
+      },
+      "38": {
+        "identifier": "lava-cookie",
+        "item_id": 42,
+        "name": "Lava Cookie"
+      },
+      "39": {
+        "identifier": "blue-flute",
+        "item_id": 65,
+        "name": "Blue Flute"
+      },
+      "4": {
+        "identifier": "poke-ball",
+        "item_id": 4,
+        "name": "Pok\u00e9 Ball"
+      },
+      "40": {
+        "identifier": "yellow-flute",
+        "item_id": 66,
+        "name": "Yellow Flute"
+      },
+      "41": {
+        "identifier": "red-flute",
+        "item_id": 67,
+        "name": "Red Flute"
+      },
+      "42": {
+        "identifier": "black-flute",
+        "item_id": 68,
+        "name": "Black Flute"
+      },
+      "43": {
+        "identifier": "white-flute",
+        "item_id": 69,
+        "name": "White Flute"
+      },
+      "44": {
+        "identifier": "berry-juice",
+        "item_id": 43,
+        "name": "Berry Juice"
+      },
+      "45": {
+        "identifier": "sacred-ash",
+        "item_id": 44,
+        "name": "Sacred Ash"
+      },
+      "46": {
+        "identifier": "shoal-salt",
+        "item_id": 70,
+        "name": "Shoal Salt"
+      },
+      "47": {
+        "identifier": "shoal-shell",
+        "item_id": 71,
+        "name": "Shoal Shell"
+      },
+      "48": {
+        "identifier": "red-shard",
+        "item_id": 72,
+        "name": "Red Shard"
+      },
+      "49": {
+        "identifier": "blue-shard",
+        "item_id": 73,
+        "name": "Blue Shard"
+      },
+      "5": {
+        "identifier": "safari-ball",
+        "item_id": 5,
+        "name": "Safari Ball"
+      },
+      "50": {
+        "identifier": "yellow-shard",
+        "item_id": 74,
+        "name": "Yellow Shard"
+      },
+      "51": {
+        "identifier": "green-shard",
+        "item_id": 75,
+        "name": "Green Shard"
+      },
+      "6": {
+        "identifier": "net-ball",
+        "item_id": 6,
+        "name": "Net Ball"
+      },
+      "63": {
+        "identifier": "hp-up",
+        "item_id": 45,
+        "name": "HP Up"
+      },
+      "64": {
+        "identifier": "protein",
+        "item_id": 46,
+        "name": "Protein"
+      },
+      "65": {
+        "identifier": "iron",
+        "item_id": 47,
+        "name": "Iron"
+      },
+      "66": {
+        "identifier": "carbos",
+        "item_id": 48,
+        "name": "Carbos"
+      },
+      "67": {
+        "identifier": "calcium",
+        "item_id": 49,
+        "name": "Calcium"
+      },
+      "68": {
+        "identifier": "rare-candy",
+        "item_id": 50,
+        "name": "Rare Candy"
+      },
+      "69": {
+        "identifier": "pp-up",
+        "item_id": 51,
+        "name": "PP Up"
+      },
+      "7": {
+        "identifier": "dive-ball",
+        "item_id": 7,
+        "name": "Dive Ball"
+      },
+      "70": {
+        "identifier": "zinc",
+        "item_id": 52,
+        "name": "Zinc"
+      },
+      "71": {
+        "identifier": "pp-max",
+        "item_id": 53,
+        "name": "PP Max"
+      },
+      "73": {
+        "identifier": "guard-spec",
+        "item_id": 55,
+        "name": "Guard Spec."
+      },
+      "74": {
+        "identifier": "dire-hit",
+        "item_id": 56,
+        "name": "Dire Hit"
+      },
+      "75": {
+        "identifier": "x-attack",
+        "item_id": 57,
+        "name": "X Attack"
+      },
+      "76": {
+        "identifier": "x-defense",
+        "item_id": 58,
+        "name": "X Defense"
+      },
+      "77": {
+        "identifier": "x-speed",
+        "item_id": 59,
+        "name": "X Speed"
+      },
+      "78": {
+        "identifier": "x-accuracy",
+        "item_id": 60,
+        "name": "X Accuracy"
+      },
+      "79": {
+        "identifier": "x-sp-atk",
+        "item_id": 61,
+        "name": "X Sp. Atk"
+      },
+      "8": {
+        "identifier": "nest-ball",
+        "item_id": 8,
+        "name": "Nest Ball"
+      },
+      "80": {
+        "identifier": "poke-doll",
+        "item_id": 63,
+        "name": "Pok\u00e9 Doll"
+      },
+      "81": {
+        "identifier": "fluffy-tail",
+        "item_id": 64,
+        "name": "Fluffy Tail"
+      },
+      "83": {
+        "identifier": "super-repel",
+        "item_id": 76,
+        "name": "Super Repel"
+      },
+      "84": {
+        "identifier": "max-repel",
+        "item_id": 77,
+        "name": "Max Repel"
+      },
+      "85": {
+        "identifier": "escape-rope",
+        "item_id": 78,
+        "name": "Escape Rope"
+      },
+      "86": {
+        "identifier": "repel",
+        "item_id": 79,
+        "name": "Repel"
+      },
+      "9": {
+        "identifier": "repeat-ball",
+        "item_id": 9,
+        "name": "Repeat Ball"
+      },
+      "93": {
+        "identifier": "sun-stone",
+        "item_id": 80,
+        "name": "Sun Stone"
+      },
+      "94": {
+        "identifier": "moon-stone",
+        "item_id": 81,
+        "name": "Moon Stone"
+      },
+      "95": {
+        "identifier": "fire-stone",
+        "item_id": 82,
+        "name": "Fire Stone"
+      },
+      "96": {
+        "identifier": "thunder-stone",
+        "item_id": 83,
+        "name": "Thunder Stone"
+      },
+      "97": {
+        "identifier": "water-stone",
+        "item_id": 84,
+        "name": "Water Stone"
+      },
+      "98": {
+        "identifier": "leaf-stone",
+        "item_id": 85,
+        "name": "Leaf Stone"
+      }
+    },
+    "firered-leafgreen": {
+      "1": {
+        "identifier": "master-ball",
+        "item_id": 1,
+        "name": "Master Ball"
+      },
+      "10": {
+        "identifier": "timer-ball",
+        "item_id": 10,
+        "name": "Timer Ball"
+      },
+      "103": {
+        "identifier": "tiny-mushroom",
+        "item_id": 86,
+        "name": "Tiny Mushroom"
+      },
+      "104": {
+        "identifier": "big-mushroom",
+        "item_id": 87,
+        "name": "Big Mushroom"
+      },
+      "106": {
+        "identifier": "pearl",
+        "item_id": 88,
+        "name": "Pearl"
+      },
+      "107": {
+        "identifier": "big-pearl",
+        "item_id": 89,
+        "name": "Big Pearl"
+      },
+      "108": {
+        "identifier": "stardust",
+        "item_id": 90,
+        "name": "Stardust"
+      },
+      "109": {
+        "identifier": "star-piece",
+        "item_id": 91,
+        "name": "Star Piece"
+      },
+      "11": {
+        "identifier": "luxury-ball",
+        "item_id": 11,
+        "name": "Luxury Ball"
+      },
+      "110": {
+        "identifier": "nugget",
+        "item_id": 92,
+        "name": "Nugget"
+      },
+      "111": {
+        "identifier": "heart-scale",
+        "item_id": 93,
+        "name": "Heart Scale"
+      },
+      "12": {
+        "identifier": "premier-ball",
+        "item_id": 12,
+        "name": "Premier Ball"
+      },
+      "121": {
+        "identifier": "orange-mail",
+        "item_id": 515,
+        "name": "Orange Mail"
+      },
+      "122": {
+        "identifier": "harbor-mail",
+        "item_id": 516,
+        "name": "Harbor Mail"
+      },
+      "123": {
+        "identifier": "glitter-mail",
+        "item_id": 517,
+        "name": "Glitter Mail"
+      },
+      "124": {
+        "identifier": "mech-mail",
+        "item_id": 518,
+        "name": "Mech Mail"
+      },
+      "125": {
+        "identifier": "wood-mail",
+        "item_id": 519,
+        "name": "Wood Mail"
+      },
+      "126": {
+        "identifier": "wave-mail",
+        "item_id": 520,
+        "name": "Wave Mail"
+      },
+      "127": {
+        "identifier": "bead-mail",
+        "item_id": 521,
+        "name": "Bead Mail"
+      },
+      "128": {
+        "identifier": "shadow-mail",
+        "item_id": 522,
+        "name": "Shadow Mail"
+      },
+      "129": {
+        "identifier": "tropic-mail",
+        "item_id": 523,
+        "name": "Tropic Mail"
+      },
+      "13": {
+        "identifier": "potion",
+        "item_id": 17,
+        "name": "Potion"
+      },
+      "130": {
+        "identifier": "dream-mail",
+        "item_id": 524,
+        "name": "Dream Mail"
+      },
+      "131": {
+        "identifier": "fab-mail",
+        "item_id": 525,
+        "name": "Fab Mail"
+      },
+      "132": {
+        "identifier": "retro-mail",
+        "item_id": 526,
+        "name": "Retro Mail"
+      },
+      "133": {
+        "identifier": "cheri-berry",
+        "item_id": 126,
+        "name": "Cheri Berry"
+      },
+      "134": {
+        "identifier": "chesto-berry",
+        "item_id": 127,
+        "name": "Chesto Berry"
+      },
+      "135": {
+        "identifier": "pecha-berry",
+        "item_id": 128,
+        "name": "Pecha Berry"
+      },
+      "136": {
+        "identifier": "rawst-berry",
+        "item_id": 129,
+        "name": "Rawst Berry"
+      },
+      "137": {
+        "identifier": "aspear-berry",
+        "item_id": 130,
+        "name": "Aspear Berry"
+      },
+      "138": {
+        "identifier": "leppa-berry",
+        "item_id": 131,
+        "name": "Leppa Berry"
+      },
+      "139": {
+        "identifier": "oran-berry",
+        "item_id": 132,
+        "name": "Oran Berry"
+      },
+      "14": {
+        "identifier": "antidote",
+        "item_id": 18,
+        "name": "Antidote"
+      },
+      "140": {
+        "identifier": "persim-berry",
+        "item_id": 133,
+        "name": "Persim Berry"
+      },
+      "141": {
+        "identifier": "lum-berry",
+        "item_id": 134,
+        "name": "Lum Berry"
+      },
+      "142": {
+        "identifier": "sitrus-berry",
+        "item_id": 135,
+        "name": "Sitrus Berry"
+      },
+      "143": {
+        "identifier": "figy-berry",
+        "item_id": 136,
+        "name": "Figy Berry"
+      },
+      "144": {
+        "identifier": "wiki-berry",
+        "item_id": 137,
+        "name": "Wiki Berry"
+      },
+      "145": {
+        "identifier": "mago-berry",
+        "item_id": 138,
+        "name": "Mago Berry"
+      },
+      "146": {
+        "identifier": "aguav-berry",
+        "item_id": 139,
+        "name": "Aguav Berry"
+      },
+      "147": {
+        "identifier": "iapapa-berry",
+        "item_id": 140,
+        "name": "Iapapa Berry"
+      },
+      "148": {
+        "identifier": "razz-berry",
+        "item_id": 141,
+        "name": "Razz Berry"
+      },
+      "149": {
+        "identifier": "bluk-berry",
+        "item_id": 142,
+        "name": "Bluk Berry"
+      },
+      "15": {
+        "identifier": "burn-heal",
+        "item_id": 19,
+        "name": "Burn Heal"
+      },
+      "150": {
+        "identifier": "nanab-berry",
+        "item_id": 143,
+        "name": "Nanab Berry"
+      },
+      "151": {
+        "identifier": "wepear-berry",
+        "item_id": 144,
+        "name": "Wepear Berry"
+      },
+      "152": {
+        "identifier": "pinap-berry",
+        "item_id": 145,
+        "name": "Pinap Berry"
+      },
+      "153": {
+        "identifier": "pomeg-berry",
+        "item_id": 146,
+        "name": "Pomeg Berry"
+      },
+      "154": {
+        "identifier": "kelpsy-berry",
+        "item_id": 147,
+        "name": "Kelpsy Berry"
+      },
+      "155": {
+        "identifier": "qualot-berry",
+        "item_id": 148,
+        "name": "Qualot Berry"
+      },
+      "156": {
+        "identifier": "hondew-berry",
+        "item_id": 149,
+        "name": "Hondew Berry"
+      },
+      "157": {
+        "identifier": "grepa-berry",
+        "item_id": 150,
+        "name": "Grepa Berry"
+      },
+      "158": {
+        "identifier": "tamato-berry",
+        "item_id": 151,
+        "name": "Tamato Berry"
+      },
+      "159": {
+        "identifier": "cornn-berry",
+        "item_id": 152,
+        "name": "Cornn Berry"
+      },
+      "16": {
+        "identifier": "ice-heal",
+        "item_id": 20,
+        "name": "Ice Heal"
+      },
+      "160": {
+        "identifier": "magost-berry",
+        "item_id": 153,
+        "name": "Magost Berry"
+      },
+      "161": {
+        "identifier": "rabuta-berry",
+        "item_id": 154,
+        "name": "Rabuta Berry"
+      },
+      "162": {
+        "identifier": "nomel-berry",
+        "item_id": 155,
+        "name": "Nomel Berry"
+      },
+      "163": {
+        "identifier": "spelon-berry",
+        "item_id": 156,
+        "name": "Spelon Berry"
+      },
+      "164": {
+        "identifier": "pamtre-berry",
+        "item_id": 157,
+        "name": "Pamtre Berry"
+      },
+      "165": {
+        "identifier": "watmel-berry",
+        "item_id": 158,
+        "name": "Watmel Berry"
+      },
+      "166": {
+        "identifier": "durin-berry",
+        "item_id": 159,
+        "name": "Durin Berry"
+      },
+      "167": {
+        "identifier": "belue-berry",
+        "item_id": 160,
+        "name": "Belue Berry"
+      },
+      "168": {
+        "identifier": "liechi-berry",
+        "item_id": 178,
+        "name": "Liechi Berry"
+      },
+      "169": {
+        "identifier": "ganlon-berry",
+        "item_id": 179,
+        "name": "Ganlon Berry"
+      },
+      "17": {
+        "identifier": "awakening",
+        "item_id": 21,
+        "name": "Awakening"
+      },
+      "170": {
+        "identifier": "salac-berry",
+        "item_id": 180,
+        "name": "Salac Berry"
+      },
+      "171": {
+        "identifier": "petaya-berry",
+        "item_id": 181,
+        "name": "Petaya Berry"
+      },
+      "172": {
+        "identifier": "apicot-berry",
+        "item_id": 182,
+        "name": "Apicot Berry"
+      },
+      "173": {
+        "identifier": "lansat-berry",
+        "item_id": 183,
+        "name": "Lansat Berry"
+      },
+      "174": {
+        "identifier": "starf-berry",
+        "item_id": 184,
+        "name": "Starf Berry"
+      },
+      "175": {
+        "identifier": "enigma-berry",
+        "item_id": 185,
+        "name": "Enigma Berry"
+      },
+      "179": {
+        "identifier": "bright-powder",
+        "item_id": 190,
+        "name": "Bright Powder"
+      },
+      "18": {
+        "identifier": "paralyze-heal",
+        "item_id": 22,
+        "name": "Paralyze Heal"
+      },
+      "180": {
+        "identifier": "white-herb",
+        "item_id": 191,
+        "name": "White Herb"
+      },
+      "181": {
+        "identifier": "macho-brace",
+        "item_id": 192,
+        "name": "Macho Brace"
+      },
+      "182": {
+        "identifier": "exp-share",
+        "item_id": 193,
+        "name": "Exp. Share"
+      },
+      "183": {
+        "identifier": "quick-claw",
+        "item_id": 194,
+        "name": "Quick Claw"
+      },
+      "184": {
+        "identifier": "soothe-bell",
+        "item_id": 195,
+        "name": "Soothe Bell"
+      },
+      "185": {
+        "identifier": "mental-herb",
+        "item_id": 196,
+        "name": "Mental Herb"
+      },
+      "186": {
+        "identifier": "choice-band",
+        "item_id": 197,
+        "name": "Choice Band"
+      },
+      "187": {
+        "identifier": "kings-rock",
+        "item_id": 198,
+        "name": "King\u2019s Rock"
+      },
+      "188": {
+        "identifier": "silver-powder",
+        "item_id": 199,
+        "name": "Silver Powder"
+      },
+      "189": {
+        "identifier": "amulet-coin",
+        "item_id": 200,
+        "name": "Amulet Coin"
+      },
+      "19": {
+        "identifier": "full-restore",
+        "item_id": 23,
+        "name": "Full Restore"
+      },
+      "190": {
+        "identifier": "cleanse-tag",
+        "item_id": 201,
+        "name": "Cleanse Tag"
+      },
+      "191": {
+        "identifier": "soul-dew",
+        "item_id": 202,
+        "name": "Soul Dew"
+      },
+      "192": {
+        "identifier": "deep-sea-tooth",
+        "item_id": 203,
+        "name": "Deep Sea Tooth"
+      },
+      "193": {
+        "identifier": "deep-sea-scale",
+        "item_id": 204,
+        "name": "Deep Sea Scale"
+      },
+      "194": {
+        "identifier": "smoke-ball",
+        "item_id": 205,
+        "name": "Smoke Ball"
+      },
+      "195": {
+        "identifier": "everstone",
+        "item_id": 206,
+        "name": "Everstone"
+      },
+      "196": {
+        "identifier": "focus-band",
+        "item_id": 207,
+        "name": "Focus Band"
+      },
+      "197": {
+        "identifier": "lucky-egg",
+        "item_id": 208,
+        "name": "Lucky Egg"
+      },
+      "198": {
+        "identifier": "scope-lens",
+        "item_id": 209,
+        "name": "Scope Lens"
+      },
+      "199": {
+        "identifier": "metal-coat",
+        "item_id": 210,
+        "name": "Metal Coat"
+      },
+      "2": {
+        "identifier": "ultra-ball",
+        "item_id": 2,
+        "name": "Ultra Ball"
+      },
+      "20": {
+        "identifier": "max-potion",
+        "item_id": 24,
+        "name": "Max Potion"
+      },
+      "200": {
+        "identifier": "leftovers",
+        "item_id": 211,
+        "name": "Leftovers"
+      },
+      "201": {
+        "identifier": "dragon-scale",
+        "item_id": 212,
+        "name": "Dragon Scale"
+      },
+      "202": {
+        "identifier": "light-ball",
+        "item_id": 213,
+        "name": "Light Ball"
+      },
+      "203": {
+        "identifier": "soft-sand",
+        "item_id": 214,
+        "name": "Soft Sand"
+      },
+      "204": {
+        "identifier": "hard-stone",
+        "item_id": 215,
+        "name": "Hard Stone"
+      },
+      "205": {
+        "identifier": "miracle-seed",
+        "item_id": 216,
+        "name": "Miracle Seed"
+      },
+      "206": {
+        "identifier": "black-glasses",
+        "item_id": 217,
+        "name": "Black Glasses"
+      },
+      "207": {
+        "identifier": "black-belt",
+        "item_id": 218,
+        "name": "Black Belt"
+      },
+      "208": {
+        "identifier": "magnet",
+        "item_id": 219,
+        "name": "Magnet"
+      },
+      "209": {
+        "identifier": "mystic-water",
+        "item_id": 220,
+        "name": "Mystic Water"
+      },
+      "21": {
+        "identifier": "hyper-potion",
+        "item_id": 25,
+        "name": "Hyper Potion"
+      },
+      "210": {
+        "identifier": "sharp-beak",
+        "item_id": 221,
+        "name": "Sharp Beak"
+      },
+      "211": {
+        "identifier": "poison-barb",
+        "item_id": 222,
+        "name": "Poison Barb"
+      },
+      "212": {
+        "identifier": "never-melt-ice",
+        "item_id": 223,
+        "name": "Never-Melt Ice"
+      },
+      "213": {
+        "identifier": "spell-tag",
+        "item_id": 224,
+        "name": "Spell Tag"
+      },
+      "214": {
+        "identifier": "twisted-spoon",
+        "item_id": 225,
+        "name": "Twisted Spoon"
+      },
+      "215": {
+        "identifier": "charcoal",
+        "item_id": 226,
+        "name": "Charcoal"
+      },
+      "216": {
+        "identifier": "dragon-fang",
+        "item_id": 227,
+        "name": "Dragon Fang"
+      },
+      "217": {
+        "identifier": "silk-scarf",
+        "item_id": 228,
+        "name": "Silk Scarf"
+      },
+      "218": {
+        "identifier": "up-grade",
+        "item_id": 229,
+        "name": "Upgrade"
+      },
+      "219": {
+        "identifier": "shell-bell",
+        "item_id": 230,
+        "name": "Shell Bell"
+      },
+      "22": {
+        "identifier": "super-potion",
+        "item_id": 26,
+        "name": "Super Potion"
+      },
+      "220": {
+        "identifier": "sea-incense",
+        "item_id": 231,
+        "name": "Sea Incense"
+      },
+      "221": {
+        "identifier": "lax-incense",
+        "item_id": 232,
+        "name": "Lax Incense"
+      },
+      "222": {
+        "identifier": "lucky-punch",
+        "item_id": 233,
+        "name": "Lucky Punch"
+      },
+      "223": {
+        "identifier": "metal-powder",
+        "item_id": 234,
+        "name": "Metal Powder"
+      },
+      "224": {
+        "identifier": "thick-club",
+        "item_id": 235,
+        "name": "Thick Club"
+      },
+      "225": {
+        "identifier": "stick",
+        "item_id": 236,
+        "name": "Leek"
+      },
+      "23": {
+        "identifier": "full-heal",
+        "item_id": 27,
+        "name": "Full Heal"
+      },
+      "24": {
+        "identifier": "revive",
+        "item_id": 28,
+        "name": "Revive"
+      },
+      "25": {
+        "identifier": "max-revive",
+        "item_id": 29,
+        "name": "Max Revive"
+      },
+      "254": {
+        "identifier": "red-scarf",
+        "item_id": 237,
+        "name": "Red Scarf"
+      },
+      "255": {
+        "identifier": "blue-scarf",
+        "item_id": 238,
+        "name": "Blue Scarf"
+      },
+      "256": {
+        "identifier": "pink-scarf",
+        "item_id": 239,
+        "name": "Pink Scarf"
+      },
+      "257": {
+        "identifier": "green-scarf",
+        "item_id": 240,
+        "name": "Green Scarf"
+      },
+      "258": {
+        "identifier": "yellow-scarf",
+        "item_id": 241,
+        "name": "Yellow Scarf"
+      },
+      "259": {
+        "identifier": "mach-bike",
+        "item_id": 527,
+        "name": "Mach Bike"
+      },
+      "26": {
+        "identifier": "fresh-water",
+        "item_id": 30,
+        "name": "Fresh Water"
+      },
+      "260": {
+        "identifier": "coin-case",
+        "item_id": 421,
+        "name": "Coin Case"
+      },
+      "261": {
+        "identifier": "dowsing-machine",
+        "item_id": 465,
+        "name": "Dowsing Machine"
+      },
+      "262": {
+        "identifier": "old-rod",
+        "item_id": 422,
+        "name": "Old Rod"
+      },
+      "263": {
+        "identifier": "good-rod",
+        "item_id": 423,
+        "name": "Good Rod"
+      },
+      "264": {
+        "identifier": "super-rod",
+        "item_id": 424,
+        "name": "Super Rod"
+      },
+      "265": {
+        "identifier": "ss-ticket",
+        "item_id": 433,
+        "name": "S.S. Ticket"
+      },
+      "266": {
+        "identifier": "contest-pass",
+        "item_id": 434,
+        "name": "Contest Pass"
+      },
+      "268": {
+        "identifier": "wailmer-pail",
+        "item_id": 529,
+        "name": "Wailmer Pail"
+      },
+      "269": {
+        "identifier": "devon-goods",
+        "item_id": 530,
+        "name": "Devon Goods"
+      },
+      "27": {
+        "identifier": "soda-pop",
+        "item_id": 31,
+        "name": "Soda Pop"
+      },
+      "270": {
+        "identifier": "soot-sack",
+        "item_id": 531,
+        "name": "Soot Sack"
+      },
+      "271": {
+        "identifier": "basement-key",
+        "item_id": 476,
+        "name": "Basement Key"
+      },
+      "272": {
+        "identifier": "acro-bike",
+        "item_id": 528,
+        "name": "Acro Bike"
+      },
+      "273": {
+        "identifier": "pokeblock-case",
+        "item_id": 532,
+        "name": "Pok\u00e9block Case"
+      },
+      "274": {
+        "identifier": "letter",
+        "item_id": 533,
+        "name": "Letter"
+      },
+      "275": {
+        "identifier": "eon-ticket",
+        "item_id": 534,
+        "name": "Eon Ticket"
+      },
+      "276": {
+        "identifier": "red-orb",
+        "item_id": 467,
+        "name": "Red Orb"
+      },
+      "277": {
+        "identifier": "blue-orb",
+        "item_id": 468,
+        "name": "Blue Orb"
+      },
+      "278": {
+        "identifier": "scanner",
+        "item_id": 535,
+        "name": "Scanner"
+      },
+      "279": {
+        "identifier": "go-goggles",
+        "item_id": 536,
+        "name": "Go-Goggles"
+      },
+      "28": {
+        "identifier": "lemonade",
+        "item_id": 32,
+        "name": "Lemonade"
+      },
+      "280": {
+        "identifier": "meteorite",
+        "item_id": 537,
+        "name": "Meteorite"
+      },
+      "281": {
+        "identifier": "rm-1-key",
+        "item_id": 538,
+        "name": "Rm. 1 Key"
+      },
+      "282": {
+        "identifier": "rm-2-key",
+        "item_id": 539,
+        "name": "Rm. 2 Key"
+      },
+      "283": {
+        "identifier": "rm-4-key",
+        "item_id": 540,
+        "name": "Rm. 4 Key"
+      },
+      "284": {
+        "identifier": "rm-6-key",
+        "item_id": 541,
+        "name": "Rm. 6 Key"
+      },
+      "285": {
+        "identifier": "storage-key",
+        "item_id": 440,
+        "name": "Storage Key"
+      },
+      "286": {
+        "identifier": "root-fossil",
+        "item_id": 99,
+        "name": "Root Fossil"
+      },
+      "287": {
+        "identifier": "claw-fossil",
+        "item_id": 100,
+        "name": "Claw Fossil"
+      },
+      "288": {
+        "identifier": "devon-scope",
+        "item_id": 542,
+        "name": "Devon Scope"
+      },
+      "289": {
+        "identifier": "tm01",
+        "item_id": 305,
+        "name": "TM01"
+      },
+      "29": {
+        "identifier": "moomoo-milk",
+        "item_id": 33,
+        "name": "Moomoo Milk"
+      },
+      "290": {
+        "identifier": "tm02",
+        "item_id": 306,
+        "name": "TM02"
+      },
+      "291": {
+        "identifier": "tm03",
+        "item_id": 307,
+        "name": "TM03"
+      },
+      "292": {
+        "identifier": "tm04",
+        "item_id": 308,
+        "name": "TM04"
+      },
+      "293": {
+        "identifier": "tm05",
+        "item_id": 309,
+        "name": "TM05"
+      },
+      "294": {
+        "identifier": "tm06",
+        "item_id": 310,
+        "name": "TM06"
+      },
+      "295": {
+        "identifier": "tm07",
+        "item_id": 311,
+        "name": "TM07"
+      },
+      "296": {
+        "identifier": "tm08",
+        "item_id": 312,
+        "name": "TM08"
+      },
+      "297": {
+        "identifier": "tm09",
+        "item_id": 313,
+        "name": "TM09"
+      },
+      "298": {
+        "identifier": "tm10",
+        "item_id": 314,
+        "name": "TM10"
+      },
+      "299": {
+        "identifier": "tm11",
+        "item_id": 315,
+        "name": "TM11"
+      },
+      "3": {
+        "identifier": "great-ball",
+        "item_id": 3,
+        "name": "Great Ball"
+      },
+      "30": {
+        "identifier": "energy-powder",
+        "item_id": 34,
+        "name": "Energy Powder"
+      },
+      "300": {
+        "identifier": "tm12",
+        "item_id": 316,
+        "name": "TM12"
+      },
+      "301": {
+        "identifier": "tm13",
+        "item_id": 317,
+        "name": "TM13"
+      },
+      "302": {
+        "identifier": "tm14",
+        "item_id": 318,
+        "name": "TM14"
+      },
+      "303": {
+        "identifier": "tm15",
+        "item_id": 319,
+        "name": "TM15"
+      },
+      "304": {
+        "identifier": "tm16",
+        "item_id": 320,
+        "name": "TM16"
+      },
+      "305": {
+        "identifier": "tm17",
+        "item_id": 321,
+        "name": "TM17"
+      },
+      "306": {
+        "identifier": "tm18",
+        "item_id": 322,
+        "name": "TM18"
+      },
+      "307": {
+        "identifier": "tm19",
+        "item_id": 323,
+        "name": "TM19"
+      },
+      "308": {
+        "identifier": "tm20",
+        "item_id": 324,
+        "name": "TM20"
+      },
+      "309": {
+        "identifier": "tm21",
+        "item_id": 325,
+        "name": "TM21"
+      },
+      "31": {
+        "identifier": "energy-root",
+        "item_id": 35,
+        "name": "Energy Root"
+      },
+      "310": {
+        "identifier": "tm22",
+        "item_id": 326,
+        "name": "TM22"
+      },
+      "311": {
+        "identifier": "tm23",
+        "item_id": 327,
+        "name": "TM23"
+      },
+      "312": {
+        "identifier": "tm24",
+        "item_id": 328,
+        "name": "TM24"
+      },
+      "313": {
+        "identifier": "tm25",
+        "item_id": 329,
+        "name": "TM25"
+      },
+      "314": {
+        "identifier": "tm26",
+        "item_id": 330,
+        "name": "TM26"
+      },
+      "315": {
+        "identifier": "tm27",
+        "item_id": 331,
+        "name": "TM27"
+      },
+      "316": {
+        "identifier": "tm28",
+        "item_id": 332,
+        "name": "TM28"
+      },
+      "317": {
+        "identifier": "tm29",
+        "item_id": 333,
+        "name": "TM29"
+      },
+      "318": {
+        "identifier": "tm30",
+        "item_id": 334,
+        "name": "TM30"
+      },
+      "319": {
+        "identifier": "tm31",
+        "item_id": 335,
+        "name": "TM31"
+      },
+      "32": {
+        "identifier": "heal-powder",
+        "item_id": 36,
+        "name": "Heal Powder"
+      },
+      "320": {
+        "identifier": "tm32",
+        "item_id": 336,
+        "name": "TM32"
+      },
+      "321": {
+        "identifier": "tm33",
+        "item_id": 337,
+        "name": "TM33"
+      },
+      "322": {
+        "identifier": "tm34",
+        "item_id": 338,
+        "name": "TM34"
+      },
+      "323": {
+        "identifier": "tm35",
+        "item_id": 339,
+        "name": "TM35"
+      },
+      "324": {
+        "identifier": "tm36",
+        "item_id": 340,
+        "name": "TM36"
+      },
+      "325": {
+        "identifier": "tm37",
+        "item_id": 341,
+        "name": "TM37"
+      },
+      "326": {
+        "identifier": "tm38",
+        "item_id": 342,
+        "name": "TM38"
+      },
+      "327": {
+        "identifier": "tm39",
+        "item_id": 343,
+        "name": "TM39"
+      },
+      "328": {
+        "identifier": "tm40",
+        "item_id": 344,
+        "name": "TM40"
+      },
+      "329": {
+        "identifier": "tm41",
+        "item_id": 345,
+        "name": "TM41"
+      },
+      "33": {
+        "identifier": "revival-herb",
+        "item_id": 37,
+        "name": "Revival Herb"
+      },
+      "330": {
+        "identifier": "tm42",
+        "item_id": 346,
+        "name": "TM42"
+      },
+      "331": {
+        "identifier": "tm43",
+        "item_id": 347,
+        "name": "TM43"
+      },
+      "332": {
+        "identifier": "tm44",
+        "item_id": 348,
+        "name": "TM44"
+      },
+      "333": {
+        "identifier": "tm45",
+        "item_id": 349,
+        "name": "TM45"
+      },
+      "334": {
+        "identifier": "tm46",
+        "item_id": 350,
+        "name": "TM46"
+      },
+      "335": {
+        "identifier": "tm47",
+        "item_id": 351,
+        "name": "TM47"
+      },
+      "336": {
+        "identifier": "tm48",
+        "item_id": 352,
+        "name": "TM48"
+      },
+      "337": {
+        "identifier": "tm49",
+        "item_id": 353,
+        "name": "TM49"
+      },
+      "338": {
+        "identifier": "tm50",
+        "item_id": 354,
+        "name": "TM50"
+      },
+      "339": {
+        "identifier": "hm01",
+        "item_id": 397,
+        "name": "HM01"
+      },
+      "34": {
+        "identifier": "ether",
+        "item_id": 38,
+        "name": "Ether"
+      },
+      "340": {
+        "identifier": "hm02",
+        "item_id": 398,
+        "name": "HM02"
+      },
+      "341": {
+        "identifier": "hm03",
+        "item_id": 399,
+        "name": "HM03"
+      },
+      "342": {
+        "identifier": "hm04",
+        "item_id": 400,
+        "name": "HM04"
+      },
+      "343": {
+        "identifier": "hm05",
+        "item_id": 401,
+        "name": "HM05"
+      },
+      "344": {
+        "identifier": "hm06",
+        "item_id": 402,
+        "name": "HM06"
+      },
+      "345": {
+        "identifier": "hm07",
+        "item_id": 403,
+        "name": "HM07"
+      },
+      "346": {
+        "identifier": "hm08",
+        "item_id": 404,
+        "name": "HM08"
+      },
+      "349": {
+        "identifier": "oaks-parcel",
+        "item_id": 543,
+        "name": "Oak\u2019s Parcel"
+      },
+      "35": {
+        "identifier": "max-ether",
+        "item_id": 39,
+        "name": "Max Ether"
+      },
+      "350": {
+        "identifier": "poke-flute",
+        "item_id": 544,
+        "name": "Pok\u00e9 Flute"
+      },
+      "351": {
+        "identifier": "secret-key",
+        "item_id": 445,
+        "name": "Secret Key"
+      },
+      "352": {
+        "identifier": "bike-voucher",
+        "item_id": 545,
+        "name": "Bike Voucher"
+      },
+      "353": {
+        "identifier": "gold-teeth",
+        "item_id": 546,
+        "name": "Gold Teeth"
+      },
+      "354": {
+        "identifier": "old-amber",
+        "item_id": 103,
+        "name": "Old Amber"
+      },
+      "355": {
+        "identifier": "card-key",
+        "item_id": 475,
+        "name": "Card Key"
+      },
+      "356": {
+        "identifier": "lift-key",
+        "item_id": 547,
+        "name": "Lift Key"
+      },
+      "357": {
+        "identifier": "helix-fossil",
+        "item_id": 101,
+        "name": "Helix Fossil"
+      },
+      "358": {
+        "identifier": "dome-fossil",
+        "item_id": 102,
+        "name": "Dome Fossil"
+      },
+      "359": {
+        "identifier": "silph-scope",
+        "item_id": 548,
+        "name": "Silph Scope"
+      },
+      "36": {
+        "identifier": "elixir",
+        "item_id": 40,
+        "name": "Elixir"
+      },
+      "360": {
+        "identifier": "bicycle",
+        "item_id": 427,
+        "name": "Bicycle"
+      },
+      "361": {
+        "identifier": "town-map",
+        "item_id": 419,
+        "name": "Town Map"
+      },
+      "362": {
+        "identifier": "vs-seeker",
+        "item_id": 420,
+        "name": "Vs. Seeker"
+      },
+      "363": {
+        "identifier": "fame-checker",
+        "item_id": 549,
+        "name": "Fame Checker"
+      },
+      "364": {
+        "identifier": "tm-case",
+        "item_id": 550,
+        "name": "TM Case"
+      },
+      "365": {
+        "identifier": "berry-pouch",
+        "item_id": 551,
+        "name": "Berry Pouch"
+      },
+      "366": {
+        "identifier": "teachy-tv",
+        "item_id": 552,
+        "name": "Teachy TV"
+      },
+      "367": {
+        "identifier": "tri-pass",
+        "item_id": 553,
+        "name": "Tri-Pass"
+      },
+      "368": {
+        "identifier": "rainbow-pass",
+        "item_id": 554,
+        "name": "Rainbow Pass"
+      },
+      "369": {
+        "identifier": "tea",
+        "item_id": 555,
+        "name": "Tea"
+      },
+      "37": {
+        "identifier": "max-elixir",
+        "item_id": 41,
+        "name": "Max Elixir"
+      },
+      "370": {
+        "identifier": "mysticticket",
+        "item_id": 556,
+        "name": "MysticTicket"
+      },
+      "371": {
+        "identifier": "auroraticket",
+        "item_id": 557,
+        "name": "AuroraTicket"
+      },
+      "372": {
+        "identifier": "powder-jar",
+        "item_id": 558,
+        "name": "Powder Jar"
+      },
+      "373": {
+        "identifier": "ruby",
+        "item_id": 559,
+        "name": "Ruby"
+      },
+      "374": {
+        "identifier": "sapphire",
+        "item_id": 560,
+        "name": "Sapphire"
+      },
+      "375": {
+        "identifier": "magma-emblem",
+        "item_id": 561,
+        "name": "Magma Emblem"
+      },
+      "376": {
+        "identifier": "old-sea-map",
+        "item_id": 562,
+        "name": "Old Sea Map"
+      },
+      "38": {
+        "identifier": "lava-cookie",
+        "item_id": 42,
+        "name": "Lava Cookie"
+      },
+      "39": {
+        "identifier": "blue-flute",
+        "item_id": 65,
+        "name": "Blue Flute"
+      },
+      "4": {
+        "identifier": "poke-ball",
+        "item_id": 4,
+        "name": "Pok\u00e9 Ball"
+      },
+      "40": {
+        "identifier": "yellow-flute",
+        "item_id": 66,
+        "name": "Yellow Flute"
+      },
+      "41": {
+        "identifier": "red-flute",
+        "item_id": 67,
+        "name": "Red Flute"
+      },
+      "42": {
+        "identifier": "black-flute",
+        "item_id": 68,
+        "name": "Black Flute"
+      },
+      "43": {
+        "identifier": "white-flute",
+        "item_id": 69,
+        "name": "White Flute"
+      },
+      "44": {
+        "identifier": "berry-juice",
+        "item_id": 43,
+        "name": "Berry Juice"
+      },
+      "45": {
+        "identifier": "sacred-ash",
+        "item_id": 44,
+        "name": "Sacred Ash"
+      },
+      "46": {
+        "identifier": "shoal-salt",
+        "item_id": 70,
+        "name": "Shoal Salt"
+      },
+      "47": {
+        "identifier": "shoal-shell",
+        "item_id": 71,
+        "name": "Shoal Shell"
+      },
+      "48": {
+        "identifier": "red-shard",
+        "item_id": 72,
+        "name": "Red Shard"
+      },
+      "49": {
+        "identifier": "blue-shard",
+        "item_id": 73,
+        "name": "Blue Shard"
+      },
+      "5": {
+        "identifier": "safari-ball",
+        "item_id": 5,
+        "name": "Safari Ball"
+      },
+      "50": {
+        "identifier": "yellow-shard",
+        "item_id": 74,
+        "name": "Yellow Shard"
+      },
+      "51": {
+        "identifier": "green-shard",
+        "item_id": 75,
+        "name": "Green Shard"
+      },
+      "6": {
+        "identifier": "net-ball",
+        "item_id": 6,
+        "name": "Net Ball"
+      },
+      "63": {
+        "identifier": "hp-up",
+        "item_id": 45,
+        "name": "HP Up"
+      },
+      "64": {
+        "identifier": "protein",
+        "item_id": 46,
+        "name": "Protein"
+      },
+      "65": {
+        "identifier": "iron",
+        "item_id": 47,
+        "name": "Iron"
+      },
+      "66": {
+        "identifier": "carbos",
+        "item_id": 48,
+        "name": "Carbos"
+      },
+      "67": {
+        "identifier": "calcium",
+        "item_id": 49,
+        "name": "Calcium"
+      },
+      "68": {
+        "identifier": "rare-candy",
+        "item_id": 50,
+        "name": "Rare Candy"
+      },
+      "69": {
+        "identifier": "pp-up",
+        "item_id": 51,
+        "name": "PP Up"
+      },
+      "7": {
+        "identifier": "dive-ball",
+        "item_id": 7,
+        "name": "Dive Ball"
+      },
+      "70": {
+        "identifier": "zinc",
+        "item_id": 52,
+        "name": "Zinc"
+      },
+      "71": {
+        "identifier": "pp-max",
+        "item_id": 53,
+        "name": "PP Max"
+      },
+      "73": {
+        "identifier": "guard-spec",
+        "item_id": 55,
+        "name": "Guard Spec."
+      },
+      "74": {
+        "identifier": "dire-hit",
+        "item_id": 56,
+        "name": "Dire Hit"
+      },
+      "75": {
+        "identifier": "x-attack",
+        "item_id": 57,
+        "name": "X Attack"
+      },
+      "76": {
+        "identifier": "x-defense",
+        "item_id": 58,
+        "name": "X Defense"
+      },
+      "77": {
+        "identifier": "x-speed",
+        "item_id": 59,
+        "name": "X Speed"
+      },
+      "78": {
+        "identifier": "x-accuracy",
+        "item_id": 60,
+        "name": "X Accuracy"
+      },
+      "79": {
+        "identifier": "x-sp-atk",
+        "item_id": 61,
+        "name": "X Sp. Atk"
+      },
+      "8": {
+        "identifier": "nest-ball",
+        "item_id": 8,
+        "name": "Nest Ball"
+      },
+      "80": {
+        "identifier": "poke-doll",
+        "item_id": 63,
+        "name": "Pok\u00e9 Doll"
+      },
+      "81": {
+        "identifier": "fluffy-tail",
+        "item_id": 64,
+        "name": "Fluffy Tail"
+      },
+      "83": {
+        "identifier": "super-repel",
+        "item_id": 76,
+        "name": "Super Repel"
+      },
+      "84": {
+        "identifier": "max-repel",
+        "item_id": 77,
+        "name": "Max Repel"
+      },
+      "85": {
+        "identifier": "escape-rope",
+        "item_id": 78,
+        "name": "Escape Rope"
+      },
+      "86": {
+        "identifier": "repel",
+        "item_id": 79,
+        "name": "Repel"
+      },
+      "9": {
+        "identifier": "repeat-ball",
+        "item_id": 9,
+        "name": "Repeat Ball"
+      },
+      "93": {
+        "identifier": "sun-stone",
+        "item_id": 80,
+        "name": "Sun Stone"
+      },
+      "94": {
+        "identifier": "moon-stone",
+        "item_id": 81,
+        "name": "Moon Stone"
+      },
+      "95": {
+        "identifier": "fire-stone",
+        "item_id": 82,
+        "name": "Fire Stone"
+      },
+      "96": {
+        "identifier": "thunder-stone",
+        "item_id": 83,
+        "name": "Thunder Stone"
+      },
+      "97": {
+        "identifier": "water-stone",
+        "item_id": 84,
+        "name": "Water Stone"
+      },
+      "98": {
+        "identifier": "leaf-stone",
+        "item_id": 85,
+        "name": "Leaf Stone"
+      }
+    },
+    "gold": {
+      "1": {
+        "identifier": "master-ball",
+        "item_id": 1,
+        "name": "Master Ball"
+      },
+      "10": {
+        "identifier": "burn-heal",
+        "item_id": 19,
+        "name": "Burn Heal"
+      },
+      "102": {
+        "identifier": "black-glasses",
+        "item_id": 217,
+        "name": "Black Glasses"
+      },
+      "103": {
+        "identifier": "slowpoke-tail",
+        "item_id": 473,
+        "name": "Slowpoke Tail"
+      },
+      "105": {
+        "identifier": "stick",
+        "item_id": 236,
+        "name": "Leek"
+      },
+      "106": {
+        "identifier": "smoke-ball",
+        "item_id": 205,
+        "name": "Smoke Ball"
+      },
+      "107": {
+        "identifier": "never-melt-ice",
+        "item_id": 223,
+        "name": "Never-Melt Ice"
+      },
+      "108": {
+        "identifier": "magnet",
+        "item_id": 219,
+        "name": "Magnet"
+      },
+      "11": {
+        "identifier": "ice-heal",
+        "item_id": 20,
+        "name": "Ice Heal"
+      },
+      "110": {
+        "identifier": "pearl",
+        "item_id": 88,
+        "name": "Pearl"
+      },
+      "111": {
+        "identifier": "big-pearl",
+        "item_id": 89,
+        "name": "Big Pearl"
+      },
+      "112": {
+        "identifier": "everstone",
+        "item_id": 206,
+        "name": "Everstone"
+      },
+      "113": {
+        "identifier": "spell-tag",
+        "item_id": 224,
+        "name": "Spell Tag"
+      },
+      "114": {
+        "identifier": "rage-candy-bar",
+        "item_id": 466,
+        "name": "Rage Candy Bar"
+      },
+      "116": {
+        "identifier": "blue-card",
+        "item_id": 472,
+        "name": "Blue Card"
+      },
+      "117": {
+        "identifier": "miracle-seed",
+        "item_id": 216,
+        "name": "Miracle Seed"
+      },
+      "118": {
+        "identifier": "thick-club",
+        "item_id": 235,
+        "name": "Thick Club"
+      },
+      "119": {
+        "identifier": "focus-band",
+        "item_id": 207,
+        "name": "Focus Band"
+      },
+      "12": {
+        "identifier": "awakening",
+        "item_id": 21,
+        "name": "Awakening"
+      },
+      "121": {
+        "identifier": "energy-powder",
+        "item_id": 34,
+        "name": "Energy Powder"
+      },
+      "122": {
+        "identifier": "energy-root",
+        "item_id": 35,
+        "name": "Energy Root"
+      },
+      "123": {
+        "identifier": "heal-powder",
+        "item_id": 36,
+        "name": "Heal Powder"
+      },
+      "124": {
+        "identifier": "revival-herb",
+        "item_id": 37,
+        "name": "Revival Herb"
+      },
+      "125": {
+        "identifier": "hard-stone",
+        "item_id": 215,
+        "name": "Hard Stone"
+      },
+      "126": {
+        "identifier": "lucky-egg",
+        "item_id": 208,
+        "name": "Lucky Egg"
+      },
+      "127": {
+        "identifier": "card-key",
+        "item_id": 475,
+        "name": "Card Key"
+      },
+      "128": {
+        "identifier": "machine-part",
+        "item_id": 480,
+        "name": "Machine Part"
+      },
+      "13": {
+        "identifier": "paralyze-heal",
+        "item_id": 22,
+        "name": "Paralyze Heal"
+      },
+      "130": {
+        "identifier": "lost-item",
+        "item_id": 478,
+        "name": "Lost Item"
+      },
+      "131": {
+        "identifier": "stardust",
+        "item_id": 90,
+        "name": "Stardust"
+      },
+      "132": {
+        "identifier": "star-piece",
+        "item_id": 91,
+        "name": "Star Piece"
+      },
+      "133": {
+        "identifier": "basement-key",
+        "item_id": 476,
+        "name": "Basement Key"
+      },
+      "134": {
+        "identifier": "pass",
+        "item_id": 479,
+        "name": "Pass"
+      },
+      "138": {
+        "identifier": "charcoal",
+        "item_id": 226,
+        "name": "Charcoal"
+      },
+      "139": {
+        "identifier": "berry-juice",
+        "item_id": 43,
+        "name": "Berry Juice"
+      },
+      "14": {
+        "identifier": "full-restore",
+        "item_id": 23,
+        "name": "Full Restore"
+      },
+      "140": {
+        "identifier": "scope-lens",
+        "item_id": 209,
+        "name": "Scope Lens"
+      },
+      "143": {
+        "identifier": "metal-coat",
+        "item_id": 210,
+        "name": "Metal Coat"
+      },
+      "144": {
+        "identifier": "dragon-fang",
+        "item_id": 227,
+        "name": "Dragon Fang"
+      },
+      "146": {
+        "identifier": "leftovers",
+        "item_id": 211,
+        "name": "Leftovers"
+      },
+      "15": {
+        "identifier": "max-potion",
+        "item_id": 24,
+        "name": "Max Potion"
+      },
+      "151": {
+        "identifier": "dragon-scale",
+        "item_id": 212,
+        "name": "Dragon Scale"
+      },
+      "156": {
+        "identifier": "sacred-ash",
+        "item_id": 44,
+        "name": "Sacred Ash"
+      },
+      "157": {
+        "identifier": "heavy-ball",
+        "item_id": 452,
+        "name": "Heavy Ball"
+      },
+      "159": {
+        "identifier": "level-ball",
+        "item_id": 450,
+        "name": "Level Ball"
+      },
+      "16": {
+        "identifier": "hyper-potion",
+        "item_id": 25,
+        "name": "Hyper Potion"
+      },
+      "160": {
+        "identifier": "lure-ball",
+        "item_id": 449,
+        "name": "Lure Ball"
+      },
+      "161": {
+        "identifier": "fast-ball",
+        "item_id": 453,
+        "name": "Fast Ball"
+      },
+      "163": {
+        "identifier": "light-ball",
+        "item_id": 213,
+        "name": "Light Ball"
+      },
+      "164": {
+        "identifier": "friend-ball",
+        "item_id": 454,
+        "name": "Friend Ball"
+      },
+      "165": {
+        "identifier": "moon-ball",
+        "item_id": 451,
+        "name": "Moon Ball"
+      },
+      "166": {
+        "identifier": "love-ball",
+        "item_id": 455,
+        "name": "Love Ball"
+      },
+      "169": {
+        "identifier": "sun-stone",
+        "item_id": 80,
+        "name": "Sun Stone"
+      },
+      "17": {
+        "identifier": "super-potion",
+        "item_id": 26,
+        "name": "Super Potion"
+      },
+      "172": {
+        "identifier": "up-grade",
+        "item_id": 229,
+        "name": "Upgrade"
+      },
+      "175": {
+        "identifier": "squirt-bottle",
+        "item_id": 448,
+        "name": "Squirt Bottle"
+      },
+      "177": {
+        "identifier": "park-ball",
+        "item_id": 456,
+        "name": "Park Ball"
+      },
+      "178": {
+        "identifier": "rainbow-wing",
+        "item_id": 482,
+        "name": "Rainbow Wing"
+      },
+      "18": {
+        "identifier": "potion",
+        "item_id": 17,
+        "name": "Potion"
+      },
+      "19": {
+        "identifier": "escape-rope",
+        "item_id": 78,
+        "name": "Escape Rope"
+      },
+      "2": {
+        "identifier": "ultra-ball",
+        "item_id": 2,
+        "name": "Ultra Ball"
+      },
+      "20": {
+        "identifier": "repel",
+        "item_id": 79,
+        "name": "Repel"
+      },
+      "22": {
+        "identifier": "fire-stone",
+        "item_id": 82,
+        "name": "Fire Stone"
+      },
+      "23": {
+        "identifier": "thunder-stone",
+        "item_id": 83,
+        "name": "Thunder Stone"
+      },
+      "24": {
+        "identifier": "water-stone",
+        "item_id": 84,
+        "name": "Water Stone"
+      },
+      "26": {
+        "identifier": "hp-up",
+        "item_id": 45,
+        "name": "HP Up"
+      },
+      "27": {
+        "identifier": "protein",
+        "item_id": 46,
+        "name": "Protein"
+      },
+      "28": {
+        "identifier": "iron",
+        "item_id": 47,
+        "name": "Iron"
+      },
+      "29": {
+        "identifier": "carbos",
+        "item_id": 48,
+        "name": "Carbos"
+      },
+      "3": {
+        "identifier": "bright-powder",
+        "item_id": 190,
+        "name": "Bright Powder"
+      },
+      "30": {
+        "identifier": "lucky-punch",
+        "item_id": 233,
+        "name": "Lucky Punch"
+      },
+      "31": {
+        "identifier": "calcium",
+        "item_id": 49,
+        "name": "Calcium"
+      },
+      "32": {
+        "identifier": "rare-candy",
+        "item_id": 50,
+        "name": "Rare Candy"
+      },
+      "33": {
+        "identifier": "x-accuracy",
+        "item_id": 60,
+        "name": "X Accuracy"
+      },
+      "34": {
+        "identifier": "leaf-stone",
+        "item_id": 85,
+        "name": "Leaf Stone"
+      },
+      "35": {
+        "identifier": "metal-powder",
+        "item_id": 234,
+        "name": "Metal Powder"
+      },
+      "36": {
+        "identifier": "nugget",
+        "item_id": 92,
+        "name": "Nugget"
+      },
+      "37": {
+        "identifier": "poke-doll",
+        "item_id": 63,
+        "name": "Pok\u00e9 Doll"
+      },
+      "38": {
+        "identifier": "full-heal",
+        "item_id": 27,
+        "name": "Full Heal"
+      },
+      "39": {
+        "identifier": "revive",
+        "item_id": 28,
+        "name": "Revive"
+      },
+      "4": {
+        "identifier": "great-ball",
+        "item_id": 3,
+        "name": "Great Ball"
+      },
+      "40": {
+        "identifier": "max-revive",
+        "item_id": 29,
+        "name": "Max Revive"
+      },
+      "41": {
+        "identifier": "guard-spec",
+        "item_id": 55,
+        "name": "Guard Spec."
+      },
+      "42": {
+        "identifier": "super-repel",
+        "item_id": 76,
+        "name": "Super Repel"
+      },
+      "43": {
+        "identifier": "max-repel",
+        "item_id": 77,
+        "name": "Max Repel"
+      },
+      "44": {
+        "identifier": "dire-hit",
+        "item_id": 56,
+        "name": "Dire Hit"
+      },
+      "46": {
+        "identifier": "fresh-water",
+        "item_id": 30,
+        "name": "Fresh Water"
+      },
+      "47": {
+        "identifier": "soda-pop",
+        "item_id": 31,
+        "name": "Soda Pop"
+      },
+      "48": {
+        "identifier": "lemonade",
+        "item_id": 32,
+        "name": "Lemonade"
+      },
+      "49": {
+        "identifier": "x-attack",
+        "item_id": 57,
+        "name": "X Attack"
+      },
+      "5": {
+        "identifier": "poke-ball",
+        "item_id": 4,
+        "name": "Pok\u00e9 Ball"
+      },
+      "52": {
+        "identifier": "x-speed",
+        "item_id": 59,
+        "name": "X Speed"
+      },
+      "54": {
+        "identifier": "coin-case",
+        "item_id": 421,
+        "name": "Coin Case"
+      },
+      "56": {
+        "identifier": "poke-flute",
+        "item_id": 544,
+        "name": "Pok\u00e9 Flute"
+      },
+      "57": {
+        "identifier": "exp-share",
+        "item_id": 193,
+        "name": "Exp. Share"
+      },
+      "58": {
+        "identifier": "old-rod",
+        "item_id": 422,
+        "name": "Old Rod"
+      },
+      "59": {
+        "identifier": "good-rod",
+        "item_id": 423,
+        "name": "Good Rod"
+      },
+      "6": {
+        "identifier": "town-map",
+        "item_id": 419,
+        "name": "Town Map"
+      },
+      "60": {
+        "identifier": "silver-leaf",
+        "item_id": 1030,
+        "name": "Silver Leaf"
+      },
+      "61": {
+        "identifier": "super-rod",
+        "item_id": 424,
+        "name": "Super Rod"
+      },
+      "62": {
+        "identifier": "pp-up",
+        "item_id": 51,
+        "name": "PP Up"
+      },
+      "63": {
+        "identifier": "ether",
+        "item_id": 38,
+        "name": "Ether"
+      },
+      "64": {
+        "identifier": "max-ether",
+        "item_id": 39,
+        "name": "Max Ether"
+      },
+      "66": {
+        "identifier": "red-scale",
+        "item_id": 477,
+        "name": "Red Scale"
+      },
+      "67": {
+        "identifier": "secret-potion",
+        "item_id": 441,
+        "name": "Secret Potion"
+      },
+      "68": {
+        "identifier": "ss-ticket",
+        "item_id": 433,
+        "name": "S.S. Ticket"
+      },
+      "69": {
+        "identifier": "mystery-egg",
+        "item_id": 483,
+        "name": "Mystery Egg"
+      },
+      "7": {
+        "identifier": "bicycle",
+        "item_id": 427,
+        "name": "Bicycle"
+      },
+      "70": {
+        "identifier": "clear-bell",
+        "item_id": 474,
+        "name": "Clear Bell"
+      },
+      "71": {
+        "identifier": "silver-wing",
+        "item_id": 481,
+        "name": "Silver Wing"
+      },
+      "72": {
+        "identifier": "moomoo-milk",
+        "item_id": 33,
+        "name": "Moomoo Milk"
+      },
+      "73": {
+        "identifier": "quick-claw",
+        "item_id": 194,
+        "name": "Quick Claw"
+      },
+      "75": {
+        "identifier": "gold-leaf",
+        "item_id": 1029,
+        "name": "Gold Leaf"
+      },
+      "76": {
+        "identifier": "soft-sand",
+        "item_id": 214,
+        "name": "Soft Sand"
+      },
+      "77": {
+        "identifier": "sharp-beak",
+        "item_id": 221,
+        "name": "Sharp Beak"
+      },
+      "8": {
+        "identifier": "moon-stone",
+        "item_id": 81,
+        "name": "Moon Stone"
+      },
+      "81": {
+        "identifier": "poison-barb",
+        "item_id": 222,
+        "name": "Poison Barb"
+      },
+      "82": {
+        "identifier": "kings-rock",
+        "item_id": 198,
+        "name": "King\u2019s Rock"
+      },
+      "85": {
+        "identifier": "red-apricorn",
+        "item_id": 458,
+        "name": "Red Apricorn"
+      },
+      "86": {
+        "identifier": "tiny-mushroom",
+        "item_id": 86,
+        "name": "Tiny Mushroom"
+      },
+      "87": {
+        "identifier": "big-mushroom",
+        "item_id": 87,
+        "name": "Big Mushroom"
+      },
+      "88": {
+        "identifier": "silver-powder",
+        "item_id": 199,
+        "name": "Silver Powder"
+      },
+      "9": {
+        "identifier": "antidote",
+        "item_id": 18,
+        "name": "Antidote"
+      },
+      "91": {
+        "identifier": "amulet-coin",
+        "item_id": 200,
+        "name": "Amulet Coin"
+      },
+      "94": {
+        "identifier": "cleanse-tag",
+        "item_id": 201,
+        "name": "Cleanse Tag"
+      },
+      "95": {
+        "identifier": "mystic-water",
+        "item_id": 220,
+        "name": "Mystic Water"
+      },
+      "96": {
+        "identifier": "twisted-spoon",
+        "item_id": 225,
+        "name": "Twisted Spoon"
+      },
+      "98": {
+        "identifier": "black-belt",
+        "item_id": 218,
+        "name": "Black Belt"
+      }
+    },
+    "red-blue": {},
+    "ruby-sapphire": {
+      "1": {
+        "identifier": "master-ball",
+        "item_id": 1,
+        "name": "Master Ball"
+      },
+      "10": {
+        "identifier": "timer-ball",
+        "item_id": 10,
+        "name": "Timer Ball"
+      },
+      "103": {
+        "identifier": "tiny-mushroom",
+        "item_id": 86,
+        "name": "Tiny Mushroom"
+      },
+      "104": {
+        "identifier": "big-mushroom",
+        "item_id": 87,
+        "name": "Big Mushroom"
+      },
+      "106": {
+        "identifier": "pearl",
+        "item_id": 88,
+        "name": "Pearl"
+      },
+      "107": {
+        "identifier": "big-pearl",
+        "item_id": 89,
+        "name": "Big Pearl"
+      },
+      "108": {
+        "identifier": "stardust",
+        "item_id": 90,
+        "name": "Stardust"
+      },
+      "109": {
+        "identifier": "star-piece",
+        "item_id": 91,
+        "name": "Star Piece"
+      },
+      "11": {
+        "identifier": "luxury-ball",
+        "item_id": 11,
+        "name": "Luxury Ball"
+      },
+      "110": {
+        "identifier": "nugget",
+        "item_id": 92,
+        "name": "Nugget"
+      },
+      "111": {
+        "identifier": "heart-scale",
+        "item_id": 93,
+        "name": "Heart Scale"
+      },
+      "12": {
+        "identifier": "premier-ball",
+        "item_id": 12,
+        "name": "Premier Ball"
+      },
+      "121": {
+        "identifier": "orange-mail",
+        "item_id": 515,
+        "name": "Orange Mail"
+      },
+      "122": {
+        "identifier": "harbor-mail",
+        "item_id": 516,
+        "name": "Harbor Mail"
+      },
+      "123": {
+        "identifier": "glitter-mail",
+        "item_id": 517,
+        "name": "Glitter Mail"
+      },
+      "124": {
+        "identifier": "mech-mail",
+        "item_id": 518,
+        "name": "Mech Mail"
+      },
+      "125": {
+        "identifier": "wood-mail",
+        "item_id": 519,
+        "name": "Wood Mail"
+      },
+      "126": {
+        "identifier": "wave-mail",
+        "item_id": 520,
+        "name": "Wave Mail"
+      },
+      "127": {
+        "identifier": "bead-mail",
+        "item_id": 521,
+        "name": "Bead Mail"
+      },
+      "128": {
+        "identifier": "shadow-mail",
+        "item_id": 522,
+        "name": "Shadow Mail"
+      },
+      "129": {
+        "identifier": "tropic-mail",
+        "item_id": 523,
+        "name": "Tropic Mail"
+      },
+      "13": {
+        "identifier": "potion",
+        "item_id": 17,
+        "name": "Potion"
+      },
+      "130": {
+        "identifier": "dream-mail",
+        "item_id": 524,
+        "name": "Dream Mail"
+      },
+      "131": {
+        "identifier": "fab-mail",
+        "item_id": 525,
+        "name": "Fab Mail"
+      },
+      "132": {
+        "identifier": "retro-mail",
+        "item_id": 526,
+        "name": "Retro Mail"
+      },
+      "133": {
+        "identifier": "cheri-berry",
+        "item_id": 126,
+        "name": "Cheri Berry"
+      },
+      "134": {
+        "identifier": "chesto-berry",
+        "item_id": 127,
+        "name": "Chesto Berry"
+      },
+      "135": {
+        "identifier": "pecha-berry",
+        "item_id": 128,
+        "name": "Pecha Berry"
+      },
+      "136": {
+        "identifier": "rawst-berry",
+        "item_id": 129,
+        "name": "Rawst Berry"
+      },
+      "137": {
+        "identifier": "aspear-berry",
+        "item_id": 130,
+        "name": "Aspear Berry"
+      },
+      "138": {
+        "identifier": "leppa-berry",
+        "item_id": 131,
+        "name": "Leppa Berry"
+      },
+      "139": {
+        "identifier": "oran-berry",
+        "item_id": 132,
+        "name": "Oran Berry"
+      },
+      "14": {
+        "identifier": "antidote",
+        "item_id": 18,
+        "name": "Antidote"
+      },
+      "140": {
+        "identifier": "persim-berry",
+        "item_id": 133,
+        "name": "Persim Berry"
+      },
+      "141": {
+        "identifier": "lum-berry",
+        "item_id": 134,
+        "name": "Lum Berry"
+      },
+      "142": {
+        "identifier": "sitrus-berry",
+        "item_id": 135,
+        "name": "Sitrus Berry"
+      },
+      "143": {
+        "identifier": "figy-berry",
+        "item_id": 136,
+        "name": "Figy Berry"
+      },
+      "144": {
+        "identifier": "wiki-berry",
+        "item_id": 137,
+        "name": "Wiki Berry"
+      },
+      "145": {
+        "identifier": "mago-berry",
+        "item_id": 138,
+        "name": "Mago Berry"
+      },
+      "146": {
+        "identifier": "aguav-berry",
+        "item_id": 139,
+        "name": "Aguav Berry"
+      },
+      "147": {
+        "identifier": "iapapa-berry",
+        "item_id": 140,
+        "name": "Iapapa Berry"
+      },
+      "148": {
+        "identifier": "razz-berry",
+        "item_id": 141,
+        "name": "Razz Berry"
+      },
+      "149": {
+        "identifier": "bluk-berry",
+        "item_id": 142,
+        "name": "Bluk Berry"
+      },
+      "15": {
+        "identifier": "burn-heal",
+        "item_id": 19,
+        "name": "Burn Heal"
+      },
+      "150": {
+        "identifier": "nanab-berry",
+        "item_id": 143,
+        "name": "Nanab Berry"
+      },
+      "151": {
+        "identifier": "wepear-berry",
+        "item_id": 144,
+        "name": "Wepear Berry"
+      },
+      "152": {
+        "identifier": "pinap-berry",
+        "item_id": 145,
+        "name": "Pinap Berry"
+      },
+      "153": {
+        "identifier": "pomeg-berry",
+        "item_id": 146,
+        "name": "Pomeg Berry"
+      },
+      "154": {
+        "identifier": "kelpsy-berry",
+        "item_id": 147,
+        "name": "Kelpsy Berry"
+      },
+      "155": {
+        "identifier": "qualot-berry",
+        "item_id": 148,
+        "name": "Qualot Berry"
+      },
+      "156": {
+        "identifier": "hondew-berry",
+        "item_id": 149,
+        "name": "Hondew Berry"
+      },
+      "157": {
+        "identifier": "grepa-berry",
+        "item_id": 150,
+        "name": "Grepa Berry"
+      },
+      "158": {
+        "identifier": "tamato-berry",
+        "item_id": 151,
+        "name": "Tamato Berry"
+      },
+      "159": {
+        "identifier": "cornn-berry",
+        "item_id": 152,
+        "name": "Cornn Berry"
+      },
+      "16": {
+        "identifier": "ice-heal",
+        "item_id": 20,
+        "name": "Ice Heal"
+      },
+      "160": {
+        "identifier": "magost-berry",
+        "item_id": 153,
+        "name": "Magost Berry"
+      },
+      "161": {
+        "identifier": "rabuta-berry",
+        "item_id": 154,
+        "name": "Rabuta Berry"
+      },
+      "162": {
+        "identifier": "nomel-berry",
+        "item_id": 155,
+        "name": "Nomel Berry"
+      },
+      "163": {
+        "identifier": "spelon-berry",
+        "item_id": 156,
+        "name": "Spelon Berry"
+      },
+      "164": {
+        "identifier": "pamtre-berry",
+        "item_id": 157,
+        "name": "Pamtre Berry"
+      },
+      "165": {
+        "identifier": "watmel-berry",
+        "item_id": 158,
+        "name": "Watmel Berry"
+      },
+      "166": {
+        "identifier": "durin-berry",
+        "item_id": 159,
+        "name": "Durin Berry"
+      },
+      "167": {
+        "identifier": "belue-berry",
+        "item_id": 160,
+        "name": "Belue Berry"
+      },
+      "168": {
+        "identifier": "liechi-berry",
+        "item_id": 178,
+        "name": "Liechi Berry"
+      },
+      "169": {
+        "identifier": "ganlon-berry",
+        "item_id": 179,
+        "name": "Ganlon Berry"
+      },
+      "17": {
+        "identifier": "awakening",
+        "item_id": 21,
+        "name": "Awakening"
+      },
+      "170": {
+        "identifier": "salac-berry",
+        "item_id": 180,
+        "name": "Salac Berry"
+      },
+      "171": {
+        "identifier": "petaya-berry",
+        "item_id": 181,
+        "name": "Petaya Berry"
+      },
+      "172": {
+        "identifier": "apicot-berry",
+        "item_id": 182,
+        "name": "Apicot Berry"
+      },
+      "173": {
+        "identifier": "lansat-berry",
+        "item_id": 183,
+        "name": "Lansat Berry"
+      },
+      "174": {
+        "identifier": "starf-berry",
+        "item_id": 184,
+        "name": "Starf Berry"
+      },
+      "175": {
+        "identifier": "enigma-berry",
+        "item_id": 185,
+        "name": "Enigma Berry"
+      },
+      "179": {
+        "identifier": "bright-powder",
+        "item_id": 190,
+        "name": "Bright Powder"
+      },
+      "18": {
+        "identifier": "paralyze-heal",
+        "item_id": 22,
+        "name": "Paralyze Heal"
+      },
+      "180": {
+        "identifier": "white-herb",
+        "item_id": 191,
+        "name": "White Herb"
+      },
+      "181": {
+        "identifier": "macho-brace",
+        "item_id": 192,
+        "name": "Macho Brace"
+      },
+      "182": {
+        "identifier": "exp-share",
+        "item_id": 193,
+        "name": "Exp. Share"
+      },
+      "183": {
+        "identifier": "quick-claw",
+        "item_id": 194,
+        "name": "Quick Claw"
+      },
+      "184": {
+        "identifier": "soothe-bell",
+        "item_id": 195,
+        "name": "Soothe Bell"
+      },
+      "185": {
+        "identifier": "mental-herb",
+        "item_id": 196,
+        "name": "Mental Herb"
+      },
+      "186": {
+        "identifier": "choice-band",
+        "item_id": 197,
+        "name": "Choice Band"
+      },
+      "187": {
+        "identifier": "kings-rock",
+        "item_id": 198,
+        "name": "King\u2019s Rock"
+      },
+      "188": {
+        "identifier": "silver-powder",
+        "item_id": 199,
+        "name": "Silver Powder"
+      },
+      "189": {
+        "identifier": "amulet-coin",
+        "item_id": 200,
+        "name": "Amulet Coin"
+      },
+      "19": {
+        "identifier": "full-restore",
+        "item_id": 23,
+        "name": "Full Restore"
+      },
+      "190": {
+        "identifier": "cleanse-tag",
+        "item_id": 201,
+        "name": "Cleanse Tag"
+      },
+      "191": {
+        "identifier": "soul-dew",
+        "item_id": 202,
+        "name": "Soul Dew"
+      },
+      "192": {
+        "identifier": "deep-sea-tooth",
+        "item_id": 203,
+        "name": "Deep Sea Tooth"
+      },
+      "193": {
+        "identifier": "deep-sea-scale",
+        "item_id": 204,
+        "name": "Deep Sea Scale"
+      },
+      "194": {
+        "identifier": "smoke-ball",
+        "item_id": 205,
+        "name": "Smoke Ball"
+      },
+      "195": {
+        "identifier": "everstone",
+        "item_id": 206,
+        "name": "Everstone"
+      },
+      "196": {
+        "identifier": "focus-band",
+        "item_id": 207,
+        "name": "Focus Band"
+      },
+      "197": {
+        "identifier": "lucky-egg",
+        "item_id": 208,
+        "name": "Lucky Egg"
+      },
+      "198": {
+        "identifier": "scope-lens",
+        "item_id": 209,
+        "name": "Scope Lens"
+      },
+      "199": {
+        "identifier": "metal-coat",
+        "item_id": 210,
+        "name": "Metal Coat"
+      },
+      "2": {
+        "identifier": "ultra-ball",
+        "item_id": 2,
+        "name": "Ultra Ball"
+      },
+      "20": {
+        "identifier": "max-potion",
+        "item_id": 24,
+        "name": "Max Potion"
+      },
+      "200": {
+        "identifier": "leftovers",
+        "item_id": 211,
+        "name": "Leftovers"
+      },
+      "201": {
+        "identifier": "dragon-scale",
+        "item_id": 212,
+        "name": "Dragon Scale"
+      },
+      "202": {
+        "identifier": "light-ball",
+        "item_id": 213,
+        "name": "Light Ball"
+      },
+      "203": {
+        "identifier": "soft-sand",
+        "item_id": 214,
+        "name": "Soft Sand"
+      },
+      "204": {
+        "identifier": "hard-stone",
+        "item_id": 215,
+        "name": "Hard Stone"
+      },
+      "205": {
+        "identifier": "miracle-seed",
+        "item_id": 216,
+        "name": "Miracle Seed"
+      },
+      "206": {
+        "identifier": "black-glasses",
+        "item_id": 217,
+        "name": "Black Glasses"
+      },
+      "207": {
+        "identifier": "black-belt",
+        "item_id": 218,
+        "name": "Black Belt"
+      },
+      "208": {
+        "identifier": "magnet",
+        "item_id": 219,
+        "name": "Magnet"
+      },
+      "209": {
+        "identifier": "mystic-water",
+        "item_id": 220,
+        "name": "Mystic Water"
+      },
+      "21": {
+        "identifier": "hyper-potion",
+        "item_id": 25,
+        "name": "Hyper Potion"
+      },
+      "210": {
+        "identifier": "sharp-beak",
+        "item_id": 221,
+        "name": "Sharp Beak"
+      },
+      "211": {
+        "identifier": "poison-barb",
+        "item_id": 222,
+        "name": "Poison Barb"
+      },
+      "212": {
+        "identifier": "never-melt-ice",
+        "item_id": 223,
+        "name": "Never-Melt Ice"
+      },
+      "213": {
+        "identifier": "spell-tag",
+        "item_id": 224,
+        "name": "Spell Tag"
+      },
+      "214": {
+        "identifier": "twisted-spoon",
+        "item_id": 225,
+        "name": "Twisted Spoon"
+      },
+      "215": {
+        "identifier": "charcoal",
+        "item_id": 226,
+        "name": "Charcoal"
+      },
+      "216": {
+        "identifier": "dragon-fang",
+        "item_id": 227,
+        "name": "Dragon Fang"
+      },
+      "217": {
+        "identifier": "silk-scarf",
+        "item_id": 228,
+        "name": "Silk Scarf"
+      },
+      "218": {
+        "identifier": "up-grade",
+        "item_id": 229,
+        "name": "Upgrade"
+      },
+      "219": {
+        "identifier": "shell-bell",
+        "item_id": 230,
+        "name": "Shell Bell"
+      },
+      "22": {
+        "identifier": "super-potion",
+        "item_id": 26,
+        "name": "Super Potion"
+      },
+      "220": {
+        "identifier": "sea-incense",
+        "item_id": 231,
+        "name": "Sea Incense"
+      },
+      "221": {
+        "identifier": "lax-incense",
+        "item_id": 232,
+        "name": "Lax Incense"
+      },
+      "222": {
+        "identifier": "lucky-punch",
+        "item_id": 233,
+        "name": "Lucky Punch"
+      },
+      "223": {
+        "identifier": "metal-powder",
+        "item_id": 234,
+        "name": "Metal Powder"
+      },
+      "224": {
+        "identifier": "thick-club",
+        "item_id": 235,
+        "name": "Thick Club"
+      },
+      "225": {
+        "identifier": "stick",
+        "item_id": 236,
+        "name": "Leek"
+      },
+      "23": {
+        "identifier": "full-heal",
+        "item_id": 27,
+        "name": "Full Heal"
+      },
+      "24": {
+        "identifier": "revive",
+        "item_id": 28,
+        "name": "Revive"
+      },
+      "25": {
+        "identifier": "max-revive",
+        "item_id": 29,
+        "name": "Max Revive"
+      },
+      "254": {
+        "identifier": "red-scarf",
+        "item_id": 237,
+        "name": "Red Scarf"
+      },
+      "255": {
+        "identifier": "blue-scarf",
+        "item_id": 238,
+        "name": "Blue Scarf"
+      },
+      "256": {
+        "identifier": "pink-scarf",
+        "item_id": 239,
+        "name": "Pink Scarf"
+      },
+      "257": {
+        "identifier": "green-scarf",
+        "item_id": 240,
+        "name": "Green Scarf"
+      },
+      "258": {
+        "identifier": "yellow-scarf",
+        "item_id": 241,
+        "name": "Yellow Scarf"
+      },
+      "259": {
+        "identifier": "mach-bike",
+        "item_id": 527,
+        "name": "Mach Bike"
+      },
+      "26": {
+        "identifier": "fresh-water",
+        "item_id": 30,
+        "name": "Fresh Water"
+      },
+      "260": {
+        "identifier": "coin-case",
+        "item_id": 421,
+        "name": "Coin Case"
+      },
+      "261": {
+        "identifier": "dowsing-machine",
+        "item_id": 465,
+        "name": "Dowsing Machine"
+      },
+      "262": {
+        "identifier": "old-rod",
+        "item_id": 422,
+        "name": "Old Rod"
+      },
+      "263": {
+        "identifier": "good-rod",
+        "item_id": 423,
+        "name": "Good Rod"
+      },
+      "264": {
+        "identifier": "super-rod",
+        "item_id": 424,
+        "name": "Super Rod"
+      },
+      "265": {
+        "identifier": "ss-ticket",
+        "item_id": 433,
+        "name": "S.S. Ticket"
+      },
+      "266": {
+        "identifier": "contest-pass",
+        "item_id": 434,
+        "name": "Contest Pass"
+      },
+      "268": {
+        "identifier": "wailmer-pail",
+        "item_id": 529,
+        "name": "Wailmer Pail"
+      },
+      "269": {
+        "identifier": "devon-goods",
+        "item_id": 530,
+        "name": "Devon Goods"
+      },
+      "27": {
+        "identifier": "soda-pop",
+        "item_id": 31,
+        "name": "Soda Pop"
+      },
+      "270": {
+        "identifier": "soot-sack",
+        "item_id": 531,
+        "name": "Soot Sack"
+      },
+      "271": {
+        "identifier": "basement-key",
+        "item_id": 476,
+        "name": "Basement Key"
+      },
+      "272": {
+        "identifier": "acro-bike",
+        "item_id": 528,
+        "name": "Acro Bike"
+      },
+      "273": {
+        "identifier": "pokeblock-case",
+        "item_id": 532,
+        "name": "Pok\u00e9block Case"
+      },
+      "274": {
+        "identifier": "letter",
+        "item_id": 533,
+        "name": "Letter"
+      },
+      "275": {
+        "identifier": "eon-ticket",
+        "item_id": 534,
+        "name": "Eon Ticket"
+      },
+      "276": {
+        "identifier": "red-orb",
+        "item_id": 467,
+        "name": "Red Orb"
+      },
+      "277": {
+        "identifier": "blue-orb",
+        "item_id": 468,
+        "name": "Blue Orb"
+      },
+      "278": {
+        "identifier": "scanner",
+        "item_id": 535,
+        "name": "Scanner"
+      },
+      "279": {
+        "identifier": "go-goggles",
+        "item_id": 536,
+        "name": "Go-Goggles"
+      },
+      "28": {
+        "identifier": "lemonade",
+        "item_id": 32,
+        "name": "Lemonade"
+      },
+      "280": {
+        "identifier": "meteorite",
+        "item_id": 537,
+        "name": "Meteorite"
+      },
+      "281": {
+        "identifier": "rm-1-key",
+        "item_id": 538,
+        "name": "Rm. 1 Key"
+      },
+      "282": {
+        "identifier": "rm-2-key",
+        "item_id": 539,
+        "name": "Rm. 2 Key"
+      },
+      "283": {
+        "identifier": "rm-4-key",
+        "item_id": 540,
+        "name": "Rm. 4 Key"
+      },
+      "284": {
+        "identifier": "rm-6-key",
+        "item_id": 541,
+        "name": "Rm. 6 Key"
+      },
+      "285": {
+        "identifier": "storage-key",
+        "item_id": 440,
+        "name": "Storage Key"
+      },
+      "286": {
+        "identifier": "root-fossil",
+        "item_id": 99,
+        "name": "Root Fossil"
+      },
+      "287": {
+        "identifier": "claw-fossil",
+        "item_id": 100,
+        "name": "Claw Fossil"
+      },
+      "288": {
+        "identifier": "devon-scope",
+        "item_id": 542,
+        "name": "Devon Scope"
+      },
+      "289": {
+        "identifier": "tm01",
+        "item_id": 305,
+        "name": "TM01"
+      },
+      "29": {
+        "identifier": "moomoo-milk",
+        "item_id": 33,
+        "name": "Moomoo Milk"
+      },
+      "290": {
+        "identifier": "tm02",
+        "item_id": 306,
+        "name": "TM02"
+      },
+      "291": {
+        "identifier": "tm03",
+        "item_id": 307,
+        "name": "TM03"
+      },
+      "292": {
+        "identifier": "tm04",
+        "item_id": 308,
+        "name": "TM04"
+      },
+      "293": {
+        "identifier": "tm05",
+        "item_id": 309,
+        "name": "TM05"
+      },
+      "294": {
+        "identifier": "tm06",
+        "item_id": 310,
+        "name": "TM06"
+      },
+      "295": {
+        "identifier": "tm07",
+        "item_id": 311,
+        "name": "TM07"
+      },
+      "296": {
+        "identifier": "tm08",
+        "item_id": 312,
+        "name": "TM08"
+      },
+      "297": {
+        "identifier": "tm09",
+        "item_id": 313,
+        "name": "TM09"
+      },
+      "298": {
+        "identifier": "tm10",
+        "item_id": 314,
+        "name": "TM10"
+      },
+      "299": {
+        "identifier": "tm11",
+        "item_id": 315,
+        "name": "TM11"
+      },
+      "3": {
+        "identifier": "great-ball",
+        "item_id": 3,
+        "name": "Great Ball"
+      },
+      "30": {
+        "identifier": "energy-powder",
+        "item_id": 34,
+        "name": "Energy Powder"
+      },
+      "300": {
+        "identifier": "tm12",
+        "item_id": 316,
+        "name": "TM12"
+      },
+      "301": {
+        "identifier": "tm13",
+        "item_id": 317,
+        "name": "TM13"
+      },
+      "302": {
+        "identifier": "tm14",
+        "item_id": 318,
+        "name": "TM14"
+      },
+      "303": {
+        "identifier": "tm15",
+        "item_id": 319,
+        "name": "TM15"
+      },
+      "304": {
+        "identifier": "tm16",
+        "item_id": 320,
+        "name": "TM16"
+      },
+      "305": {
+        "identifier": "tm17",
+        "item_id": 321,
+        "name": "TM17"
+      },
+      "306": {
+        "identifier": "tm18",
+        "item_id": 322,
+        "name": "TM18"
+      },
+      "307": {
+        "identifier": "tm19",
+        "item_id": 323,
+        "name": "TM19"
+      },
+      "308": {
+        "identifier": "tm20",
+        "item_id": 324,
+        "name": "TM20"
+      },
+      "309": {
+        "identifier": "tm21",
+        "item_id": 325,
+        "name": "TM21"
+      },
+      "31": {
+        "identifier": "energy-root",
+        "item_id": 35,
+        "name": "Energy Root"
+      },
+      "310": {
+        "identifier": "tm22",
+        "item_id": 326,
+        "name": "TM22"
+      },
+      "311": {
+        "identifier": "tm23",
+        "item_id": 327,
+        "name": "TM23"
+      },
+      "312": {
+        "identifier": "tm24",
+        "item_id": 328,
+        "name": "TM24"
+      },
+      "313": {
+        "identifier": "tm25",
+        "item_id": 329,
+        "name": "TM25"
+      },
+      "314": {
+        "identifier": "tm26",
+        "item_id": 330,
+        "name": "TM26"
+      },
+      "315": {
+        "identifier": "tm27",
+        "item_id": 331,
+        "name": "TM27"
+      },
+      "316": {
+        "identifier": "tm28",
+        "item_id": 332,
+        "name": "TM28"
+      },
+      "317": {
+        "identifier": "tm29",
+        "item_id": 333,
+        "name": "TM29"
+      },
+      "318": {
+        "identifier": "tm30",
+        "item_id": 334,
+        "name": "TM30"
+      },
+      "319": {
+        "identifier": "tm31",
+        "item_id": 335,
+        "name": "TM31"
+      },
+      "32": {
+        "identifier": "heal-powder",
+        "item_id": 36,
+        "name": "Heal Powder"
+      },
+      "320": {
+        "identifier": "tm32",
+        "item_id": 336,
+        "name": "TM32"
+      },
+      "321": {
+        "identifier": "tm33",
+        "item_id": 337,
+        "name": "TM33"
+      },
+      "322": {
+        "identifier": "tm34",
+        "item_id": 338,
+        "name": "TM34"
+      },
+      "323": {
+        "identifier": "tm35",
+        "item_id": 339,
+        "name": "TM35"
+      },
+      "324": {
+        "identifier": "tm36",
+        "item_id": 340,
+        "name": "TM36"
+      },
+      "325": {
+        "identifier": "tm37",
+        "item_id": 341,
+        "name": "TM37"
+      },
+      "326": {
+        "identifier": "tm38",
+        "item_id": 342,
+        "name": "TM38"
+      },
+      "327": {
+        "identifier": "tm39",
+        "item_id": 343,
+        "name": "TM39"
+      },
+      "328": {
+        "identifier": "tm40",
+        "item_id": 344,
+        "name": "TM40"
+      },
+      "329": {
+        "identifier": "tm41",
+        "item_id": 345,
+        "name": "TM41"
+      },
+      "33": {
+        "identifier": "revival-herb",
+        "item_id": 37,
+        "name": "Revival Herb"
+      },
+      "330": {
+        "identifier": "tm42",
+        "item_id": 346,
+        "name": "TM42"
+      },
+      "331": {
+        "identifier": "tm43",
+        "item_id": 347,
+        "name": "TM43"
+      },
+      "332": {
+        "identifier": "tm44",
+        "item_id": 348,
+        "name": "TM44"
+      },
+      "333": {
+        "identifier": "tm45",
+        "item_id": 349,
+        "name": "TM45"
+      },
+      "334": {
+        "identifier": "tm46",
+        "item_id": 350,
+        "name": "TM46"
+      },
+      "335": {
+        "identifier": "tm47",
+        "item_id": 351,
+        "name": "TM47"
+      },
+      "336": {
+        "identifier": "tm48",
+        "item_id": 352,
+        "name": "TM48"
+      },
+      "337": {
+        "identifier": "tm49",
+        "item_id": 353,
+        "name": "TM49"
+      },
+      "338": {
+        "identifier": "tm50",
+        "item_id": 354,
+        "name": "TM50"
+      },
+      "339": {
+        "identifier": "hm01",
+        "item_id": 397,
+        "name": "HM01"
+      },
+      "34": {
+        "identifier": "ether",
+        "item_id": 38,
+        "name": "Ether"
+      },
+      "340": {
+        "identifier": "hm02",
+        "item_id": 398,
+        "name": "HM02"
+      },
+      "341": {
+        "identifier": "hm03",
+        "item_id": 399,
+        "name": "HM03"
+      },
+      "342": {
+        "identifier": "hm04",
+        "item_id": 400,
+        "name": "HM04"
+      },
+      "343": {
+        "identifier": "hm05",
+        "item_id": 401,
+        "name": "HM05"
+      },
+      "344": {
+        "identifier": "hm06",
+        "item_id": 402,
+        "name": "HM06"
+      },
+      "345": {
+        "identifier": "hm07",
+        "item_id": 403,
+        "name": "HM07"
+      },
+      "346": {
+        "identifier": "hm08",
+        "item_id": 404,
+        "name": "HM08"
+      },
+      "349": {
+        "identifier": "oaks-parcel",
+        "item_id": 543,
+        "name": "Oak\u2019s Parcel"
+      },
+      "35": {
+        "identifier": "max-ether",
+        "item_id": 39,
+        "name": "Max Ether"
+      },
+      "350": {
+        "identifier": "poke-flute",
+        "item_id": 544,
+        "name": "Pok\u00e9 Flute"
+      },
+      "351": {
+        "identifier": "secret-key",
+        "item_id": 445,
+        "name": "Secret Key"
+      },
+      "352": {
+        "identifier": "bike-voucher",
+        "item_id": 545,
+        "name": "Bike Voucher"
+      },
+      "353": {
+        "identifier": "gold-teeth",
+        "item_id": 546,
+        "name": "Gold Teeth"
+      },
+      "354": {
+        "identifier": "old-amber",
+        "item_id": 103,
+        "name": "Old Amber"
+      },
+      "355": {
+        "identifier": "card-key",
+        "item_id": 475,
+        "name": "Card Key"
+      },
+      "356": {
+        "identifier": "lift-key",
+        "item_id": 547,
+        "name": "Lift Key"
+      },
+      "357": {
+        "identifier": "helix-fossil",
+        "item_id": 101,
+        "name": "Helix Fossil"
+      },
+      "358": {
+        "identifier": "dome-fossil",
+        "item_id": 102,
+        "name": "Dome Fossil"
+      },
+      "359": {
+        "identifier": "silph-scope",
+        "item_id": 548,
+        "name": "Silph Scope"
+      },
+      "36": {
+        "identifier": "elixir",
+        "item_id": 40,
+        "name": "Elixir"
+      },
+      "360": {
+        "identifier": "bicycle",
+        "item_id": 427,
+        "name": "Bicycle"
+      },
+      "361": {
+        "identifier": "town-map",
+        "item_id": 419,
+        "name": "Town Map"
+      },
+      "362": {
+        "identifier": "vs-seeker",
+        "item_id": 420,
+        "name": "Vs. Seeker"
+      },
+      "363": {
+        "identifier": "fame-checker",
+        "item_id": 549,
+        "name": "Fame Checker"
+      },
+      "364": {
+        "identifier": "tm-case",
+        "item_id": 550,
+        "name": "TM Case"
+      },
+      "365": {
+        "identifier": "berry-pouch",
+        "item_id": 551,
+        "name": "Berry Pouch"
+      },
+      "366": {
+        "identifier": "teachy-tv",
+        "item_id": 552,
+        "name": "Teachy TV"
+      },
+      "367": {
+        "identifier": "tri-pass",
+        "item_id": 553,
+        "name": "Tri-Pass"
+      },
+      "368": {
+        "identifier": "rainbow-pass",
+        "item_id": 554,
+        "name": "Rainbow Pass"
+      },
+      "369": {
+        "identifier": "tea",
+        "item_id": 555,
+        "name": "Tea"
+      },
+      "37": {
+        "identifier": "max-elixir",
+        "item_id": 41,
+        "name": "Max Elixir"
+      },
+      "370": {
+        "identifier": "mysticticket",
+        "item_id": 556,
+        "name": "MysticTicket"
+      },
+      "371": {
+        "identifier": "auroraticket",
+        "item_id": 557,
+        "name": "AuroraTicket"
+      },
+      "372": {
+        "identifier": "powder-jar",
+        "item_id": 558,
+        "name": "Powder Jar"
+      },
+      "373": {
+        "identifier": "ruby",
+        "item_id": 559,
+        "name": "Ruby"
+      },
+      "374": {
+        "identifier": "sapphire",
+        "item_id": 560,
+        "name": "Sapphire"
+      },
+      "375": {
+        "identifier": "magma-emblem",
+        "item_id": 561,
+        "name": "Magma Emblem"
+      },
+      "376": {
+        "identifier": "old-sea-map",
+        "item_id": 562,
+        "name": "Old Sea Map"
+      },
+      "38": {
+        "identifier": "lava-cookie",
+        "item_id": 42,
+        "name": "Lava Cookie"
+      },
+      "39": {
+        "identifier": "blue-flute",
+        "item_id": 65,
+        "name": "Blue Flute"
+      },
+      "4": {
+        "identifier": "poke-ball",
+        "item_id": 4,
+        "name": "Pok\u00e9 Ball"
+      },
+      "40": {
+        "identifier": "yellow-flute",
+        "item_id": 66,
+        "name": "Yellow Flute"
+      },
+      "41": {
+        "identifier": "red-flute",
+        "item_id": 67,
+        "name": "Red Flute"
+      },
+      "42": {
+        "identifier": "black-flute",
+        "item_id": 68,
+        "name": "Black Flute"
+      },
+      "43": {
+        "identifier": "white-flute",
+        "item_id": 69,
+        "name": "White Flute"
+      },
+      "44": {
+        "identifier": "berry-juice",
+        "item_id": 43,
+        "name": "Berry Juice"
+      },
+      "45": {
+        "identifier": "sacred-ash",
+        "item_id": 44,
+        "name": "Sacred Ash"
+      },
+      "46": {
+        "identifier": "shoal-salt",
+        "item_id": 70,
+        "name": "Shoal Salt"
+      },
+      "47": {
+        "identifier": "shoal-shell",
+        "item_id": 71,
+        "name": "Shoal Shell"
+      },
+      "48": {
+        "identifier": "red-shard",
+        "item_id": 72,
+        "name": "Red Shard"
+      },
+      "49": {
+        "identifier": "blue-shard",
+        "item_id": 73,
+        "name": "Blue Shard"
+      },
+      "5": {
+        "identifier": "safari-ball",
+        "item_id": 5,
+        "name": "Safari Ball"
+      },
+      "50": {
+        "identifier": "yellow-shard",
+        "item_id": 74,
+        "name": "Yellow Shard"
+      },
+      "51": {
+        "identifier": "green-shard",
+        "item_id": 75,
+        "name": "Green Shard"
+      },
+      "6": {
+        "identifier": "net-ball",
+        "item_id": 6,
+        "name": "Net Ball"
+      },
+      "63": {
+        "identifier": "hp-up",
+        "item_id": 45,
+        "name": "HP Up"
+      },
+      "64": {
+        "identifier": "protein",
+        "item_id": 46,
+        "name": "Protein"
+      },
+      "65": {
+        "identifier": "iron",
+        "item_id": 47,
+        "name": "Iron"
+      },
+      "66": {
+        "identifier": "carbos",
+        "item_id": 48,
+        "name": "Carbos"
+      },
+      "67": {
+        "identifier": "calcium",
+        "item_id": 49,
+        "name": "Calcium"
+      },
+      "68": {
+        "identifier": "rare-candy",
+        "item_id": 50,
+        "name": "Rare Candy"
+      },
+      "69": {
+        "identifier": "pp-up",
+        "item_id": 51,
+        "name": "PP Up"
+      },
+      "7": {
+        "identifier": "dive-ball",
+        "item_id": 7,
+        "name": "Dive Ball"
+      },
+      "70": {
+        "identifier": "zinc",
+        "item_id": 52,
+        "name": "Zinc"
+      },
+      "71": {
+        "identifier": "pp-max",
+        "item_id": 53,
+        "name": "PP Max"
+      },
+      "73": {
+        "identifier": "guard-spec",
+        "item_id": 55,
+        "name": "Guard Spec."
+      },
+      "74": {
+        "identifier": "dire-hit",
+        "item_id": 56,
+        "name": "Dire Hit"
+      },
+      "75": {
+        "identifier": "x-attack",
+        "item_id": 57,
+        "name": "X Attack"
+      },
+      "76": {
+        "identifier": "x-defense",
+        "item_id": 58,
+        "name": "X Defense"
+      },
+      "77": {
+        "identifier": "x-speed",
+        "item_id": 59,
+        "name": "X Speed"
+      },
+      "78": {
+        "identifier": "x-accuracy",
+        "item_id": 60,
+        "name": "X Accuracy"
+      },
+      "79": {
+        "identifier": "x-sp-atk",
+        "item_id": 61,
+        "name": "X Sp. Atk"
+      },
+      "8": {
+        "identifier": "nest-ball",
+        "item_id": 8,
+        "name": "Nest Ball"
+      },
+      "80": {
+        "identifier": "poke-doll",
+        "item_id": 63,
+        "name": "Pok\u00e9 Doll"
+      },
+      "81": {
+        "identifier": "fluffy-tail",
+        "item_id": 64,
+        "name": "Fluffy Tail"
+      },
+      "83": {
+        "identifier": "super-repel",
+        "item_id": 76,
+        "name": "Super Repel"
+      },
+      "84": {
+        "identifier": "max-repel",
+        "item_id": 77,
+        "name": "Max Repel"
+      },
+      "85": {
+        "identifier": "escape-rope",
+        "item_id": 78,
+        "name": "Escape Rope"
+      },
+      "86": {
+        "identifier": "repel",
+        "item_id": 79,
+        "name": "Repel"
+      },
+      "9": {
+        "identifier": "repeat-ball",
+        "item_id": 9,
+        "name": "Repeat Ball"
+      },
+      "93": {
+        "identifier": "sun-stone",
+        "item_id": 80,
+        "name": "Sun Stone"
+      },
+      "94": {
+        "identifier": "moon-stone",
+        "item_id": 81,
+        "name": "Moon Stone"
+      },
+      "95": {
+        "identifier": "fire-stone",
+        "item_id": 82,
+        "name": "Fire Stone"
+      },
+      "96": {
+        "identifier": "thunder-stone",
+        "item_id": 83,
+        "name": "Thunder Stone"
+      },
+      "97": {
+        "identifier": "water-stone",
+        "item_id": 84,
+        "name": "Water Stone"
+      },
+      "98": {
+        "identifier": "leaf-stone",
+        "item_id": 85,
+        "name": "Leaf Stone"
+      }
+    },
+    "silver": {
+      "1": {
+        "identifier": "master-ball",
+        "item_id": 1,
+        "name": "Master Ball"
+      },
+      "10": {
+        "identifier": "burn-heal",
+        "item_id": 19,
+        "name": "Burn Heal"
+      },
+      "102": {
+        "identifier": "black-glasses",
+        "item_id": 217,
+        "name": "Black Glasses"
+      },
+      "103": {
+        "identifier": "slowpoke-tail",
+        "item_id": 473,
+        "name": "Slowpoke Tail"
+      },
+      "105": {
+        "identifier": "stick",
+        "item_id": 236,
+        "name": "Leek"
+      },
+      "106": {
+        "identifier": "smoke-ball",
+        "item_id": 205,
+        "name": "Smoke Ball"
+      },
+      "107": {
+        "identifier": "never-melt-ice",
+        "item_id": 223,
+        "name": "Never-Melt Ice"
+      },
+      "108": {
+        "identifier": "magnet",
+        "item_id": 219,
+        "name": "Magnet"
+      },
+      "11": {
+        "identifier": "ice-heal",
+        "item_id": 20,
+        "name": "Ice Heal"
+      },
+      "110": {
+        "identifier": "pearl",
+        "item_id": 88,
+        "name": "Pearl"
+      },
+      "111": {
+        "identifier": "big-pearl",
+        "item_id": 89,
+        "name": "Big Pearl"
+      },
+      "112": {
+        "identifier": "everstone",
+        "item_id": 206,
+        "name": "Everstone"
+      },
+      "113": {
+        "identifier": "spell-tag",
+        "item_id": 224,
+        "name": "Spell Tag"
+      },
+      "114": {
+        "identifier": "rage-candy-bar",
+        "item_id": 466,
+        "name": "Rage Candy Bar"
+      },
+      "116": {
+        "identifier": "blue-card",
+        "item_id": 472,
+        "name": "Blue Card"
+      },
+      "117": {
+        "identifier": "miracle-seed",
+        "item_id": 216,
+        "name": "Miracle Seed"
+      },
+      "118": {
+        "identifier": "thick-club",
+        "item_id": 235,
+        "name": "Thick Club"
+      },
+      "119": {
+        "identifier": "focus-band",
+        "item_id": 207,
+        "name": "Focus Band"
+      },
+      "12": {
+        "identifier": "awakening",
+        "item_id": 21,
+        "name": "Awakening"
+      },
+      "121": {
+        "identifier": "energy-powder",
+        "item_id": 34,
+        "name": "Energy Powder"
+      },
+      "122": {
+        "identifier": "energy-root",
+        "item_id": 35,
+        "name": "Energy Root"
+      },
+      "123": {
+        "identifier": "heal-powder",
+        "item_id": 36,
+        "name": "Heal Powder"
+      },
+      "124": {
+        "identifier": "revival-herb",
+        "item_id": 37,
+        "name": "Revival Herb"
+      },
+      "125": {
+        "identifier": "hard-stone",
+        "item_id": 215,
+        "name": "Hard Stone"
+      },
+      "126": {
+        "identifier": "lucky-egg",
+        "item_id": 208,
+        "name": "Lucky Egg"
+      },
+      "127": {
+        "identifier": "card-key",
+        "item_id": 475,
+        "name": "Card Key"
+      },
+      "128": {
+        "identifier": "machine-part",
+        "item_id": 480,
+        "name": "Machine Part"
+      },
+      "13": {
+        "identifier": "paralyze-heal",
+        "item_id": 22,
+        "name": "Paralyze Heal"
+      },
+      "130": {
+        "identifier": "lost-item",
+        "item_id": 478,
+        "name": "Lost Item"
+      },
+      "131": {
+        "identifier": "stardust",
+        "item_id": 90,
+        "name": "Stardust"
+      },
+      "132": {
+        "identifier": "star-piece",
+        "item_id": 91,
+        "name": "Star Piece"
+      },
+      "133": {
+        "identifier": "basement-key",
+        "item_id": 476,
+        "name": "Basement Key"
+      },
+      "134": {
+        "identifier": "pass",
+        "item_id": 479,
+        "name": "Pass"
+      },
+      "138": {
+        "identifier": "charcoal",
+        "item_id": 226,
+        "name": "Charcoal"
+      },
+      "139": {
+        "identifier": "berry-juice",
+        "item_id": 43,
+        "name": "Berry Juice"
+      },
+      "14": {
+        "identifier": "full-restore",
+        "item_id": 23,
+        "name": "Full Restore"
+      },
+      "140": {
+        "identifier": "scope-lens",
+        "item_id": 209,
+        "name": "Scope Lens"
+      },
+      "143": {
+        "identifier": "metal-coat",
+        "item_id": 210,
+        "name": "Metal Coat"
+      },
+      "144": {
+        "identifier": "dragon-fang",
+        "item_id": 227,
+        "name": "Dragon Fang"
+      },
+      "146": {
+        "identifier": "leftovers",
+        "item_id": 211,
+        "name": "Leftovers"
+      },
+      "15": {
+        "identifier": "max-potion",
+        "item_id": 24,
+        "name": "Max Potion"
+      },
+      "151": {
+        "identifier": "dragon-scale",
+        "item_id": 212,
+        "name": "Dragon Scale"
+      },
+      "156": {
+        "identifier": "sacred-ash",
+        "item_id": 44,
+        "name": "Sacred Ash"
+      },
+      "157": {
+        "identifier": "heavy-ball",
+        "item_id": 452,
+        "name": "Heavy Ball"
+      },
+      "159": {
+        "identifier": "level-ball",
+        "item_id": 450,
+        "name": "Level Ball"
+      },
+      "16": {
+        "identifier": "hyper-potion",
+        "item_id": 25,
+        "name": "Hyper Potion"
+      },
+      "160": {
+        "identifier": "lure-ball",
+        "item_id": 449,
+        "name": "Lure Ball"
+      },
+      "161": {
+        "identifier": "fast-ball",
+        "item_id": 453,
+        "name": "Fast Ball"
+      },
+      "163": {
+        "identifier": "light-ball",
+        "item_id": 213,
+        "name": "Light Ball"
+      },
+      "164": {
+        "identifier": "friend-ball",
+        "item_id": 454,
+        "name": "Friend Ball"
+      },
+      "165": {
+        "identifier": "moon-ball",
+        "item_id": 451,
+        "name": "Moon Ball"
+      },
+      "166": {
+        "identifier": "love-ball",
+        "item_id": 455,
+        "name": "Love Ball"
+      },
+      "169": {
+        "identifier": "sun-stone",
+        "item_id": 80,
+        "name": "Sun Stone"
+      },
+      "17": {
+        "identifier": "super-potion",
+        "item_id": 26,
+        "name": "Super Potion"
+      },
+      "172": {
+        "identifier": "up-grade",
+        "item_id": 229,
+        "name": "Upgrade"
+      },
+      "175": {
+        "identifier": "squirt-bottle",
+        "item_id": 448,
+        "name": "Squirt Bottle"
+      },
+      "177": {
+        "identifier": "park-ball",
+        "item_id": 456,
+        "name": "Park Ball"
+      },
+      "178": {
+        "identifier": "rainbow-wing",
+        "item_id": 482,
+        "name": "Rainbow Wing"
+      },
+      "18": {
+        "identifier": "potion",
+        "item_id": 17,
+        "name": "Potion"
+      },
+      "19": {
+        "identifier": "escape-rope",
+        "item_id": 78,
+        "name": "Escape Rope"
+      },
+      "2": {
+        "identifier": "ultra-ball",
+        "item_id": 2,
+        "name": "Ultra Ball"
+      },
+      "20": {
+        "identifier": "repel",
+        "item_id": 79,
+        "name": "Repel"
+      },
+      "22": {
+        "identifier": "fire-stone",
+        "item_id": 82,
+        "name": "Fire Stone"
+      },
+      "23": {
+        "identifier": "thunder-stone",
+        "item_id": 83,
+        "name": "Thunder Stone"
+      },
+      "24": {
+        "identifier": "water-stone",
+        "item_id": 84,
+        "name": "Water Stone"
+      },
+      "26": {
+        "identifier": "hp-up",
+        "item_id": 45,
+        "name": "HP Up"
+      },
+      "27": {
+        "identifier": "protein",
+        "item_id": 46,
+        "name": "Protein"
+      },
+      "28": {
+        "identifier": "iron",
+        "item_id": 47,
+        "name": "Iron"
+      },
+      "29": {
+        "identifier": "carbos",
+        "item_id": 48,
+        "name": "Carbos"
+      },
+      "3": {
+        "identifier": "bright-powder",
+        "item_id": 190,
+        "name": "Bright Powder"
+      },
+      "30": {
+        "identifier": "lucky-punch",
+        "item_id": 233,
+        "name": "Lucky Punch"
+      },
+      "31": {
+        "identifier": "calcium",
+        "item_id": 49,
+        "name": "Calcium"
+      },
+      "32": {
+        "identifier": "rare-candy",
+        "item_id": 50,
+        "name": "Rare Candy"
+      },
+      "33": {
+        "identifier": "x-accuracy",
+        "item_id": 60,
+        "name": "X Accuracy"
+      },
+      "34": {
+        "identifier": "leaf-stone",
+        "item_id": 85,
+        "name": "Leaf Stone"
+      },
+      "35": {
+        "identifier": "metal-powder",
+        "item_id": 234,
+        "name": "Metal Powder"
+      },
+      "36": {
+        "identifier": "nugget",
+        "item_id": 92,
+        "name": "Nugget"
+      },
+      "37": {
+        "identifier": "poke-doll",
+        "item_id": 63,
+        "name": "Pok\u00e9 Doll"
+      },
+      "38": {
+        "identifier": "full-heal",
+        "item_id": 27,
+        "name": "Full Heal"
+      },
+      "39": {
+        "identifier": "revive",
+        "item_id": 28,
+        "name": "Revive"
+      },
+      "4": {
+        "identifier": "great-ball",
+        "item_id": 3,
+        "name": "Great Ball"
+      },
+      "40": {
+        "identifier": "max-revive",
+        "item_id": 29,
+        "name": "Max Revive"
+      },
+      "41": {
+        "identifier": "guard-spec",
+        "item_id": 55,
+        "name": "Guard Spec."
+      },
+      "42": {
+        "identifier": "super-repel",
+        "item_id": 76,
+        "name": "Super Repel"
+      },
+      "43": {
+        "identifier": "max-repel",
+        "item_id": 77,
+        "name": "Max Repel"
+      },
+      "44": {
+        "identifier": "dire-hit",
+        "item_id": 56,
+        "name": "Dire Hit"
+      },
+      "46": {
+        "identifier": "fresh-water",
+        "item_id": 30,
+        "name": "Fresh Water"
+      },
+      "47": {
+        "identifier": "soda-pop",
+        "item_id": 31,
+        "name": "Soda Pop"
+      },
+      "48": {
+        "identifier": "lemonade",
+        "item_id": 32,
+        "name": "Lemonade"
+      },
+      "49": {
+        "identifier": "x-attack",
+        "item_id": 57,
+        "name": "X Attack"
+      },
+      "5": {
+        "identifier": "poke-ball",
+        "item_id": 4,
+        "name": "Pok\u00e9 Ball"
+      },
+      "52": {
+        "identifier": "x-speed",
+        "item_id": 59,
+        "name": "X Speed"
+      },
+      "54": {
+        "identifier": "coin-case",
+        "item_id": 421,
+        "name": "Coin Case"
+      },
+      "56": {
+        "identifier": "poke-flute",
+        "item_id": 544,
+        "name": "Pok\u00e9 Flute"
+      },
+      "57": {
+        "identifier": "exp-share",
+        "item_id": 193,
+        "name": "Exp. Share"
+      },
+      "58": {
+        "identifier": "old-rod",
+        "item_id": 422,
+        "name": "Old Rod"
+      },
+      "59": {
+        "identifier": "good-rod",
+        "item_id": 423,
+        "name": "Good Rod"
+      },
+      "6": {
+        "identifier": "town-map",
+        "item_id": 419,
+        "name": "Town Map"
+      },
+      "60": {
+        "identifier": "silver-leaf",
+        "item_id": 1030,
+        "name": "Silver Leaf"
+      },
+      "61": {
+        "identifier": "super-rod",
+        "item_id": 424,
+        "name": "Super Rod"
+      },
+      "62": {
+        "identifier": "pp-up",
+        "item_id": 51,
+        "name": "PP Up"
+      },
+      "63": {
+        "identifier": "ether",
+        "item_id": 38,
+        "name": "Ether"
+      },
+      "64": {
+        "identifier": "max-ether",
+        "item_id": 39,
+        "name": "Max Ether"
+      },
+      "66": {
+        "identifier": "red-scale",
+        "item_id": 477,
+        "name": "Red Scale"
+      },
+      "67": {
+        "identifier": "secret-potion",
+        "item_id": 441,
+        "name": "Secret Potion"
+      },
+      "68": {
+        "identifier": "ss-ticket",
+        "item_id": 433,
+        "name": "S.S. Ticket"
+      },
+      "69": {
+        "identifier": "mystery-egg",
+        "item_id": 483,
+        "name": "Mystery Egg"
+      },
+      "7": {
+        "identifier": "bicycle",
+        "item_id": 427,
+        "name": "Bicycle"
+      },
+      "70": {
+        "identifier": "clear-bell",
+        "item_id": 474,
+        "name": "Clear Bell"
+      },
+      "71": {
+        "identifier": "silver-wing",
+        "item_id": 481,
+        "name": "Silver Wing"
+      },
+      "72": {
+        "identifier": "moomoo-milk",
+        "item_id": 33,
+        "name": "Moomoo Milk"
+      },
+      "73": {
+        "identifier": "quick-claw",
+        "item_id": 194,
+        "name": "Quick Claw"
+      },
+      "75": {
+        "identifier": "gold-leaf",
+        "item_id": 1029,
+        "name": "Gold Leaf"
+      },
+      "76": {
+        "identifier": "soft-sand",
+        "item_id": 214,
+        "name": "Soft Sand"
+      },
+      "77": {
+        "identifier": "sharp-beak",
+        "item_id": 221,
+        "name": "Sharp Beak"
+      },
+      "8": {
+        "identifier": "moon-stone",
+        "item_id": 81,
+        "name": "Moon Stone"
+      },
+      "81": {
+        "identifier": "poison-barb",
+        "item_id": 222,
+        "name": "Poison Barb"
+      },
+      "82": {
+        "identifier": "kings-rock",
+        "item_id": 198,
+        "name": "King\u2019s Rock"
+      },
+      "85": {
+        "identifier": "red-apricorn",
+        "item_id": 458,
+        "name": "Red Apricorn"
+      },
+      "86": {
+        "identifier": "tiny-mushroom",
+        "item_id": 86,
+        "name": "Tiny Mushroom"
+      },
+      "87": {
+        "identifier": "big-mushroom",
+        "item_id": 87,
+        "name": "Big Mushroom"
+      },
+      "88": {
+        "identifier": "silver-powder",
+        "item_id": 199,
+        "name": "Silver Powder"
+      },
+      "9": {
+        "identifier": "antidote",
+        "item_id": 18,
+        "name": "Antidote"
+      },
+      "91": {
+        "identifier": "amulet-coin",
+        "item_id": 200,
+        "name": "Amulet Coin"
+      },
+      "94": {
+        "identifier": "cleanse-tag",
+        "item_id": 201,
+        "name": "Cleanse Tag"
+      },
+      "95": {
+        "identifier": "mystic-water",
+        "item_id": 220,
+        "name": "Mystic Water"
+      },
+      "96": {
+        "identifier": "twisted-spoon",
+        "item_id": 225,
+        "name": "Twisted Spoon"
+      },
+      "98": {
+        "identifier": "black-belt",
+        "item_id": 218,
+        "name": "Black Belt"
+      }
+    },
+    "yellow": {}
+  },
+  "source": "pokeapi_csv + pret_pokecrystal_constants"
+}

@@ -1,1 +1,1 @@
-requests psutil pywin32 pillow tkinter-tooltip cx_Freeze
+requests psutil pywin32 pillow tkinter-tooltip cx_Freeze obsws-python pytesseract
