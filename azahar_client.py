@@ -273,7 +273,14 @@ class AzaharRPCClient:
             self._send_packet(PacketType.SetGetProcess, request_data)
             packet_type, data = self._recv_packet()
             
-            if packet_type == PacketType.SetGetProcess and len(data) >= 8:
+            if packet_type == PacketType.SetGetProcess and len(data) >= 4:
+                # Check if response indicates success (not -1/ffffffff)
+                result = struct.unpack('<i', data[:4])[0]
+                if result != -1:
+                    self.current_process = process_id
+                    return True
+                # Even if result is -1, some Azahar versions still allow reads
+                # So we set current_process anyway and try
                 self.current_process = process_id
                 return True
             return False
