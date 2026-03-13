@@ -85,6 +85,12 @@ class AzaharRPCClient:
             if self.get_process_list() is None:
                 self.disconnect()
                 return False
+
+            # Reads must target the game process.
+            process_id = self.find_pokemon_process()
+            if process_id is None or not self.select_process(process_id):
+                self.disconnect()
+                return False
             return True
         except Exception as e:
             print(f"Failed to create socket: {e}")
@@ -134,6 +140,16 @@ class AzaharRPCClient:
     def is_connected(self) -> bool:
         """Check if socket is active"""
         return self.connected and self.socket is not None
+
+    def _resolve_address(self, address: int) -> int:
+        """Resolve game-relative offsets into FCRAM addresses for Azahar reads."""
+        try:
+            parsed = int(address)
+        except (TypeError, ValueError):
+            return int(address)
+        if parsed < self.MEM_FCRAM:
+            return int(self.MEM_FCRAM + parsed)
+        return int(parsed)
     
     def read_memory(self, address, size: int = 1):
         """
@@ -149,10 +165,15 @@ class AzaharRPCClient:
         """
         if not self.connected:
             return None
+        if self.current_process is None:
+            process_id = self.find_pokemon_process()
+            if process_id is None or not self.select_process(process_id):
+                return None
         
         # Convert hex string to int if needed
         if isinstance(address, str):
             address = int(address, 16) if address.startswith('0x') else int(address)
+        address = self._resolve_address(address)
         
         if size > self.MAX_READ_SIZE:
             # Read in chunks
