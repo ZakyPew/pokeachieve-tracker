@@ -2157,6 +2157,8 @@ class PokemonMemoryReader:
             "max_pokemon": 721,
             "pokedex_caught": "0x08000010",  # Azahar FCRAM offset (found by searching for Froakie)
             "pokedex_seen": "0x08000070",  # 0x60 bytes after caught
+            "pokedex_caught_candidates": ["0x08000010", "0x08010010", "0x08020010"],
+            "pokedex_seen_candidates": ["0x08000070", "0x08010070", "0x08020070"],
             "party_count": "0x08019600",
             "party_start": "0x08019608",
             "party_slot_size": 232
@@ -2166,6 +2168,8 @@ class PokemonMemoryReader:
             "max_pokemon": 721,
             "pokedex_caught": "0x08000010",  # Azahar FCRAM offset (found by searching for Froakie)
             "pokedex_seen": "0x08000070",  # 0x60 bytes after caught
+            "pokedex_caught_candidates": ["0x08000010", "0x08010010", "0x08020010"],
+            "pokedex_seen_candidates": ["0x08000070", "0x08010070", "0x08020070"],
             "party_count": "0x08019600",
             "party_start": "0x08019608",
             "party_slot_size": 232
@@ -4046,6 +4050,12 @@ class PokemonMemoryReader:
         max_pokemon = int(config.get("max_pokemon") or (151 if gen == 1 else (251 if gen == 2 else 386)))
         static_caught_addr = config.get("pokedex_caught", config.get("pokedex_flags", "0xD2F7"))
         static_seen_addr = config.get("pokedex_seen")
+        caught_candidates = [str(addr) for addr in (config.get("pokedex_caught_candidates") or []) if str(addr).strip()]
+        seen_candidates = [str(addr) for addr in (config.get("pokedex_seen_candidates") or []) if str(addr).strip()]
+        if static_caught_addr and str(static_caught_addr) not in caught_candidates:
+            caught_candidates.insert(0, str(static_caught_addr))
+        if static_seen_addr and str(static_seen_addr) not in seen_candidates:
+            seen_candidates.insert(0, str(static_seen_addr))
         caught_addr = static_caught_addr
         seen_addr = static_seen_addr
         used_pointer_layout = False
@@ -4078,6 +4088,48 @@ class PokemonMemoryReader:
                     return []
 
         caught = _safe_read_pokedex_flags(caught_addr)
+
+        if gen >= 6 and len(caught_candidates) > 1:
+            candidate_reads: List[Tuple[str, List[int]]] = [(str(caught_addr), caught)]
+            for candidate_addr in caught_candidates:
+                if str(candidate_addr) == str(caught_addr):
+                    continue
+                candidate_values = _safe_read_pokedex_flags(str(candidate_addr))
+                candidate_reads.append((str(candidate_addr), candidate_values))
+
+            def _candidate_key(item: Tuple[str, List[int]]) -> Tuple[int, int, int]:
+                addr, values = item
+                count = len(values)
+                if count_hint is not None:
+                    distance = abs(int(count) - int(count_hint))
+                elif caught:
+                    distance = abs(int(count) - len(caught))
+                else:
+                    distance = 0
+                is_primary = 0 if str(addr) == str(caught_addr) else 1
+                return (distance, -count, is_primary)
+
+            best_addr, best_values = min(candidate_reads, key=_candidate_key)
+            if best_addr != str(caught_addr):
+                caught_addr = str(best_addr)
+                caught = list(best_values)
+                if seen_candidates:
+                    try:
+                        idx = caught_candidates.index(best_addr)
+                    except ValueError:
+                        idx = -1
+                    if idx >= 0 and idx < len(seen_candidates):
+                        seen_addr = str(seen_candidates[idx])
+                log_event(
+                    logging.INFO,
+                    "pokedex_candidate_selected",
+                    game=game_name,
+                    selected_addr=best_addr,
+                    selected_count=len(caught),
+                    previous_addr=static_caught_addr,
+                    previous_count=len(candidate_reads[0][1]),
+                    count_hint=count_hint,
+                )
 
         if gen == 3 and used_pointer_layout and not caught and static_caught_addr and static_caught_addr != caught_addr:
             allow_static_fallback = bool(config.get("pokedex_allow_static_fallback", 0))
@@ -6664,6 +6716,11 @@ class AchievementTracker:
                 ))
             
             self.game_name = game_name
+            if hasattr(self.retroarch, "set_game_hint"):
+                try:
+                    self.retroarch.set_game_hint(game_name)
+                except Exception:
+                    pass
             self.game_id = self.GAME_IDS.get(game_name)
             self._last_party = []
             self._last_pokedex = []
@@ -11956,6 +12013,11 @@ class PokeAchieveGUI:
         log_event(logging.DEBUG, "load_achievements_file", file=str(achievement_file) if achievement_file else None)
         log_event(logging.DEBUG, "load_achievements_file_exists", exists=achievement_file.exists() if achievement_file else False)
         if achievement_file and achievement_file.exists():
+            if self.emulator_type == "azahar" and self.azahar and hasattr(self.azahar, "set_game_hint"):
+                try:
+                    self.azahar.set_game_hint(display_name or clean_name)
+                except Exception:
+                    pass
             if self.tracker.load_game(display_name, achievement_file):
                 self.tracker.load_progress(self.progress_file)
                 
