@@ -2155,8 +2155,8 @@ class PokemonMemoryReader:
         "pokemon_x": {
             "gen": 6,
             "max_pokemon": 721,
-            "pokedex_caught": "0x1A408",
-            "pokedex_seen": "0x1A468",
+            "pokedex_caught": None,  # Disabled - Azahar memory layout differs from ProjectPokemon offsets
+            "pokedex_seen": None,  # Disabled - Azahar memory layout differs from ProjectPokemon offsets
             "party_count": "0x19600",
             "party_start": "0x19608",
             "party_slot_size": 232
@@ -2164,8 +2164,8 @@ class PokemonMemoryReader:
         "pokemon_y": {
             "gen": 6,
             "max_pokemon": 721,
-            "pokedex_caught": "0x1A408",
-            "pokedex_seen": "0x1A468",
+            "pokedex_caught": None,  # Disabled - Azahar memory layout differs from ProjectPokemon offsets
+            "pokedex_seen": None,  # Disabled - Azahar memory layout differs from ProjectPokemon offsets
             "party_count": "0x19600",
             "party_start": "0x19608",
             "party_slot_size": 232
