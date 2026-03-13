@@ -2155,19 +2155,19 @@ class PokemonMemoryReader:
         "pokemon_x": {
             "gen": 6,
             "max_pokemon": 721,
-            "pokedex_caught": None,  # Disabled - Azahar memory layout differs from ProjectPokemon offsets
-            "pokedex_seen": None,  # Disabled - Azahar memory layout differs from ProjectPokemon offsets
-            "party_count": "0x19600",
-            "party_start": "0x19608",
+            "pokedex_caught": "0x08000010",  # Azahar FCRAM offset (found by searching for Froakie)
+            "pokedex_seen": "0x08000070",  # 0x60 bytes after caught
+            "party_count": "0x08019600",
+            "party_start": "0x08019608",
             "party_slot_size": 232
         },
         "pokemon_y": {
             "gen": 6,
             "max_pokemon": 721,
-            "pokedex_caught": None,  # Disabled - Azahar memory layout differs from ProjectPokemon offsets
-            "pokedex_seen": None,  # Disabled - Azahar memory layout differs from ProjectPokemon offsets
-            "party_count": "0x19600",
-            "party_start": "0x19608",
+            "pokedex_caught": "0x08000010",  # Azahar FCRAM offset (found by searching for Froakie)
+            "pokedex_seen": "0x08000070",  # 0x60 bytes after caught
+            "party_count": "0x08019600",
+            "party_start": "0x08019608",
             "party_slot_size": 232
         },
     }
