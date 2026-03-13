@@ -1,0 +1,43 @@
+{
+  "schema": "pokeachieve.gen6.collection-map.v1",
+  "source": "https://projectpokemon.org/home/docs/gen-6/xy-save-structure-r82/",
+  "games": [
+    "Pokemon X",
+    "Pokemon Y"
+  ],
+  "notes": "Use active save slot; Save 2 uses the same offsets at +0x7F000.",
+  "species_range": {
+    "national_dex_min": 1,
+    "national_dex_max": 721
+  },
+  "collection_fields": {
+    "owned_flags": {
+      "offset": "0x1A408",
+      "length": "0x60",
+      "bit_order": "lsb_first"
+    },
+    "seen_male_flags": {
+      "offset": "0x1A468",
+      "length": "0x60",
+      "bit_order": "lsb_first"
+    },
+    "seen_female_flags": {
+      "offset": "0x1A4C8",
+      "length": "0x60",
+      "bit_order": "lsb_first"
+    },
+    "displayed_male_flags": {
+      "offset": "0x1A5E8",
+      "length": "0x60"
+    },
+    "displayed_female_flags": {
+      "offset": "0x1A648",
+      "length": "0x60"
+    }
+  },
+  "rules": {
+    "caught": "owned_flags bit set",
+    "seen": "seen_male_flags OR seen_female_flags bit set",
+    "displayed": "displayed_male_flags OR displayed_female_flags bit set"
+  }
+}
