@@ -3800,6 +3800,85 @@ class PokemonMemoryReader:
             return None
         return species_value if species_value > 0 else None
 
+    def _decode_gen6_party_slot(self, slot_bytes: List[int], max_species_id: int) -> Optional[Dict[str, object]]:
+        """Decode Gen 6 PK6 party bytes into stable fields used by party tracking."""
+        if not isinstance(slot_bytes, list) or len(slot_bytes) < 232:
+            return None
+        try:
+            slot = [int(v) & 0xFF for v in slot_bytes[:232]]
+        except Exception:
+            return None
+
+        def _u16(data: List[int], off: int) -> int:
+            return int(data[off]) | (int(data[off + 1]) << 8)
+
+        def _u32(data: List[int], off: int) -> int:
+            return (
+                int(data[off])
+                | (int(data[off + 1]) << 8)
+                | (int(data[off + 2]) << 16)
+                | (int(data[off + 3]) << 24)
+            ) & 0xFFFFFFFF
+
+        encryption_constant = _u32(slot, 0)
+        stored_checksum = _u16(slot, 6)
+        decrypted = [0] * 224
+        seed = int(encryption_constant) & 0xFFFFFFFF
+        for idx in range(0, 224, 2):
+            seed = (0x41C64E6D * seed + 0x6073) & 0xFFFFFFFF
+            key = (seed >> 16) & 0xFFFF
+            enc_word = _u16(slot, 8 + idx)
+            dec_word = int(enc_word ^ key) & 0xFFFF
+            decrypted[idx] = dec_word & 0xFF
+            decrypted[idx + 1] = (dec_word >> 8) & 0xFF
+
+        checksum = 0
+        for idx in range(0, 224, 2):
+            checksum = (checksum + _u16(decrypted, idx)) & 0xFFFF
+        if int(checksum) != int(stored_checksum):
+            return None
+
+        blocks = [decrypted[(block_idx * 56):((block_idx + 1) * 56)] for block_idx in range(4)]
+        best: Optional[Dict[str, object]] = None
+        best_score = -1
+        for block in blocks:
+            if len(block) < 24:
+                continue
+            species_id = _u16(block, 0)
+            if species_id <= 0 or species_id > int(max_species_id):
+                continue
+
+            held_item_id = _u16(block, 2)
+            tid = _u16(block, 4)
+            sid = _u16(block, 6)
+            experience = _u32(block, 8)
+            pid = _u32(block, 16)
+            ability = int(block[20]) & 0xFF
+
+            score = 3
+            if 0 <= int(held_item_id) <= 5000:
+                score += 1
+            if 0 <= int(experience) <= 20000000:
+                score += 1
+            if 0 < int(ability) <= 255:
+                score += 1
+            if int(pid) != 0:
+                score += 1
+
+            if score > best_score:
+                best_score = score
+                shiny_xor = (int(tid) ^ int(sid) ^ (int(pid) & 0xFFFF) ^ (int(pid) >> 16)) & 0xFFFF
+                best = {
+                    "id": int(species_id),
+                    "held_item_id": int(held_item_id),
+                    "shiny": bool(int(shiny_xor) < 16),
+                    "_shiny_xor": int(shiny_xor),
+                    "_personality": int(pid) & 0xFFFFFFFF,
+                    "_ot_id": ((int(sid) & 0xFFFF) << 16) | (int(tid) & 0xFFFF),
+                }
+
+        return best
+
     def _read_gen3_slot_bytes_for_details(self, slot_addr: int, size: int) -> Optional[List[int]]:
         """Read slot bytes required for details decode without heavy per-byte overhead."""
         try:
@@ -5287,6 +5366,51 @@ class PokemonMemoryReader:
                 "reason": "invalid_party_count",
             })
             return []
+
+        if int(gen) == 6:
+            max_species = int(config.get("max_pokemon", 0) or 0)
+            for i in range(int(count)):
+                slot_addr_int = int(party_start_addr, 16) + (i * slot_size)
+                slot_data = self.retroarch.read_memory(hex(slot_addr_int), slot_size)
+                if not (isinstance(slot_data, list) and len(slot_data) >= slot_size):
+                    continue
+                if not all(isinstance(v, int) and 0 <= int(v) <= 0xFF for v in slot_data[:slot_size]):
+                    continue
+                decoded = self._decode_gen6_party_slot([int(v) & 0xFF for v in slot_data[:slot_size]], max_species_id=max_species)
+                if not isinstance(decoded, dict):
+                    continue
+
+                member: Dict[str, object] = {
+                    "id": int(decoded.get("id", 0) or 0),
+                    "level": None,
+                    "slot": i + 1,
+                    "shiny": bool(decoded.get("shiny", False)),
+                }
+                held_item_id = int(decoded.get("held_item_id", 0) or 0)
+                if held_item_id > 0:
+                    member["held_item_id"] = held_item_id
+                if "_shiny_xor" in decoded:
+                    member["_shiny_xor"] = int(decoded.get("_shiny_xor", -1))
+                if "_personality" in decoded:
+                    member["_personality"] = int(decoded.get("_personality", 0)) & 0xFFFFFFFF
+                if "_ot_id" in decoded:
+                    member["_ot_id"] = int(decoded.get("_ot_id", 0)) & 0xFFFFFFFF
+
+                if int(member.get("id", 0)) > 0:
+                    party.append(member)
+
+            expected_count_value = int(count) if isinstance(count, int) and int(count) >= 0 else None
+            self._last_party_read_meta.update({
+                "expected_count": expected_count_value,
+                "decoded_count": len(party),
+                "incomplete": bool(expected_count_value and len(party) < expected_count_value),
+                "count_addr": str(party_count_addr),
+                "start_addr": str(party_start_addr),
+                "stride": int(slot_size),
+                "budget_hit": False,
+                "reason": None,
+            })
+            return party
 
         # Gen 1/2: species is first byte of slot structure.
         for i in range(int(count)):
@@ -13979,6 +14103,5 @@ def main():
 
 if __name__ == "__main__":
     main()
-
 
 
