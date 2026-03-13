@@ -946,6 +946,8 @@ class RetroArchClient:
         "pokemon fire red": "Pokemon FireRed",
         "pokemon leafgreen": "Pokemon LeafGreen",
         "pokemon leaf green": "Pokemon LeafGreen",
+        "pokemon x": "Pokemon X",
+        "pokemon y": "Pokemon Y",
     }
     def __init__(self, host: str = "127.0.0.1", port: int = 55355):
         self.host = host
@@ -2149,6 +2151,24 @@ class PokemonMemoryReader:
             "pokedex_allow_static_when_pointer_missing": 0,
             "pokedex_allow_static_fallback": 0,
             "pokedex_allow_byte_fallback": 0,
+        },
+        "pokemon_x": {
+            "gen": 6,
+            "max_pokemon": 721,
+            "pokedex_caught": "0x1A408",
+            "pokedex_seen": "0x1A468",
+            "party_count": "0x19600",
+            "party_start": "0x19608",
+            "party_slot_size": 232
+        },
+        "pokemon_y": {
+            "gen": 6,
+            "max_pokemon": 721,
+            "pokedex_caught": "0x1A408",
+            "pokedex_seen": "0x1A468",
+            "party_count": "0x19600",
+            "party_start": "0x19608",
+            "party_slot_size": 232
         },
     }
     
@@ -5710,6 +5730,8 @@ class AchievementTracker:
         "Pokemon Crystal": 8,
         "Pokemon Ruby": 9,
         "Pokemon Sapphire": 10,
+        "Pokemon X": 11,
+        "Pokemon Y": 12,
     }
     
     def __init__(self, retroarch: RetroArchClient, api: Optional[PokeAchieveAPI] = None):
@@ -11765,6 +11787,8 @@ class PokeAchieveGUI:
             "Pokemon LeafGreen": "pokemon_leafgreen.json",
             "Pokemon Ruby": "pokemon_ruby.json",
             "Pokemon Sapphire": "pokemon_sapphire.json",
+            "Pokemon X": "pokemon_x.json",
+            "Pokemon Y": "pokemon_y.json",
         }
         achievement_file = None
         display_name = None
