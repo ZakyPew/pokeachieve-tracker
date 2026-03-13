@@ -108,6 +108,84 @@ def _party_game_family_from_name(game_name: str) -> str:
     return "default"
 
 
+_GEN3_HOENN_MAPSEC_NAMES: Dict[int, str] = {
+    0: "Littleroot Town", 1: "Oldale Town", 2: "Dewford Town", 3: "Lavaridge Town", 4: "Fallarbor Town",
+    5: "Verdanturf Town", 6: "Pacifidlog Town", 7: "Petalburg City", 8: "Slateport City", 9: "Mauville City",
+    10: "Rustboro City", 11: "Fortree City", 12: "Lilycove City", 13: "Mossdeep City", 14: "Sootopolis City",
+    15: "Ever Grande City", 16: "Route 101", 17: "Route 102", 18: "Route 103", 19: "Route 104",
+    20: "Route 105", 21: "Route 106", 22: "Route 107", 23: "Route 108", 24: "Route 109", 25: "Route 110",
+    26: "Route 111", 27: "Route 112", 28: "Route 113", 29: "Route 114", 30: "Route 115", 31: "Route 116",
+    32: "Route 117", 33: "Route 118", 34: "Route 119", 35: "Route 120", 36: "Route 121", 37: "Route 122",
+    38: "Route 123", 39: "Route 124", 40: "Route 125", 41: "Route 126", 42: "Route 127", 43: "Route 128",
+    44: "Route 129", 45: "Route 130", 46: "Route 131", 47: "Route 132", 48: "Route 133", 49: "Route 134",
+    58: "Granite Cave", 59: "Mt. Chimney", 60: "Safari Zone", 62: "Petalburg Woods", 63: "Rusturf Tunnel",
+    64: "Abandoned Ship", 65: "New Mauville", 66: "Meteor Falls", 68: "Mt. Pyre", 69: "Aqua Hideout",
+    70: "Shoal Cave", 71: "Seafloor Cavern", 73: "Victory Road", 75: "Cave Of Origin", 76: "Southern Island",
+    77: "Fiery Path", 79: "Jagged Pass", 83: "Scorched Slab", 84: "Island Cave", 85: "Desert Ruins", 86: "Ancient Tomb",
+}
+
+
+# Hoenn Towns/Routes map-group (group 0) map-number ordering differs for city/town IDs.
+_GEN3_HOENN_GROUP0_MAP_NUM_NAMES: Dict[int, str] = dict(_GEN3_HOENN_MAPSEC_NAMES)
+_GEN3_HOENN_GROUP0_MAP_NUM_NAMES.update({
+    0: "Petalburg City", 1: "Slateport City", 2: "Mauville City", 3: "Rustboro City",
+    4: "Fortree City", 5: "Lilycove City", 6: "Mossdeep City", 7: "Sootopolis City",
+    8: "Ever Grande City", 9: "Littleroot Town", 10: "Oldale Town", 11: "Dewford Town",
+    12: "Lavaridge Town", 13: "Fallarbor Town", 14: "Verdanturf Town", 15: "Pacifidlog Town",
+})
+
+# Emerald can expose alternate location IDs in the high byte at startup/transition.
+# These remaps are Emerald-specific and only applied for high-byte decode source.
+_GEN3_EMERALD_HI_LOCATION_OVERRIDES: Dict[int, str] = {
+    5: "Lilycove City",
+    6: "Mossdeep City",
+}
+
+
+_GEN3_PLAYER_AVATAR_FLAGS_ADDR_BY_LAYOUT: Dict[str, str] = {
+    # pokeemerald: gPlayerAvatar.flags (u8) at 0x02037330; bit 0x08 = surfing
+    "gen3_emerald": "0x02037330",
+}
+_GEN3_PLAYER_AVATAR_FLAG_SURFING = 0x08
+_GEN3_PLAYER_AVATAR_FLAG_CANDIDATE_ADDRS_BY_LAYOUT: Dict[str, List[str]] = {
+    "gen3_emerald": ["0x02037330", "0x02037318", "0x02037078", "0x02037590"],
+    "gen3_ruby": ["0x02037330", "0x02037318", "0x02037078", "0x02037590"],
+    "gen3_sapphire": ["0x02037330", "0x02037318", "0x02037078", "0x02037590"],
+}
+
+
+_GEN3_KANTO_MAPSEC_NAMES: Dict[int, str] = {
+    89: "Pallet Town", 90: "Viridian City", 91: "Pewter City", 92: "Cerulean City", 93: "Lavender Town",
+    94: "Vermilion City", 95: "Celadon City", 96: "Fuchsia City", 97: "Cinnabar Island", 98: "Indigo Plateau",
+    99: "Saffron City", 100: "Route 1", 101: "Route 2", 102: "Route 3", 103: "Route 4", 104: "Route 5",
+    105: "Route 6", 106: "Route 7", 107: "Route 8", 108: "Route 9", 109: "Route 10", 110: "Route 11",
+    111: "Route 12", 112: "Route 13", 113: "Route 14", 114: "Route 15", 115: "Route 16", 116: "Route 17",
+    117: "Route 18", 118: "Route 19", 119: "Route 20", 120: "Route 21", 121: "Route 22", 122: "Route 23",
+    123: "Route 24", 124: "Route 25", 125: "Viridian Forest", 126: "Mt. Moon", 127: "S.S. Anne",
+    128: "Underground Path", 129: "Underground Path", 130: "Diglett's Cave", 131: "Victory Road", 132: "Rocket Hideout",
+    133: "Silph Co.", 134: "Pokemon Mansion", 135: "Safari Zone", 136: "Pokemon League", 137: "Rock Tunnel",
+    138: "Seafoam Islands", 139: "Pokemon Tower", 140: "Cerulean Cave", 141: "Power Plant",
+}
+
+_GEN2_GSC_LOCATION_BY_GROUP_MAPNUM: Dict[Tuple[int, int], str] = {
+    # Source model: pokecrystal MapGroupPointers + group-local map order.
+    (1, 13): "Route 38", (1, 14): "Route 39", (1, 15): "Olivine City",
+    (2, 5): "Route 42", (2, 6): "Route 44", (2, 7): "Mahogany Town",
+    (5, 8): "Route 45", (5, 9): "Route 46", (5, 10): "Blackthorn City",
+    (6, 5): "Route 19", (6, 6): "Route 20", (6, 7): "Route 21", (6, 8): "Cinnabar Island",
+    (9, 5): "Route 43", (9, 6): "Lake of Rage",
+    (10, 1): "Route 32", (10, 2): "Route 35", (10, 3): "Route 36", (10, 4): "Route 37", (10, 5): "Violet City",
+    (11, 1): "Route 34", (11, 2): "Goldenrod City",
+    (12, 1): "Route 6", (12, 2): "Route 11", (12, 3): "Vermilion City",
+    (13, 1): "Route 1", (13, 2): "Pallet Town",
+    (18, 1): "Route 8", (18, 2): "Route 12", (18, 3): "Route 10", (18, 4): "Lavender Town",
+    (19, 1): "Route 28", (19, 2): "Silver Cave",
+    (22, 1): "Route 40", (22, 2): "Route 41", (22, 3): "Cianwood City",
+    (23, 1): "Route 2", (23, 2): "Route 22", (23, 3): "Viridian City",
+    (24, 1): "Route 26", (24, 2): "Route 27", (24, 3): "Route 29", (24, 4): "New Bark Town",
+    (25, 1): "Route 5", (25, 2): "Saffron City",
+    (26, 1): "Route 30", (26, 2): "Route 31", (26, 3): "Cherrygrove City",
+}
 def _load_legacy_item_mappings() -> Dict[str, Dict[int, Dict[str, object]]]:
     global _LEGACY_ITEM_MAPPINGS_CACHE
     if _LEGACY_ITEM_MAPPINGS_CACHE is not None:
@@ -1315,6 +1393,8 @@ class PokemonMemoryReader:
             "party_count": "0xDA22",
             "party_start": "0xDA2A",
             "party_slot_size": 48,
+            "map_group": "0xDCB5",
+            "map_number": "0xDCB6",
         },
         "pokemon_silver": {
             "gen": 2,
@@ -1324,6 +1404,8 @@ class PokemonMemoryReader:
             "party_count": "0xDA22",
             "party_start": "0xDA2A",
             "party_slot_size": 48,
+            "map_group": "0xDCB5",
+            "map_number": "0xDCB6",
         },
         "pokemon_crystal": {
             "gen": 2,
@@ -1333,6 +1415,8 @@ class PokemonMemoryReader:
             "party_count": "0xDA22",
             "party_start": "0xDA2A",
             "party_slot_size": 48,
+            "map_group": "0xDCB5",
+            "map_number": "0xDCB6",
         },
         # Gen 3 (386 Pokemon)
         "pokemon_ruby": {
@@ -1420,6 +1504,9 @@ class PokemonMemoryReader:
             # Emerald-specific saveblock pointers + offsets.
             "saveblock1_ptr": "0x03005D8C",
             "saveblock2_ptr": "0x03005D90",
+            "player_avatar_flags": "0x02037330",
+            "player_avatar_flags_candidates": ["0x02037330", "0x02037318", "0x02037078", "0x02037590"],
+            "player_avatar_surf_mask": 0x08,
             "party_count_offset": 0x234,
             "party_start_offset": 0x238,
             "pokedex_caught_offset": 0x28,
@@ -1793,6 +1880,11 @@ class PokemonMemoryReader:
         self._pokedex_seen_less_last_log: Dict[str, float] = {}
         self._pointer_unreadable_streak: Dict[str, int] = {}
         self._pointer_unreadable_last_attempt: Dict[str, float] = {}
+        self._last_location_read_meta: Dict[str, object] = {}
+        self._avatar_flags_addr_cache: Dict[str, str] = {}
+        self._avatar_flags_source_log_ts: Dict[str, float] = {}
+        self._avatar_flags_unresolved_log_ts: Dict[str, float] = {}
+        self._last_surf_state: Dict[str, bool] = {}
         self._last_gen3_party_selection: Dict[str, Dict[str, object]] = {}
         self._last_party_read_meta: Dict[str, object] = {}
         self._last_wild_read_meta: Dict[str, object] = {}
@@ -2192,6 +2284,391 @@ class PokemonMemoryReader:
                 return int(party_count_addr, 16) - int(party_count_offset)
             except (TypeError, ValueError):
                 return None
+        return None
+
+    def _read_u16_address(self, address_int: int) -> Optional[int]:
+        try:
+            raw = self.retroarch.read_memory(hex(int(address_int)), num_bytes=2)
+        except Exception:
+            return None
+        if not isinstance(raw, list) or len(raw) < 2:
+            return None
+        lo = raw[0]
+        hi = raw[1]
+        if not isinstance(lo, int) or not isinstance(hi, int):
+            return None
+        return int((int(hi) << 8) | int(lo))
+
+    def _set_location_meta(self, reason: str, **extra):
+        payload: Dict[str, object] = {"reason": str(reason)}
+        payload.update(extra)
+        self._last_location_read_meta = payload
+
+    def get_last_location_read_meta(self) -> Dict[str, object]:
+        return dict(self._last_location_read_meta) if isinstance(self._last_location_read_meta, dict) else {}
+
+    def read_is_surfing(self, game_name: str) -> Optional[bool]:
+        config = self.get_game_config(game_name)
+        if not isinstance(config, dict):
+            return None
+        try:
+            gen = int(config.get("gen", 1) or 1)
+        except (TypeError, ValueError):
+            gen = 1
+        if gen != 3:
+            return None
+
+        layout_id = str(config.get("layout_id") or "").strip().lower()
+        game_key = str(game_name or "").strip().lower()
+
+        surf_mask_raw = config.get("player_avatar_surf_mask", _GEN3_PLAYER_AVATAR_FLAG_SURFING)
+        try:
+            surf_mask = int(surf_mask_raw)
+        except (TypeError, ValueError):
+            surf_mask = _GEN3_PLAYER_AVATAR_FLAG_SURFING
+        if surf_mask <= 0:
+            surf_mask = _GEN3_PLAYER_AVATAR_FLAG_SURFING
+
+        candidate_addrs: List[str] = []
+
+        def _append_candidate(raw_addr: object):
+            if raw_addr is None:
+                return
+            addr_text = str(raw_addr).strip()
+            if not addr_text:
+                return
+            candidate_addrs.append(addr_text)
+
+        _append_candidate(self._avatar_flags_addr_cache.get(game_key))
+        _append_candidate(config.get("player_avatar_flags") or _GEN3_PLAYER_AVATAR_FLAGS_ADDR_BY_LAYOUT.get(layout_id))
+
+        raw_cfg_candidates = config.get("player_avatar_flags_candidates")
+        if isinstance(raw_cfg_candidates, (list, tuple)):
+            for raw in raw_cfg_candidates:
+                _append_candidate(raw)
+
+        for raw in _GEN3_PLAYER_AVATAR_FLAG_CANDIDATE_ADDRS_BY_LAYOUT.get(layout_id, []):
+            _append_candidate(raw)
+
+        # Keep candidate order deterministic and deduplicated.
+        deduped: List[str] = []
+        seen_addrs: Set[str] = set()
+        for addr in candidate_addrs:
+            key = str(addr).strip().lower()
+            if not key or key in seen_addrs:
+                continue
+            seen_addrs.add(key)
+            deduped.append(str(addr).strip())
+
+        def _read_flags_byte(addr_text: str) -> Optional[int]:
+            try:
+                addr_int = int(str(addr_text), 16)
+            except (TypeError, ValueError):
+                return None
+            raw_flag = self.retroarch.read_memory(hex(addr_int))
+            if not isinstance(raw_flag, int):
+                return None
+            return int(raw_flag) & 0xFF
+
+        def _is_plausible_avatar_flags(flags_byte: int) -> bool:
+            movement_bits = int(flags_byte) & 0x1F
+            # Expected movement states from PLAYER_AVATAR_FLAG_* bits.
+            if movement_bits not in {0x01, 0x02, 0x04, 0x08, 0x10, 0x18}:
+                return False
+            return True
+
+        selected_addr = ""
+        selected_flags: Optional[int] = None
+        probe_values: Dict[str, Optional[int]] = {}
+        for addr_text in deduped:
+            flags_byte = _read_flags_byte(addr_text)
+            probe_values[str(addr_text).strip()] = flags_byte if isinstance(flags_byte, int) else None
+            if flags_byte is None:
+                continue
+            if _is_plausible_avatar_flags(flags_byte):
+                selected_addr = str(addr_text).strip()
+                selected_flags = int(flags_byte)
+                break
+
+        # If no plausible source is readable this poll, do not carry forward stale surf state.
+        if selected_flags is None:
+            self._last_surf_state.pop(game_key, None)
+            now = time.monotonic()
+            last_unresolved_log = float(self._avatar_flags_unresolved_log_ts.get(game_key, 0.0) or 0.0)
+            if (now - last_unresolved_log) >= 10.0:
+                self._avatar_flags_unresolved_log_ts[game_key] = now
+                probe_summary = ", ".join(
+                    f"{addr}={('unreadable' if value is None else int(value))}"
+                    for addr, value in probe_values.items()
+                )
+                log_event(
+                    logging.INFO,
+                    "gen3_avatar_flags_unresolved",
+                    game=game_name,
+                    layout_id=layout_id,
+                    probes=probe_summary,
+                    surf_mask=int(surf_mask),
+                )
+            return None
+
+        previous_addr = str(self._avatar_flags_addr_cache.get(game_key) or "").strip().lower()
+        if selected_addr:
+            self._avatar_flags_addr_cache[game_key] = selected_addr
+
+        if selected_addr and selected_addr.lower() != previous_addr:
+            now = time.monotonic()
+            last_log = float(self._avatar_flags_source_log_ts.get(game_key, 0.0) or 0.0)
+            if (now - last_log) >= 5.0:
+                self._avatar_flags_source_log_ts[game_key] = now
+                log_event(
+                    logging.INFO,
+                    "gen3_avatar_flags_source_selected",
+                    game=game_name,
+                    layout_id=layout_id,
+                    address=selected_addr,
+                    flags=int(selected_flags),
+                    surfing=bool(int(selected_flags) & int(surf_mask)),
+                )
+
+        surfing = bool(int(selected_flags) & int(surf_mask))
+        self._last_surf_state[game_key] = bool(surfing)
+        return bool(surfing)
+
+    def _resolve_gen3_saveblock1_base_for_location(self, config: Dict, game_name: str) -> Optional[int]:
+        # Prefer live pointer, but fall back to static base math when pointer is unreadable.
+        ptr_addr = config.get("saveblock1_ptr")
+        if ptr_addr:
+            ptr = self._resolve_gen3_saveblock_ptr(str(ptr_addr), game_name=game_name)
+            if isinstance(ptr, int) and ptr > 0:
+                return int(ptr)
+
+        party_count_addr = config.get("party_count")
+        party_count_offset = config.get("party_count_offset")
+        if party_count_addr and party_count_offset is not None:
+            try:
+                base = int(str(party_count_addr), 16) - int(party_count_offset)
+            except (TypeError, ValueError):
+                base = None
+            if isinstance(base, int) and base > 0:
+                return int(base)
+
+        return None
+
+    def read_current_location(self, game_name: str) -> Optional[str]:
+        config = self.get_game_config(game_name)
+        if not config:
+            self._set_location_meta("missing_game_config", game=game_name)
+            return None
+        try:
+            gen = int(config.get("gen", 1) or 1)
+        except (TypeError, ValueError):
+            gen = 1
+        if gen == 2:
+            map_group_addr = config.get("map_group")
+            map_number_addr = config.get("map_number")
+            if not map_group_addr or not map_number_addr:
+                self._set_location_meta("gen2_map_addresses_missing", game=game_name)
+                return None
+
+            raw_group = self.retroarch.read_memory(str(map_group_addr))
+            raw_number = self.retroarch.read_memory(str(map_number_addr))
+            if not isinstance(raw_group, int) or not isinstance(raw_number, int):
+                self._set_location_meta(
+                    "gen2_map_unreadable",
+                    game=game_name,
+                    map_group_addr=str(map_group_addr),
+                    map_number_addr=str(map_number_addr),
+                )
+                return None
+
+            map_group = int(raw_group)
+            map_number = int(raw_number)
+            variant = _party_game_variant_from_name(game_name)
+            if variant in {"gold", "silver", "crystal"}:
+                location = _GEN2_GSC_LOCATION_BY_GROUP_MAPNUM.get((map_group, map_number))
+            else:
+                location = None
+
+            if isinstance(location, str) and location.strip():
+                resolved = location.strip()
+                self._set_location_meta(
+                    "ok",
+                    game=game_name,
+                    variant=variant,
+                    source="group_map",
+                    map_group=map_group,
+                    map_number=map_number,
+                    name=resolved,
+                )
+                return resolved
+
+            self._set_location_meta(
+                "gen2_map_unknown",
+                game=game_name,
+                variant=variant,
+                map_group=map_group,
+                map_number=map_number,
+            )
+            return None
+
+        if gen != 3:
+            self._set_location_meta("unsupported_generation", game=game_name, gen=gen)
+            return None
+
+        base = self._resolve_gen3_saveblock1_base_for_location(config, game_name)
+        if not isinstance(base, int) or base <= 0:
+            self._set_location_meta("saveblock1_base_unavailable", game=game_name, pointer=str(config.get("saveblock1_ptr") or ""))
+            return None
+
+        layout_id = str(config.get("layout_id") or "").strip().lower()
+        if layout_id in {"gen3_firered", "gen3_leafgreen"}:
+            mapsec_names = _GEN3_KANTO_MAPSEC_NAMES
+            decode_order: Tuple[str, ...] = ("u16", "hi", "lo")
+        elif layout_id in {"gen3_emerald"}:
+            mapsec_names = _GEN3_HOENN_MAPSEC_NAMES
+            # Emerald mapsec is stable from hi-byte; group/map bytes are noisy in RetroArch reads.
+            decode_order = ("hi", "u16", "lo")
+        elif layout_id in {"gen3_ruby", "gen3_sapphire"}:
+            mapsec_names = _GEN3_HOENN_MAPSEC_NAMES
+            decode_order = ("u16", "hi", "lo")
+        else:
+            mapsec_names = _GEN3_HOENN_MAPSEC_NAMES
+            decode_order = ("u16", "hi", "lo")
+
+        raw_group0: Optional[int] = None
+        raw_num0: Optional[int] = None
+        if layout_id == "gen3_emerald":
+            try:
+                raw_pair0 = self.retroarch.read_memory(hex(int(base) + 0x0), num_bytes=2)
+            except Exception:
+                raw_pair0 = None
+            if isinstance(raw_pair0, list) and len(raw_pair0) >= 2:
+                if isinstance(raw_pair0[0], int):
+                    raw_group0 = int(raw_pair0[0])
+                if isinstance(raw_pair0[1], int):
+                    raw_num0 = int(raw_pair0[1])
+            else:
+                raw_group = self.retroarch.read_memory(hex(int(base) + 0x0))
+                raw_num = self.retroarch.read_memory(hex(int(base) + 0x1))
+                if isinstance(raw_group, int):
+                    raw_group0 = int(raw_group)
+                if isinstance(raw_num, int):
+                    raw_num0 = int(raw_num)
+
+        # Read all raw forms once, then apply per-game decode order.
+        mapsec_raw = self._read_u16_address(int(base) + 0x4)
+        if isinstance(mapsec_raw, int):
+            raw_lo = int(mapsec_raw) & 0xFF
+            raw_hi = (int(mapsec_raw) >> 8) & 0xFF
+        else:
+            raw_lo_mem = self.retroarch.read_memory(hex(int(base) + 0x4))
+            raw_hi_mem = self.retroarch.read_memory(hex(int(base) + 0x5))
+            raw_lo = int(raw_lo_mem) if isinstance(raw_lo_mem, int) else None
+            raw_hi = int(raw_hi_mem) if isinstance(raw_hi_mem, int) else None
+
+        candidates: Dict[str, Optional[int]] = {
+            "u16": int(mapsec_raw) if isinstance(mapsec_raw, int) else None,
+            "hi": int(raw_hi) if raw_hi is not None else None,
+            "lo": int(raw_lo) if raw_lo is not None else None,
+        }
+
+
+        # Hoenn games expose current map group/number at +0x4/+0x5 (lo/hi).
+        if layout_id in {"gen3_emerald", "gen3_ruby", "gen3_sapphire"} and isinstance(raw_lo, int) and isinstance(raw_hi, int):
+            map_group = int(raw_lo)
+            map_number = int(raw_hi)
+            group_num_zero_packet = (
+                map_group == 0
+                and map_number == 0
+                and (raw_group0 in {None, 0})
+                and (raw_num0 in {None, 0})
+            )
+            if not group_num_zero_packet and map_group == 0 and map_number in _GEN3_HOENN_GROUP0_MAP_NUM_NAMES:
+                resolved_group = str(_GEN3_HOENN_GROUP0_MAP_NUM_NAMES[map_number]).strip()
+                self._set_location_meta(
+                    "ok",
+                    game=game_name,
+                    layout_id=layout_id,
+                    source="group_num_4",
+                    map_group=map_group,
+                    map_number=map_number,
+                    mapsec_id=map_number,
+                    name=resolved_group,
+                    raw_u16=candidates.get("u16"),
+                    raw_lo=candidates.get("lo"),
+                    raw_hi=candidates.get("hi"),
+                    raw_group0=raw_group0,
+                    raw_num0=raw_num0,
+                )
+                return resolved_group
+
+        # Guard against false location resolution from zeroed memory reads.
+        if (
+            candidates.get("u16") == 0
+            and candidates.get("lo") == 0
+            and candidates.get("hi") == 0
+        ):
+            self._set_location_meta(
+                "mapsec_zero_unreadable",
+                game=game_name,
+                layout_id=layout_id,
+                base=hex(int(base)),
+            )
+            return None
+
+        valid_candidates: List[Tuple[str, int]] = []
+        for source in decode_order:
+            candidate_id = candidates.get(source)
+            # Byte-level mapsec reads frequently report stale zero on startup; never trust 0 from byte sources.
+            if source in {"lo", "hi"} and int(candidate_id or -1) == 0:
+                continue
+            if isinstance(candidate_id, int) and candidate_id in mapsec_names:
+                valid_candidates.append((str(source), int(candidate_id)))
+
+        if valid_candidates:
+            selected_source, selected_id = valid_candidates[0]
+            prev_meta = self.get_last_location_read_meta()
+            prev_id = prev_meta.get("mapsec_id") if isinstance(prev_meta, dict) else None
+            if isinstance(prev_id, int):
+                for candidate_source, candidate_id in valid_candidates:
+                    if int(candidate_id) == int(prev_id):
+                        selected_source, selected_id = str(candidate_source), int(candidate_id)
+                        break
+            resolved = str(mapsec_names[int(selected_id)]).strip()
+            if layout_id == "gen3_emerald" and selected_source == "hi":
+                override = _GEN3_EMERALD_HI_LOCATION_OVERRIDES.get(int(selected_id))
+                if isinstance(override, str) and override.strip():
+                    resolved = override.strip()
+            self._set_location_meta(
+                "ok",
+                game=game_name,
+                layout_id=layout_id,
+                source=selected_source,
+                mapsec_id=int(selected_id),
+                name=resolved,
+                raw_u16=candidates.get("u16"),
+                raw_lo=candidates.get("lo"),
+                raw_hi=candidates.get("hi"),
+                raw_group0=raw_group0,
+                raw_num0=raw_num0,
+            )
+            return resolved
+
+        if mapsec_raw is None and raw_lo is None and raw_hi is None and raw_group0 is None and raw_num0 is None:
+            self._set_location_meta("mapsec_unreadable", game=game_name, base=hex(int(base)), layout_id=layout_id)
+            return None
+
+        self._set_location_meta(
+            "mapsec_unknown",
+            game=game_name,
+            layout_id=layout_id,
+            decode_order="/".join(list(decode_order)),
+            mapsec_id=candidates.get("u16"),
+            raw_lo=candidates.get("lo"),
+            raw_hi=candidates.get("hi"),
+            raw_group0=raw_group0,
+            raw_num0=raw_num0,
+        )
         return None
 
     def read_gen3_event_flag(self, game_name: str, flag_id: int) -> Optional[bool]:
@@ -4380,6 +4857,7 @@ class PokemonMemoryReader:
             gen = int(config.get("gen", 1))
         except (TypeError, ValueError):
             gen = 1
+
         if gen != 3:
             _set_meta("unsupported_generation", gen=gen)
             return None
@@ -7060,6 +7538,7 @@ class PokeAchieveGUI:
         self.hunt_route_var = tk.StringVar(value="Any Soft Reset")
         self.hunt_rod_var = tk.StringVar(value=self._hunt_rod_options[0])
         self.hunt_target_var = tk.StringVar(value="")
+        self.hunt_auto_route_var = tk.BooleanVar(value=True)
         self.hunt_profiles_file = self.data_dir / "hunt_profiles.json"
         self._hunt_profiles = self._load_hunt_profiles()
         self._hunt_profile_applying = False
@@ -7084,6 +7563,8 @@ class PokeAchieveGUI:
         self._hunt_last_raw_log_key: Optional[str] = None
         self._hunt_last_raw_none_log_at = 0.0
         self._hunt_last_raw_none_reason: Optional[str] = None
+        self._hunt_route_reconcile_pending: Optional[Dict[str, str]] = None
+        self._hunt_route_reconcile_last_probe_log_at = 0.0
         self._hunt_target_sprite_label: Optional[ttk.Label] = None
         self._hunt_target_name_label: Optional[ttk.Label] = None
         self._hunt_target_type_frame: Optional[ttk.Frame] = None
@@ -7099,8 +7580,14 @@ class PokeAchieveGUI:
         self._hunt_available_window_id: Optional[int] = None
         self._hunt_route_label: Optional[ttk.Label] = None
         self._hunt_route_combo: Optional[ttk.Combobox] = None
+        self._hunt_auto_route_check: Optional[ttk.Checkbutton] = None
+        self._hunt_live_location_label: Optional[ttk.Label] = None
         self._hunt_rod_label: Optional[ttk.Label] = None
         self._hunt_rod_combo: Optional[ttk.Combobox] = None
+        self._hunt_auto_route_candidates: Dict[str, Set[str]] = {}
+        self._hunt_auto_route_pending_route: Dict[str, str] = {}
+        self._hunt_auto_route_pending_count: Dict[str, int] = {}
+        self._hunt_live_route_overrides: Dict[str, str] = {}
         self._hunt_target_combo: Optional[ttk.Combobox] = None
         self._hunt_game_combo: Optional[ttk.Combobox] = None
         self._hunt_mode_combo: Optional[ttk.Combobox] = None
@@ -8117,22 +8604,30 @@ class PokeAchieveGUI:
                 values = ["Any Fishing Spot"] + [v for v in values if v != "Any Fishing Spot"]
             fishing_options[game_name] = values or ["Any Fishing Spot"]
         return fishing_options
-
     def _get_hunt_route_values(self, game_name: str, mode: str) -> List[str]:
         if mode == "Soft Reset Hunt":
             entries = self._hunt_encounter_catalog.get(game_name, {}).get("soft_reset", {})
             values = list(entries.keys())
             if "Any Soft Reset" in values:
                 values = ["Any Soft Reset"] + [v for v in values if v != "Any Soft Reset"]
-            return values or ["Any Soft Reset"]
+        elif mode == "Fishing Encounter Hunt":
+            values = list(self._hunt_fishing_options.get(game_name, ["Any Fishing Spot"]))
+        elif mode == "Wild Encounter Hunt":
+            values = list(self._hunt_route_options.get(game_name, ["Any Route / Area"]))
+        else:
+            values = []
 
-        if mode == "Fishing Encounter Hunt":
-            return list(self._hunt_fishing_options.get(game_name, ["Any Fishing Spot"]))
+        state_key = self._hunt_auto_route_state_key(game_name, mode, self.hunt_rod_var.get().strip())
+        override_route = ""
+        if isinstance(self._hunt_live_route_overrides, dict):
+            override_route = str(self._hunt_live_route_overrides.get(state_key) or "").strip()
+        if override_route and override_route not in values:
+            if values and values[0].startswith("Any "):
+                values = [values[0], override_route] + [v for v in values[1:] if v != override_route]
+            else:
+                values = [override_route] + [v for v in values if v != override_route]
 
-        if mode == "Wild Encounter Hunt":
-            return list(self._hunt_route_options.get(game_name, ["Any Route / Area"]))
-
-        return []
+        return values
 
     def _get_hunt_rod_values(self, game_name: str, mode: Optional[str] = None) -> List[str]:
         mode_value = (mode or self.hunt_mode_var.get()).strip()
@@ -8212,13 +8707,33 @@ class PokeAchieveGUI:
 
         if mode_value == "Wild Encounter Hunt":
             entries = game_data.get("random", {})
-            if route_value and route_value in entries:
-                species_ids = list(entries.get(route_value, []))
+            specific_route = bool(route_value and route_value != "Any Route / Area")
+            route_lookup = route_value
+            reader = self.tracker.pokemon_reader if self.tracker and self.tracker.pokemon_reader else None
+            is_surfing: Optional[bool] = None
+            if reader:
+                try:
+                    is_surfing = reader.read_is_surfing(game_name)
+                except Exception:
+                    is_surfing = None
+            if specific_route and route_lookup not in entries:
+                surf_route = f"{route_lookup} (Surf)"
+                if bool(is_surfing) and surf_route in entries:
+                    route_lookup = surf_route
+                elif route_lookup.endswith(" (Surf)") and route_lookup[:-7] in entries:
+                    route_lookup = route_lookup[:-7]
+
+            if specific_route and route_lookup in entries:
+                species_ids = list(entries.get(route_lookup, []))
+            elif specific_route:
+                species_ids = []
             elif "Any Route / Area" in entries:
                 species_ids = list(entries.get("Any Route / Area", []))
             else:
                 species_ids = [pid for values in entries.values() for pid in values]
             normalized = self._normalize_hunt_species_ids_for_game(game_name, species_ids)
+            if specific_route:
+                return normalized
             return normalized or self._get_hunt_all_species_ids(game_name)
 
         if mode_value == "Fishing Encounter Hunt":
@@ -8226,22 +8741,31 @@ class PokeAchieveGUI:
             rod_entries = game_data.get("fishing_rods", {}) if isinstance(game_data.get("fishing_rods"), dict) else {}
 
             species_ids: List[int] = []
-            if route_value and isinstance(rod_entries.get(route_value), dict):
-                route_rods = rod_entries.get(route_value, {})
+            specific_spot = bool(route_value and route_value != "Any Fishing Spot")
+            route_lookup = route_value
+            if specific_spot and route_lookup.endswith(" (Surf)") and route_lookup[:-7] in entries:
+                route_lookup = route_lookup[:-7]
+
+            if specific_spot and isinstance(rod_entries.get(route_lookup), dict):
+                route_rods = rod_entries.get(route_lookup, {})
                 species_ids = list(route_rods.get(rod_value) or route_rods.get(self._hunt_rod_options[0]) or [])
+            elif specific_spot and route_lookup in entries:
+                species_ids = list(entries.get(route_lookup, []))
+            elif specific_spot:
+                species_ids = []
             elif isinstance(rod_entries.get("Any Fishing Spot"), dict):
                 any_rods = rod_entries.get("Any Fishing Spot", {})
                 species_ids = list(any_rods.get(rod_value) or any_rods.get(self._hunt_rod_options[0]) or [])
 
-            if not species_ids:
-                if route_value and route_value in entries:
-                    species_ids = list(entries.get(route_value, []))
-                elif "Any Fishing Spot" in entries:
+            if not species_ids and not specific_spot:
+                if "Any Fishing Spot" in entries:
                     species_ids = list(entries.get("Any Fishing Spot", []))
                 else:
                     species_ids = [pid for values in entries.values() for pid in values]
 
             normalized = self._normalize_hunt_species_ids_for_game(game_name, species_ids)
+            if specific_spot:
+                return normalized
             return normalized or self._get_hunt_all_species_ids(game_name)
 
         # Hatching Egg Hunt fallback pool.
@@ -8321,6 +8845,23 @@ class PokeAchieveGUI:
         )
         self._hunt_rod_combo.grid(row=0, column=7, sticky="ew", padx=4, pady=4)
         self._hunt_rod_combo.bind("<<ComboboxSelected>>", self._on_hunt_rod_selected)
+
+        self._hunt_auto_route_check = ttk.Checkbutton(
+            controls,
+            text="Auto-detect location",
+            variable=self.hunt_auto_route_var,
+            command=self._on_hunt_auto_route_toggled,
+        )
+        self._hunt_auto_route_check.grid(row=2, column=0, columnspan=3, sticky="w", padx=4, pady=4)
+
+        self._hunt_live_location_label = ttk.Label(
+            controls,
+            text="Detected Location: Unknown",
+            style="Subtle.TLabel",
+            anchor="w",
+            justify=tk.LEFT,
+        )
+        self._hunt_live_location_label.grid(row=2, column=4, columnspan=4, sticky="w", padx=4, pady=4)
 
         ttk.Label(controls, text="Target:").grid(row=1, column=0, sticky="w", padx=4, pady=4)
         self._hunt_target_combo = ttk.Combobox(
@@ -8452,6 +8993,7 @@ class PokeAchieveGUI:
 
     def _on_hunt_mode_selected(self, _event=None):
         keep_active = bool(self._hunt_active)
+        self._reset_hunt_auto_route_candidates()
         self._update_hunt_mode_controls()
         self._load_saved_hunt_for_current_selection(auto_start=keep_active)
         if keep_active and not self._hunt_active:
@@ -8459,6 +9001,7 @@ class PokeAchieveGUI:
 
     def _on_hunt_game_selected(self, _event=None):
         keep_active = bool(self._hunt_active)
+        self._reset_hunt_auto_route_candidates()
         selected_game = self.hunt_game_var.get().strip()
         self._load_last_hunt_for_game(selected_game, auto_start=keep_active)
         if keep_active and not self._hunt_active:
@@ -8466,14 +9009,372 @@ class PokeAchieveGUI:
 
     def _on_hunt_route_selected(self, _event=None):
         keep_active = bool(self._hunt_active)
+        self._reset_hunt_auto_route_candidates(
+            game_name=self.hunt_game_var.get().strip(),
+            mode=self.hunt_mode_var.get().strip(),
+            rod_name=self.hunt_rod_var.get().strip(),
+        )
         self._refresh_hunt_targets()
         self._load_saved_hunt_for_current_selection(auto_start=keep_active)
         if keep_active and not self._hunt_active:
             self._start_hunt(silent=True, emit_log=False, persist=True)
 
     def _on_hunt_rod_selected(self, _event=None):
+        self._reset_hunt_auto_route_candidates(
+            game_name=self.hunt_game_var.get().strip(),
+            mode=self.hunt_mode_var.get().strip(),
+            rod_name=self.hunt_rod_var.get().strip(),
+        )
         self._refresh_hunt_targets()
         self._save_current_hunt_profile(active_override=self._hunt_active, set_last_profile_key=False)
+
+    def _on_hunt_auto_route_toggled(self):
+        self._reset_hunt_auto_route_candidates()
+        self._save_current_hunt_profile(active_override=self._hunt_active, set_last_profile_key=False)
+        log_event(
+            logging.INFO,
+            "hunt_auto_route_toggled",
+            enabled=bool(self.hunt_auto_route_var.get()),
+            game=self.hunt_game_var.get().strip(),
+            mode=self.hunt_mode_var.get().strip(),
+        )
+
+    def _hunt_auto_route_state_key(self, game_name: str, mode: str, rod_name: str = "") -> str:
+        game_key = (game_name or "").strip()
+        mode_key = (mode or "").strip()
+        if mode_key == "Fishing Encounter Hunt":
+            rod_key = (rod_name or self.hunt_rod_var.get() or "").strip().lower()
+        else:
+            rod_key = ""
+        return f"{game_key}|{mode_key}|{rod_key}"
+
+    def _reset_hunt_auto_route_candidates(self, game_name: str = "", mode: str = "", rod_name: str = ""):
+        if not isinstance(self._hunt_auto_route_candidates, dict):
+            self._hunt_auto_route_candidates = {}
+        if not isinstance(self._hunt_auto_route_pending_route, dict):
+            self._hunt_auto_route_pending_route = {}
+        if not isinstance(self._hunt_auto_route_pending_count, dict):
+            self._hunt_auto_route_pending_count = {}
+        if not isinstance(self._hunt_live_route_overrides, dict):
+            self._hunt_live_route_overrides = {}
+        game_key = (game_name or "").strip()
+        mode_key = (mode or "").strip()
+        if not game_key and not mode_key:
+            self._hunt_auto_route_candidates.clear()
+            self._hunt_auto_route_pending_route.clear()
+            self._hunt_auto_route_pending_count.clear()
+            self._hunt_live_route_overrides.clear()
+            self._hunt_route_reconcile_pending = None
+            return
+        if game_key and mode_key:
+            state_key = self._hunt_auto_route_state_key(game_key, mode_key, rod_name)
+            self._hunt_auto_route_candidates.pop(state_key, None)
+            self._hunt_auto_route_pending_route.pop(state_key, None)
+            self._hunt_auto_route_pending_count.pop(state_key, None)
+            self._hunt_live_route_overrides.pop(state_key, None)
+            return
+        prefixes: List[str] = []
+        if game_key:
+            prefixes.append(f"{game_key}|")
+        if mode_key:
+            prefixes.append(f"|{mode_key}|")
+        for state_key in list(self._hunt_auto_route_candidates.keys()):
+            if game_key and not str(state_key).startswith(prefixes[0]):
+                continue
+            if mode_key and prefixes[-1] not in str(state_key):
+                continue
+            self._hunt_auto_route_candidates.pop(state_key, None)
+        for state_key in list(self._hunt_auto_route_pending_route.keys()):
+            if game_key and not str(state_key).startswith(prefixes[0]):
+                continue
+            if mode_key and prefixes[-1] not in str(state_key):
+                continue
+            self._hunt_auto_route_pending_route.pop(state_key, None)
+            self._hunt_auto_route_pending_count.pop(state_key, None)
+        for state_key in list(self._hunt_live_route_overrides.keys()):
+            if game_key and not str(state_key).startswith(prefixes[0]):
+                continue
+            if mode_key and prefixes[-1] not in str(state_key):
+                continue
+            self._hunt_live_route_overrides.pop(state_key, None)
+
+    def _hunt_route_confirmations_required(self, game_name: str, mode: str, source: str, previous_route: str, neutral_route: str) -> int:
+        if not previous_route or previous_route == neutral_route:
+            return 1
+        required = 2
+        try:
+            game_cfg = self.tracker.pokemon_reader.get_game_config(game_name) if self.tracker and self.tracker.pokemon_reader else {}
+            layout_id = str((game_cfg or {}).get("layout_id") or "").strip().lower()
+        except Exception:
+            layout_id = ""
+        source_key = str(source or "").strip().lower()
+        if layout_id == "gen3_emerald" and source_key in {"hi", "group_num_4"}:
+            required = 4
+        return int(required)
+
+
+    def _auto_select_hunt_route_from_live_location(self, game_name: str, mode: str) -> bool:
+        if not bool(self.hunt_auto_route_var.get()):
+            return False
+        if mode not in {"Wild Encounter Hunt", "Fishing Encounter Hunt"}:
+            return False
+        if not self.tracker or not self.tracker.pokemon_reader:
+            return False
+
+        location_name = self.tracker.pokemon_reader.read_current_location(game_name)
+        location_meta = self.tracker.pokemon_reader.get_last_location_read_meta() if self.tracker and self.tracker.pokemon_reader else {}
+        if not isinstance(location_name, str) or not location_name.strip():
+            return False
+        location_name = location_name.strip()
+        if isinstance(self._hunt_live_location_label, ttk.Label):
+            self._hunt_live_location_label.configure(text=f"Detected Location: {location_name}")
+
+
+        is_surfing = self.tracker.pokemon_reader.read_is_surfing(game_name)
+
+        def _resolve_route_for_mode(candidate_mode: str) -> Tuple[List[str], str]:
+            candidate_values = self._get_hunt_route_values(game_name, candidate_mode)
+            candidate_route = ""
+            if location_name in candidate_values:
+                candidate_route = location_name
+            else:
+                surf_name = f"{location_name} (Surf)"
+                if candidate_mode == "Wild Encounter Hunt":
+                    if bool(is_surfing) and surf_name in candidate_values:
+                        candidate_route = surf_name
+                    elif location_name.endswith(" (Surf)") and location_name[:-7] in candidate_values:
+                        candidate_route = location_name[:-7]
+                elif candidate_mode == "Fishing Encounter Hunt":
+                    if surf_name in candidate_values:
+                        candidate_route = surf_name
+                    elif location_name.endswith(" (Surf)") and location_name[:-7] in candidate_values:
+                        candidate_route = location_name[:-7]
+            if not candidate_route:
+                candidate_route = location_name
+            return candidate_values, candidate_route
+
+        route_values, selected_route = _resolve_route_for_mode(mode)
+        previous_mode = mode
+        previous_rod = self.hunt_rod_var.get().strip()
+
+        # Prefer wild encounters whenever available at the current location.
+        wild_values, wild_route = _resolve_route_for_mode("Wild Encounter Hunt")
+        wild_species = self._get_hunt_species_ids_for_selection(
+            game_name,
+            mode="Wild Encounter Hunt",
+            route_name=wild_route,
+            rod_name=previous_rod,
+        ) if wild_route else []
+
+        fishing_values, fishing_route = _resolve_route_for_mode("Fishing Encounter Hunt")
+        fishing_species = self._get_hunt_species_ids_for_selection(
+            game_name,
+            mode="Fishing Encounter Hunt",
+            route_name=fishing_route,
+            rod_name=self._hunt_rod_options[0],
+        ) if fishing_route else []
+
+        if wild_species:
+            mode = "Wild Encounter Hunt"
+            route_values = wild_values
+            selected_route = wild_route
+        elif fishing_species:
+            mode = "Fishing Encounter Hunt"
+            route_values = fishing_values
+            selected_route = fishing_route
+
+        if mode != previous_mode:
+            self._reset_hunt_auto_route_candidates(
+                game_name=game_name,
+                mode=previous_mode,
+                rod_name=previous_rod,
+            )
+            if mode == "Fishing Encounter Hunt" and self.hunt_rod_var.get().strip() != self._hunt_rod_options[0]:
+                self.hunt_rod_var.set(self._hunt_rod_options[0])
+            if self.hunt_mode_var.get().strip() != mode:
+                self.hunt_mode_var.set(mode)
+                self._update_hunt_mode_controls()
+            log_event(
+                logging.INFO,
+                "hunt_route_auto_mode_switched",
+                game=game_name,
+                previous_mode=previous_mode,
+                mode=mode,
+                location=location_name,
+                route=selected_route,
+                source=str(location_meta.get("source") or ""),
+                mapsec_id=location_meta.get("mapsec_id"),
+                raw_u16=location_meta.get("raw_u16"),
+                raw_lo=location_meta.get("raw_lo"),
+                raw_hi=location_meta.get("raw_hi"),
+                raw_group0=location_meta.get("raw_group0"),
+                raw_num0=location_meta.get("raw_num0"),
+            )
+
+        state_key = self._hunt_auto_route_state_key(game_name, mode, self.hunt_rod_var.get().strip())
+        if isinstance(self._hunt_live_route_overrides, dict):
+            self._hunt_live_route_overrides[state_key] = selected_route
+        previous_route = self.hunt_route_var.get().strip()
+        if not isinstance(self._hunt_auto_route_pending_route, dict):
+            self._hunt_auto_route_pending_route = {}
+        if not isinstance(self._hunt_auto_route_pending_count, dict):
+            self._hunt_auto_route_pending_count = {}
+
+        if previous_route == selected_route:
+            self._hunt_auto_route_pending_route.pop(state_key, None)
+            self._hunt_auto_route_pending_count.pop(state_key, None)
+            return True
+
+        neutral_route = "Any Fishing Spot" if mode == "Fishing Encounter Hunt" else "Any Route / Area"
+        if neutral_route not in route_values and route_values:
+            neutral_route = str(route_values[0])
+
+        has_huntables = True
+        if selected_route and selected_route != neutral_route:
+            candidate_species = self._get_hunt_species_ids_for_selection(
+                game_name,
+                mode=mode,
+                route_name=selected_route,
+                rod_name=self.hunt_rod_var.get().strip(),
+            )
+            has_huntables = bool(candidate_species)
+            if not has_huntables:
+                log_event(
+                    logging.INFO,
+                    "hunt_route_auto_select_no_huntables_location",
+                    game=game_name,
+                    mode=mode,
+                    previous_route=previous_route,
+                    candidate_route=selected_route,
+                    source=str(location_meta.get("source") or ""),
+                    mapsec_id=location_meta.get("mapsec_id"),
+                    raw_u16=location_meta.get("raw_u16"),
+                    raw_lo=location_meta.get("raw_lo"),
+                    raw_hi=location_meta.get("raw_hi"),
+                    raw_group0=location_meta.get("raw_group0"),
+                    raw_num0=location_meta.get("raw_num0"),
+                )
+
+        source = str(location_meta.get("source") or "")
+        required_confirmations = self._hunt_route_confirmations_required(game_name, mode, source, previous_route, neutral_route)
+        if not has_huntables and previous_route and previous_route != neutral_route:
+            required_confirmations = max(int(required_confirmations), 4)
+
+        pending_route = str(self._hunt_auto_route_pending_route.get(state_key) or "").strip()
+        pending_count = int(self._hunt_auto_route_pending_count.get(state_key, 0) or 0)
+        if selected_route == pending_route:
+            pending_count += 1
+        else:
+            pending_route = selected_route
+            pending_count = 1
+        self._hunt_auto_route_pending_route[state_key] = pending_route
+        self._hunt_auto_route_pending_count[state_key] = int(pending_count)
+
+        if pending_count < int(required_confirmations):
+            log_event(
+                logging.INFO,
+                "hunt_route_auto_select_pending_confirm",
+                game=game_name,
+                mode=mode,
+                previous_route=previous_route,
+                candidate_route=selected_route,
+                confirmations=int(pending_count),
+                required_confirmations=int(required_confirmations),
+                source=source,
+                mapsec_id=location_meta.get("mapsec_id"),
+                raw_u16=location_meta.get("raw_u16"),
+                raw_lo=location_meta.get("raw_lo"),
+                raw_hi=location_meta.get("raw_hi"),
+                raw_group0=location_meta.get("raw_group0"),
+                raw_num0=location_meta.get("raw_num0"),
+            )
+            return False
+
+        self._hunt_auto_route_pending_route.pop(state_key, None)
+        self._hunt_auto_route_pending_count.pop(state_key, None)
+
+        self.hunt_route_var.set(selected_route)
+        self._refresh_hunt_targets()
+        self._save_current_hunt_profile(active_override=self._hunt_active, set_last_profile_key=False)
+        log_event(
+            logging.INFO,
+            "hunt_route_auto_selected_location",
+            game=game_name,
+            mode=mode,
+            location=location_name,
+            route=selected_route,
+            previous_route=previous_route,
+            source=str(location_meta.get("source") or ""),
+            mapsec_id=location_meta.get("mapsec_id"),
+            raw_u16=location_meta.get("raw_u16"),
+            raw_lo=location_meta.get("raw_lo"),
+            raw_hi=location_meta.get("raw_hi"),
+            raw_group0=location_meta.get("raw_group0"),
+            raw_num0=location_meta.get("raw_num0"),
+        )
+        return True
+    def _get_hunt_route_candidates_for_species(self, game_name: str, mode: str, species_id: int) -> List[str]:
+        try:
+            pid = int(species_id)
+        except (TypeError, ValueError):
+            return []
+        if pid <= 0:
+            return []
+
+        game_data = self._hunt_encounter_catalog.get(game_name, {}) if isinstance(self._hunt_encounter_catalog, dict) else {}
+        route_values = set(self._get_hunt_route_values(game_name, mode))
+        candidates: List[str] = []
+
+        if mode == "Wild Encounter Hunt":
+            entries = game_data.get("random") if isinstance(game_data.get("random"), dict) else {}
+            for route_name, species_ids in entries.items():
+                if route_name not in route_values:
+                    continue
+                if isinstance(species_ids, list) and pid in species_ids:
+                    candidates.append(route_name)
+        elif mode == "Fishing Encounter Hunt":
+            selected_rod = self.hunt_rod_var.get().strip() or self._hunt_rod_options[0]
+            fishing_rods = game_data.get("fishing_rods") if isinstance(game_data.get("fishing_rods"), dict) else {}
+            for route_name, rod_map in fishing_rods.items():
+                if route_name not in route_values or not isinstance(rod_map, dict):
+                    continue
+                if selected_rod == self._hunt_rod_options[0]:
+                    matched = any(isinstance(ids, list) and pid in ids for ids in rod_map.values())
+                else:
+                    ids = rod_map.get(selected_rod)
+                    matched = isinstance(ids, list) and pid in ids
+                if matched:
+                    candidates.append(route_name)
+
+        candidates = [name for name in candidates if isinstance(name, str) and name.strip()]
+        return sorted(list(dict.fromkeys(candidates)), key=self._hunt_location_sort_key)
+
+    def _auto_detect_and_apply_hunt_route(self, encounter: Dict[str, object], game_name: str, mode: str):
+        if not bool(self.hunt_auto_route_var.get()):
+            return
+        if mode not in {"Wild Encounter Hunt", "Fishing Encounter Hunt"}:
+            return
+
+        location_resolved = self._auto_select_hunt_route_from_live_location(game_name, mode)
+        if not location_resolved:
+            return
+
+        current_mode = self.hunt_mode_var.get().strip() or mode
+        pending = self._hunt_route_reconcile_pending if isinstance(self._hunt_route_reconcile_pending, dict) else None
+        if isinstance(pending, dict) and str(pending.get("game") or "").strip() == (game_name or "").strip() and str(pending.get("mode") or "").strip() == (current_mode or "").strip():
+            expected_route = str(pending.get("expected_route") or "").strip()
+            detected_route = self.hunt_route_var.get().strip()
+            self._hunt_route_reconcile_pending = None
+            log_event(
+                logging.INFO,
+                "hunt_route_reconciled_on_load",
+                game=game_name,
+                mode=current_mode,
+                expected_route=expected_route,
+                detected_route=detected_route,
+                route_changed=bool(expected_route and expected_route != detected_route),
+            )
+            return
 
     def _on_hunt_target_selected(self, _event=None):
         keep_active = bool(self._hunt_active)
@@ -8501,6 +9402,7 @@ class PokeAchieveGUI:
             "phase_count": int(max(0, self._hunt_phase_count)),
             "species_counts": {str(int(pid)): int(max(0, count)) for pid, count in self._hunt_species_counts.items() if int(count) > 0},
             "active": bool(self._hunt_active),
+            "auto_route": bool(self.hunt_auto_route_var.get()),
             "updated_at": int(time.time()),
         }
         return game_name, profile_key, profile
@@ -8569,6 +9471,14 @@ class PokeAchieveGUI:
         except (TypeError, ValueError):
             phase_value = 0
         profile_active = bool(profile.get("active", False))
+        profile_auto_route = profile.get("auto_route", True)
+        auto_route_enabled = bool(profile_auto_route) if isinstance(profile_auto_route, (bool, int)) else True
+        pending_reconcile = self._hunt_route_reconcile_pending if isinstance(self._hunt_route_reconcile_pending, dict) else None
+        pending_matches_profile = bool(
+            isinstance(pending_reconcile, dict)
+            and str(pending_reconcile.get("game") or "").strip() == game_name
+            and str(pending_reconcile.get("mode") or "").strip() == profile_mode
+        )
         species_counts_raw = profile.get("species_counts")
         parsed_species_counts: Dict[int, int] = {}
         if isinstance(species_counts_raw, dict):
@@ -8587,11 +9497,22 @@ class PokeAchieveGUI:
                 self.hunt_game_var.set(game_name)
 
             self.hunt_mode_var.set(profile_mode)
+            self.hunt_auto_route_var.set(bool(auto_route_enabled))
             self._update_hunt_mode_controls()
 
             route_values = self._get_hunt_route_values(game_name, profile_mode)
-            if route_name and route_name in route_values:
+            current_route = self.hunt_route_var.get().strip()
+            if (
+                bool(auto_route_enabled)
+                and pending_matches_profile
+                and current_route in route_values
+            ):
+                # Keep neutral/current route while live-location reconcile is pending.
+                self.hunt_route_var.set(current_route)
+            elif route_name and route_name in route_values:
                 self.hunt_route_var.set(route_name)
+            elif current_route in route_values:
+                self.hunt_route_var.set(current_route)
             elif route_values:
                 self.hunt_route_var.set(route_values[0])
             else:
@@ -8668,11 +9589,45 @@ class PokeAchieveGUI:
                 break
 
         if isinstance(profile, dict):
+            profile_mode = str(profile.get("mode") or "").strip()
+            profile_route = str(profile.get("route") or "").strip()
+            profile_rod = str(profile.get("rod") or self._hunt_rod_options[0]).strip()
+            profile_auto_route = profile.get("auto_route", True)
+            auto_route_enabled = bool(profile_auto_route) if isinstance(profile_auto_route, (bool, int)) else True
+            if auto_route_enabled and profile_mode in {"Wild Encounter Hunt", "Fishing Encounter Hunt"} and profile_route:
+                self._hunt_route_reconcile_pending = {
+                    "game": game_name,
+                    "mode": profile_mode,
+                    "expected_route": profile_route,
+                    "rod": profile_rod,
+                }
+                # Do not keep stale prior-route selection while waiting for live location signal.
+                if profile_mode == "Fishing Encounter Hunt":
+                    neutral_route = "Any Fishing Spot"
+                else:
+                    neutral_route = "Any Route / Area"
+                route_values = self._get_hunt_route_values(game_name, profile_mode)
+                if neutral_route not in route_values and route_values:
+                    neutral_route = route_values[0]
+                if neutral_route and self.hunt_route_var.get().strip() != neutral_route:
+                    self.hunt_route_var.set(neutral_route)
+                    self._refresh_hunt_targets()
+
+                log_event(
+                    logging.INFO,
+                    "hunt_route_reconcile_pending_set",
+                    game=game_name,
+                    mode=profile_mode,
+                    expected_route=profile_route,
+                    neutral_route=neutral_route,
+                    rod=profile_rod,
+                    auto_start=bool(auto_start),
+                )
+            else:
+                self._hunt_route_reconcile_pending = None
             self._apply_hunt_profile(game_name, profile, auto_start=auto_start)
-            if isinstance(game_store, dict):
-                game_store["last_profile_key"] = resolved_key or key_candidates[0]
-                self._save_hunt_profiles()
-            return True
+            self._save_current_hunt_profile(active_override=bool(profile.get("active", False)))
+            return
 
         self._hunt_profile_applying = True
         try:
@@ -8687,7 +9642,9 @@ class PokeAchieveGUI:
         self._save_current_hunt_profile(active_override=False, set_last_profile_key=False)
         return False
 
+
     def _load_last_hunt_for_game(self, game_name: str, *, auto_start: bool):
+        self._reset_hunt_auto_route_candidates()
         game_key = (game_name or "").strip()
         if game_key not in self._hunt_game_options:
             self._refresh_hunt_targets()
@@ -8741,6 +9698,42 @@ class PokeAchieveGUI:
                 profile = sorted_profiles[0]
 
         if isinstance(profile, dict):
+            profile_mode = str(profile.get("mode") or "").strip()
+            profile_route = str(profile.get("route") or "").strip()
+            profile_rod = str(profile.get("rod") or self._hunt_rod_options[0]).strip()
+            profile_auto_route = profile.get("auto_route", True)
+            auto_route_enabled = bool(profile_auto_route) if isinstance(profile_auto_route, (bool, int)) else True
+            if auto_route_enabled and profile_mode in {"Wild Encounter Hunt", "Fishing Encounter Hunt"} and profile_route:
+                self._hunt_route_reconcile_pending = {
+                    "game": game_key,
+                    "mode": profile_mode,
+                    "expected_route": profile_route,
+                    "rod": profile_rod,
+                }
+                # Do not keep stale prior-route selection while waiting for live location signal.
+                if profile_mode == "Fishing Encounter Hunt":
+                    neutral_route = "Any Fishing Spot"
+                else:
+                    neutral_route = "Any Route / Area"
+                route_values = self._get_hunt_route_values(game_key, profile_mode)
+                if neutral_route not in route_values and route_values:
+                    neutral_route = route_values[0]
+                if neutral_route and self.hunt_route_var.get().strip() != neutral_route:
+                    self.hunt_route_var.set(neutral_route)
+                    self._refresh_hunt_targets()
+
+                log_event(
+                    logging.INFO,
+                    "hunt_route_reconcile_pending_set",
+                    game=game_key,
+                    mode=profile_mode,
+                    expected_route=profile_route,
+                    neutral_route=neutral_route,
+                    rod=profile_rod,
+                    auto_start=bool(auto_start),
+                )
+            else:
+                self._hunt_route_reconcile_pending = None
             self._apply_hunt_profile(game_key, profile, auto_start=auto_start)
             self._save_current_hunt_profile(active_override=bool(profile.get("active", False)))
             return
@@ -8780,12 +9773,22 @@ class PokeAchieveGUI:
 
         species_options = self._get_hunt_species_options(game_name)
         display_values = [f"{pid:03d} {name}" for pid, name in species_options]
+        has_huntable_targets = bool(display_values)
         if self._hunt_target_combo is not None:
             self._hunt_target_combo.configure(values=display_values)
+            self._hunt_target_combo.configure(state="readonly" if has_huntable_targets else "disabled")
 
         current_target = self.hunt_target_var.get().strip()
         if current_target not in display_values:
             self.hunt_target_var.set(display_values[0] if display_values else "")
+
+        if not self._hunt_active and isinstance(self._hunt_start_btn, ttk.Button):
+            self._hunt_start_btn.configure(state="normal" if has_huntable_targets else "disabled")
+        if not self._hunt_active and isinstance(self.hunt_status_label, ttk.Label):
+            if has_huntable_targets:
+                self.hunt_status_label.configure(text="Hunt idle")
+            else:
+                self.hunt_status_label.configure(text="No huntable Pokemon for this location")
 
         self._update_hunt_target_display()
 
@@ -8984,6 +9987,10 @@ class PokeAchieveGUI:
                 self.hunt_rod_var.set(self._hunt_rod_options[0])
                 if self._hunt_rod_combo.winfo_ismapped():
                     self._hunt_rod_combo.grid_remove()
+
+        auto_route_supported = mode in {"Wild Encounter Hunt", "Fishing Encounter Hunt"}
+        if isinstance(self._hunt_auto_route_check, ttk.Checkbutton):
+            self._hunt_auto_route_check.configure(state="normal" if auto_route_supported else "disabled")
 
         if isinstance(self._hunt_mode_hint_label, ttk.Label):
             hints = {
@@ -9632,6 +10639,8 @@ class PokeAchieveGUI:
         if not is_new_encounter:
             return
 
+        self._auto_detect_and_apply_hunt_route(encounter, game_name, mode)
+
         allowed_species = set(
             self._get_hunt_species_ids_for_selection(
                 game_name,
@@ -9774,7 +10783,7 @@ class PokeAchieveGUI:
         try:
             current_game = (self.tracker.game_name or "").strip()
             if current_game and current_game in self._hunt_game_options and self.hunt_game_var.get().strip() != current_game:
-                self._load_last_hunt_for_game(current_game, auto_start=True)
+                self._load_last_hunt_for_game(current_game, auto_start=False)
 
             waiting_now = bool(self.retroarch.is_waiting_for_launch())
             if self._hunt_active:
@@ -9802,6 +10811,8 @@ class PokeAchieveGUI:
 
                 selected_hunt_game = self.hunt_game_var.get().strip()
                 game_for_hunt = current_game if current_game in self._hunt_game_options else selected_hunt_game
+                idle_mode_current = self.hunt_mode_var.get().strip()
+                self._auto_select_hunt_route_from_live_location(game_for_hunt, idle_mode_current)
 
                 if mode == "Hatching Egg Hunt":
                     party = list(self.tracker._last_party) if isinstance(self.tracker._last_party, list) else []
@@ -9844,6 +10855,64 @@ class PokeAchieveGUI:
             else:
                 self._hunt_enemy_present = False
                 self._hunt_last_enemy_seen_at = 0.0
+
+                pending = self._hunt_route_reconcile_pending if isinstance(self._hunt_route_reconcile_pending, dict) else None
+                selected_hunt_game = self.hunt_game_var.get().strip()
+                game_for_hunt = current_game if current_game in self._hunt_game_options else selected_hunt_game
+                idle_mode_current = self.hunt_mode_var.get().strip()
+                self._auto_select_hunt_route_from_live_location(game_for_hunt, idle_mode_current)
+                if (
+                    isinstance(pending, dict)
+                    and bool(self.hunt_auto_route_var.get())
+                    and self.tracker
+                    and self.tracker.pokemon_reader
+                    and not waiting_now
+                    and bool(getattr(self.retroarch, "connected", False))
+                    and str(pending.get("game") or "").strip() == game_for_hunt
+                ):
+                    pending_mode = str(pending.get("mode") or "").strip()
+                    pending_rod = str(pending.get("rod") or self._hunt_rod_options[0]).strip()
+                    if pending_mode in {"Wild Encounter Hunt", "Fishing Encounter Hunt"}:
+                        if self.hunt_mode_var.get().strip() != pending_mode:
+                            self.hunt_mode_var.set(pending_mode)
+                            self._update_hunt_mode_controls()
+                        if pending_mode == "Fishing Encounter Hunt":
+                            if not pending_rod:
+                                pending_rod = self._hunt_rod_options[0]
+                            if self.hunt_rod_var.get().strip() != pending_rod:
+                                self.hunt_rod_var.set(pending_rod)
+                                self._refresh_hunt_targets()
+                        location_resolved = self._auto_select_hunt_route_from_live_location(game_for_hunt, pending_mode)
+                        if location_resolved:
+                            expected_route = str(pending.get("expected_route") or "").strip()
+                            detected_route = self.hunt_route_var.get().strip()
+                            self._hunt_route_reconcile_pending = None
+                            log_event(
+                                logging.INFO,
+                                "hunt_route_reconciled_on_load",
+                                game=game_for_hunt,
+                                mode=pending_mode,
+                                expected_route=expected_route,
+                                detected_route=detected_route,
+                                route_changed=bool(expected_route and expected_route != detected_route),
+                            )
+                        else:
+                            loc_meta = self.tracker.pokemon_reader.get_last_location_read_meta() if self.tracker and self.tracker.pokemon_reader else {}
+                            loc_reason = str(loc_meta.get("reason") or "")
+                            reason = loc_reason or "location_unavailable"
+                            now_probe_log = time.monotonic()
+                            if (now_probe_log - float(self._hunt_route_reconcile_last_probe_log_at or 0.0)) >= 10.0:
+                                self._hunt_route_reconcile_last_probe_log_at = now_probe_log
+                                log_event(
+                                    logging.INFO,
+                                    "hunt_route_reconcile_probe_waiting",
+                                    game=game_for_hunt,
+                                    mode=pending_mode,
+                                    expected_route=str(pending.get("expected_route") or "").strip(),
+                                    reason=reason,
+                                    location_reason=loc_reason,
+                                )
+
                 if isinstance(self.hunt_status_label, ttk.Label):
                     self.hunt_status_label.configure(text="Hunt idle")
 
@@ -10042,7 +11111,7 @@ class PokeAchieveGUI:
                 
                 self.game_label.configure(text=f"Game: {display_name}")
                 if display_name in self._hunt_game_options:
-                    self._load_last_hunt_for_game(display_name, auto_start=True)
+                    self._load_last_hunt_for_game(display_name, auto_start=False)
                 self._log(f"Loaded {len(self.tracker.achievements)} achievements for {display_name}", "success")
                 
                 if not self.is_running:
@@ -11833,15 +12902,6 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
-
-
-
 
 
 
