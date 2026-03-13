@@ -1,0 +1,32 @@
+{
+  "schema": "pokeachieve.gen6.shiny-map.v1",
+  "source": "https://projectpokemon.org/home/docs/gen-6/xy-save-structure-r82/",
+  "games": [
+    "Pokemon X",
+    "Pokemon Y"
+  ],
+  "notes": "Shiny state for live party should be derived from decrypted PK6 PID and trainer IDs. Hall of Fame records expose a shiny bit in record metadata.",
+  "party_pk6_layout": {
+    "party_block_offset": "0x19600",
+    "party_count_offset": "0x19600",
+    "party_data_offset": "0x19608",
+    "slot_size": "0x1E8",
+    "max_party_size": 6,
+    "pid_offset_in_pk6": "0x18",
+    "tid_offset_in_pk6": "0x0C",
+    "sid_offset_in_pk6": "0x0E",
+    "shiny_formula": "((TID ^ SID ^ (PID & 0xFFFF) ^ (PID >> 16)) < 16)"
+  },
+  "hall_of_fame_layout": {
+    "block_offset": "0x1FE00",
+    "record_size": "0xEC",
+    "member_meta_offset": "0x14",
+    "member_meta_bits": {
+      "nicknamed": 0,
+      "shiny": 1,
+      "level_bits": "2-8",
+      "gender_bits": "9-10",
+      "form_bits": "11-15"
+    }
+  }
+}

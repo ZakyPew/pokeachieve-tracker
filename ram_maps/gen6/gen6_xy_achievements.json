@@ -1,0 +1,67 @@
+{
+  "schema": "pokeachieve.gen6.achievement-map.v1",
+  "source": "https://projectpokemon.org/home/docs/gen-6/xy-save-structure-r82/",
+  "games": [
+    "Pokemon X",
+    "Pokemon Y"
+  ],
+  "notes": "Offsets are relative to the active save data region. Save 2 mirrors Save 1 at +0x7F000.",
+  "base_offsets": {
+    "event_flags_start": "0x1A0FC",
+    "event_flags_length": "0x180",
+    "pokedex_block_start": "0x1A400",
+    "pokedex_counter": "0x1A404",
+    "hall_of_fame_block_start": "0x1FE00",
+    "hall_of_fame_block_length": "0x0600"
+  },
+  "achievements": [
+    {
+      "id": "xy_pokedex_10",
+      "name": "Kalos Rookie",
+      "kind": "derived",
+      "metric": "pokedex_owned_count",
+      "condition": ">= 10"
+    },
+    {
+      "id": "xy_pokedex_100",
+      "name": "Kalos Collector",
+      "kind": "derived",
+      "metric": "pokedex_owned_count",
+      "condition": ">= 100"
+    },
+    {
+      "id": "xy_pokedex_250",
+      "name": "Regional Specialist",
+      "kind": "derived",
+      "metric": "pokedex_owned_count",
+      "condition": ">= 250"
+    },
+    {
+      "id": "xy_national_dex_complete",
+      "name": "National Dex Master",
+      "kind": "derived",
+      "metric": "pokedex_owned_count",
+      "condition": ">= 721"
+    },
+    {
+      "id": "xy_first_hof_entry",
+      "name": "Kalos Champion",
+      "kind": "derived",
+      "metric": "hall_of_fame_entry_count",
+      "condition": ">= 1"
+    }
+  ],
+  "derived_metrics": {
+    "pokedex_owned_count": {
+      "op": "bitcount",
+      "offset": "0x1A408",
+      "length": "0x60",
+      "max_species": 721
+    },
+    "hall_of_fame_entry_count": {
+      "op": "hof_count_byte",
+      "offset": "0x1FE00",
+      "description": "First Hall of Fame record count byte in the Hall of Fame partition"
+    }
+  }
+}
