@@ -11669,8 +11669,21 @@ class PokeAchieveGUI:
 
     def _run_status_probe(self) -> Dict:
         """Run network status checks outside the Tk main thread."""
-        ra_connected = self.retroarch.connected
         video_mode_active = bool(self._video_encounter_mode_enabled())
+
+        if self.emulator_type == "azahar" and self.azahar:
+            emu_connected = self.azahar.is_connected()
+            if not emu_connected and not video_mode_active:
+                emu_connected = self.azahar.connect()
+            game_name = self.azahar.get_current_game() if emu_connected else None
+            return {
+                "ra_connected": emu_connected,
+                "game_name": game_name,
+                "api_configured": bool(self.api),
+                "video_mode_active": video_mode_active,
+            }
+
+        ra_connected = self.retroarch.connected
         if not ra_connected and not video_mode_active:
             ra_connected = self.retroarch.connect()
 
@@ -11698,14 +11711,15 @@ class PokeAchieveGUI:
     def _apply_status_probe(self, status: Dict):
         """Apply async status results on the Tk main thread."""
         try:
+            emu_label = "Azahar" if self.emulator_type == "azahar" else "RetroArch"
             if status.get("ra_connected"):
-                self.ra_status_label.configure(text="RetroArch: Connected")
+                self.ra_status_label.configure(text=f"{emu_label}: Connected")
                 self._detect_game(status.get("game_name"))
             else:
                 if status.get("video_mode_active"):
-                    self.ra_status_label.configure(text="RetroArch: Disconnected (OBS Video Mode)")
+                    self.ra_status_label.configure(text=f"{emu_label}: Disconnected (OBS Video Mode)")
                 else:
-                    self.ra_status_label.configure(text="RetroArch: Disconnected")
+                    self.ra_status_label.configure(text=f"{emu_label}: Disconnected")
 
             if status.get("api_configured"):
                 if self._api_status_state == "Not configured":
@@ -11719,7 +11733,8 @@ class PokeAchieveGUI:
     
     def _detect_game(self, detected_game_name: Optional[str] = None):
         """Detect which game is loaded"""
-        game_name = detected_game_name or self.retroarch.get_current_game()
+        client = self._get_memory_client()
+        game_name = detected_game_name or client.get_current_game()
         
         if game_name:
             # If game changed, load new achievements
@@ -11897,15 +11912,18 @@ class PokeAchieveGUI:
     def _start_tracking(self):
         """Start achievement and collection tracking."""
         video_mode_active = bool(self._video_encounter_mode_enabled())
-        retroarch_ready = bool(self.retroarch.connected)
+        active_client = self._get_memory_client()
+        retroarch_ready = bool(active_client.is_connected() if hasattr(active_client, "is_connected") else getattr(active_client, "connected", False))
         has_memory_game = bool(self.tracker.achievements or self.tracker.game_name)
 
+        emu_label = "Azahar" if self.emulator_type == "azahar" else "RetroArch"
+
         if not retroarch_ready and not video_mode_active:
-            messagebox.showwarning("Not Connected", "Not connected to RetroArch.")
+            messagebox.showwarning("Not Connected", f"Not connected to {emu_label}.")
             return
 
         if not has_memory_game and not video_mode_active:
-            messagebox.showwarning("No Game", "No game loaded. Load a Pokemon ROM in RetroArch first.")
+            messagebox.showwarning("No Game", f"No game loaded. Load a Pokemon ROM in {emu_label} first.")
             return
 
         self.is_running = True
