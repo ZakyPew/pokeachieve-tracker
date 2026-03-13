@@ -1,0 +1,60 @@
+{
+  "game": {
+    "name": "Pokemon Y",
+    "platform": "3ds",
+    "generation": 6,
+    "rom_hash": "0004000000055E00"
+  },
+  "achievements": [
+    {
+      "id": "y_pokedex_10",
+      "name": "Kalos Rookie",
+      "description": "Register 10 Pokemon in the Pokedex",
+      "category": "pokedex",
+      "icon": "pokedex_10.png",
+      "target_value": 10,
+      "rarity": "common",
+      "points": 20
+    },
+    {
+      "id": "y_pokedex_50",
+      "name": "Rising Collector",
+      "description": "Register 50 Pokemon in the Pokedex",
+      "category": "pokedex",
+      "icon": "pokedex_50.png",
+      "target_value": 50,
+      "rarity": "common",
+      "points": 40
+    },
+    {
+      "id": "y_pokedex_100",
+      "name": "Kalos Researcher",
+      "description": "Register 100 Pokemon in the Pokedex",
+      "category": "pokedex",
+      "icon": "pokedex_100.png",
+      "target_value": 100,
+      "rarity": "uncommon",
+      "points": 80
+    },
+    {
+      "id": "y_pokedex_300",
+      "name": "Regional Archivist",
+      "description": "Register 300 Pokemon in the Pokedex",
+      "category": "pokedex",
+      "icon": "pokedex_300.png",
+      "target_value": 300,
+      "rarity": "rare",
+      "points": 180
+    },
+    {
+      "id": "y_pokedex_complete",
+      "name": "National Dex Master",
+      "description": "Register 721 Pokemon in the National Pokedex",
+      "category": "pokedex",
+      "icon": "pokedex_complete.png",
+      "target_value": 721,
+      "rarity": "epic",
+      "points": 500
+    }
+  ]
+}
