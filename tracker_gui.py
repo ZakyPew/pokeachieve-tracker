@@ -4090,44 +4090,45 @@ class PokemonMemoryReader:
         caught = _safe_read_pokedex_flags(caught_addr)
 
         if gen >= 6 and len(caught_candidates) > 1:
-            candidate_reads: List[Tuple[str, List[int]]] = [(str(caught_addr), caught)]
-            for candidate_addr in caught_candidates:
-                if str(candidate_addr) == str(caught_addr):
-                    continue
-                candidate_values = _safe_read_pokedex_flags(str(candidate_addr))
-                candidate_reads.append((str(candidate_addr), candidate_values))
+            candidate_rows: List[Tuple[str, List[int], List[int]]] = []
+            for idx, candidate_addr in enumerate(caught_candidates):
+                current_caught = _safe_read_pokedex_flags(str(candidate_addr)) if str(candidate_addr) != str(caught_addr) else list(caught)
+                candidate_seen: List[int] = []
+                if idx < len(seen_candidates):
+                    candidate_seen = _safe_read_pokedex_flags(str(seen_candidates[idx]))
+                candidate_rows.append((str(candidate_addr), current_caught, candidate_seen))
 
-            def _candidate_key(item: Tuple[str, List[int]]) -> Tuple[int, int, int]:
-                addr, values = item
-                count = len(values)
-                if count_hint is not None:
-                    distance = abs(int(count) - int(count_hint))
-                elif caught:
-                    distance = abs(int(count) - len(caught))
-                else:
-                    distance = 0
-                is_primary = 0 if str(addr) == str(caught_addr) else 1
-                return (distance, -count, is_primary)
+            def _candidate_key(item: Tuple[str, List[int], List[int]]) -> Tuple[int, int, int, int]:
+                addr, caught_values, seen_values = item
+                caught_count = len(caught_values)
+                seen_count = len(seen_values)
+                seen_gap = max(0, caught_count - seen_count) if seen_values else 0
+                has_seen_data = 1 if seen_values else 0
+                # For Gen 6, achievement count hints are often stale/noisy. Prefer fuller coherent blocks.
+                # We rank by: minimal caught>seen gap, then presence of seen data, then largest caught count,
+                # and finally prefer current primary addr on exact ties.
+                is_non_primary = 1 if str(addr) != str(caught_addr) else 0
+                return (seen_gap, -has_seen_data, -caught_count, is_non_primary)
 
-            best_addr, best_values = min(candidate_reads, key=_candidate_key)
+            best_addr, best_caught, best_seen = min(candidate_rows, key=_candidate_key)
             if best_addr != str(caught_addr):
                 caught_addr = str(best_addr)
-                caught = list(best_values)
-                if seen_candidates:
-                    try:
-                        idx = caught_candidates.index(best_addr)
-                    except ValueError:
-                        idx = -1
-                    if idx >= 0 and idx < len(seen_candidates):
-                        seen_addr = str(seen_candidates[idx])
+                caught = list(best_caught)
+                if best_seen:
+                    seen_addr = None
+                    for idx, candidate_addr in enumerate(caught_candidates):
+                        if str(candidate_addr) == best_addr and idx < len(seen_candidates):
+                            seen_addr = str(seen_candidates[idx])
+                            break
                 log_event(
                     logging.INFO,
                     "pokedex_candidate_selected",
                     game=game_name,
                     selected_addr=best_addr,
                     selected_count=len(caught),
+                    selected_seen_count=len(best_seen),
                     previous_addr=static_caught_addr,
-                    previous_count=len(candidate_reads[0][1]),
+                    previous_count=len(candidate_rows[0][1]) if candidate_rows else 0,
                     count_hint=count_hint,
                 )
 
