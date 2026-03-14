@@ -4,6 +4,7 @@ Connects to Azahar's built-in RPC server for 3DS Pokemon game support (Gen 6/7)
 """
 import socket
 import struct
+import time
 from typing import Optional, Tuple, List
 from enum import IntEnum
 
@@ -30,6 +31,16 @@ class AzaharRPCClient:
     
     # Gen 6/7 Memory Addresses (from ProjectPokemon)
     MEM_FCRAM = 0x08000000  # Main RAM base
+    POKEMON_TITLE_IDS = {
+        "pokemon_x": 0x0004000000055D00,
+        "pokemon_y": 0x0004000000055E00,
+        "pokemon_omega_ruby": 0x000400000011C400,
+        "pokemon_alpha_sapphire": 0x000400000011C500,
+        "pokemon_sun": 0x0004000000164800,
+        "pokemon_moon": 0x0004000000175E00,
+        "pokemon_ultra_sun": 0x00040000001B5000,
+        "pokemon_ultra_moon": 0x00040000001B5100,
+    }
     
     def __init__(self, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
         self.host = host
@@ -38,6 +49,60 @@ class AzaharRPCClient:
         self.connected = False
         self.packet_id = 0
         self.current_process: Optional[int] = None
+        self.preferred_title_id: Optional[int] = None
+        self._process_refresh_interval_s = 2.0
+        self._last_process_refresh_ts = 0.0
+
+    def set_game_hint(self, game_name: Optional[str]) -> None:
+        """Pin process selection to a specific Pokemon title when possible."""
+        normalized = str(game_name or "").strip().lower().replace(" ", "_")
+        self.preferred_title_id = self.POKEMON_TITLE_IDS.get(normalized)
+
+    def _pick_pokemon_process_id(self, processes: List[dict], preferred_game: Optional[str] = None) -> Optional[int]:
+        preferred_title_id = self.preferred_title_id
+        if preferred_game:
+            normalized = str(preferred_game).strip().lower().replace(" ", "_")
+            preferred_title_id = self.POKEMON_TITLE_IDS.get(normalized, preferred_title_id)
+
+        if preferred_title_id is not None:
+            for proc in processes:
+                title_id = int(proc.get("title_id", 0) or 0)
+                if title_id == preferred_title_id:
+                    return int(proc.get("pid", 0) or 0)
+
+        known_titles = set(self.POKEMON_TITLE_IDS.values())
+        for proc in processes:
+            title_id = int(proc.get("title_id", 0) or 0)
+            if title_id in known_titles:
+                return int(proc.get("pid", 0) or 0)
+
+        for proc in processes:
+            name = str(proc.get('name', '')).lower()
+            if any(x in name for x in ['kujira', 'pokemon', 'poke', 'omega', 'alpha', 'sun', 'moon']):
+                return int(proc.get("pid", 0) or 0)
+
+        if len(processes) == 1:
+            return int(processes[0].get('pid', 0) or 0)
+
+        return None
+
+    def _ensure_process_selected(self, preferred_game: Optional[str] = None, force_refresh: bool = False) -> bool:
+        if not self.connected:
+            return False
+
+        now = time.monotonic()
+        should_refresh = force_refresh or self.current_process is None or (now - self._last_process_refresh_ts) >= self._process_refresh_interval_s
+        if not should_refresh:
+            return True
+
+        process_id = self.find_pokemon_process(preferred_game=preferred_game)
+        self._last_process_refresh_ts = now
+        if process_id is None:
+            self.current_process = None
+            return False
+        if process_id == self.current_process:
+            return True
+        return self.select_process(process_id)
         
     def _next_packet_id(self) -> int:
         """Get next packet ID"""
@@ -165,10 +230,8 @@ class AzaharRPCClient:
         """
         if not self.connected:
             return None
-        if self.current_process is None:
-            process_id = self.find_pokemon_process()
-            if process_id is None or not self.select_process(process_id):
-                return None
+        if not self._ensure_process_selected():
+            return None
         
         # Convert hex string to int if needed
         if isinstance(address, str):
@@ -287,20 +350,11 @@ class AzaharRPCClient:
         except Exception as e:
             return False
     
-    def find_pokemon_process(self) -> Optional[int]:
+    def find_pokemon_process(self, preferred_game: Optional[str] = None) -> Optional[int]:
         """Find the Pokemon game process"""
         processes = self.get_process_list()
         if not processes:
             return None
-        
-        for proc in processes:
-            name = proc.get('name', '').lower()
-            # Common Pokemon game process names in Azahar
-            if any(x in name for x in ['kujira', 'pokemon', 'poke', 'x', 'y', 'omega', 'alpha', 'sun', 'moon']):
-                return proc['pid']
-        
-        # Return first process if only one (likely the game)
-        if len(processes) == 1:
-            return processes[0]['pid']
-        
-        return None
+
+        process_id = self._pick_pokemon_process_id(processes, preferred_game=preferred_game)
+        return process_id if process_id and process_id > 0 else None
