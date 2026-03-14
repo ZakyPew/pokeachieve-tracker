@@ -13,6 +13,9 @@ import queue
 import re
 import os
 import sys
+import base64
+import io
+import difflib
 from collections import Counter, deque
 import urllib.request
 import urllib.error
@@ -24,13 +27,154 @@ from datetime import datetime
 from hashlib import sha256
 from dataclasses import dataclass, asdict
 
+PIL_IMPORT_ERROR = ""
+Image = None
+ImageTk = None
+ImageOps = None
+ImageDraw = None
 try:
-    from PIL import Image, ImageTk
-    PIL_AVAILABLE = True
-except Exception:
-    Image = None
-    ImageTk = None
-    PIL_AVAILABLE = False
+    from PIL import Image as _PILImage
+    Image = _PILImage
+except Exception as exc:
+    PIL_IMPORT_ERROR = str(exc)
+
+if Image is not None:
+    try:
+        from PIL import ImageOps as _PILImageOps
+        ImageOps = _PILImageOps
+    except Exception as exc:
+        if not PIL_IMPORT_ERROR:
+            PIL_IMPORT_ERROR = str(exc)
+    try:
+        from PIL import ImageDraw as _PILImageDraw
+        ImageDraw = _PILImageDraw
+    except Exception:
+        ImageDraw = None
+    try:
+        from PIL import ImageTk as _PILImageTk
+        ImageTk = _PILImageTk
+    except Exception:
+        ImageTk = None
+
+PIL_AVAILABLE = Image is not None and ImageOps is not None
+
+OBSWS_IMPORT_ERROR = ""
+OBSWS_BACKEND = ""
+_obswebsocket_client_cls = None
+_obswebsocket_requests = None
+try:
+    import obsws_python as obsws
+    OBSWS_AVAILABLE = True
+    OBSWS_BACKEND = "obsws_python"
+except Exception as exc_primary:
+    obsws = None
+    OBSWS_IMPORT_ERROR = str(exc_primary)
+    try:
+        from obswebsocket import obsws as _obsws_cls, requests as _obsws_requests
+        OBSWS_AVAILABLE = True
+        OBSWS_BACKEND = "obswebsocket_py"
+        _obswebsocket_client_cls = _obsws_cls
+        _obswebsocket_requests = _obsws_requests
+    except Exception as exc_fallback:
+        OBSWS_AVAILABLE = False
+        OBSWS_IMPORT_ERROR = f"obsws_python: {exc_primary}; obswebsocket: {exc_fallback}"
+
+PYTESSERACT_IMPORT_ERROR = ""
+try:
+    import pytesseract
+    PYTESSERACT_AVAILABLE = True
+except Exception as exc:
+    pytesseract = None
+    PYTESSERACT_AVAILABLE = False
+    PYTESSERACT_IMPORT_ERROR = str(exc)
+
+VIDEO_ROI_PRESETS: Dict[str, Dict[str, str]] = {
+    "FireRed / LeafGreen": {
+        "ocr_roi": "0.05,0.70,0.95,0.96",
+        "sprite_roi": "0.56,0.14,0.92,0.62",
+        "shiny_roi": "0.58,0.16,0.92,0.52",
+    },
+    "Soft Reset (Sprite-tight)": {
+        "ocr_roi": "0.05,0.70,0.95,0.96",
+        "sprite_roi": "0.61,0.16,0.90,0.61",
+        "shiny_roi": "0.58,0.16,0.92,0.52",
+    },
+    "Emerald": {
+        "ocr_roi": "0.05,0.70,0.95,0.96",
+        "sprite_roi": "0.53,0.15,0.90,0.63",
+        "shiny_roi": "0.56,0.14,0.91,0.52",
+    },
+    "Ruby / Sapphire": {
+        "ocr_roi": "0.05,0.70,0.95,0.96",
+        "sprite_roi": "0.53,0.15,0.90,0.63",
+        "shiny_roi": "0.56,0.14,0.91,0.52",
+    },
+    "Gen 2 (G/S/C)": {
+        "ocr_roi": "0.04,0.68,0.96,0.96",
+        "sprite_roi": "0.50,0.18,0.89,0.66",
+        "shiny_roi": "0.56,0.15,0.90,0.53",
+    },
+    "Generic Battle": {
+        "ocr_roi": "0.05,0.70,0.95,0.96",
+        "sprite_roi": "0.52,0.14,0.92,0.64",
+        "shiny_roi": "0.58,0.16,0.92,0.52",
+    },
+}
+
+VIDEO_ROI_GAME_PROFILE_MAP: Dict[str, str] = {
+    "pokemon_firered": "FireRed / LeafGreen",
+    "pokemon_leafgreen": "FireRed / LeafGreen",
+    "pokemon_emerald": "Emerald",
+    "pokemon_ruby": "Ruby / Sapphire",
+    "pokemon_sapphire": "Ruby / Sapphire",
+    "pokemon_gold": "Gen 2 (G/S/C)",
+    "pokemon_silver": "Gen 2 (G/S/C)",
+    "pokemon_crystal": "Gen 2 (G/S/C)",
+}
+
+
+def _default_video_roi_profile_for_game(game_name: str) -> str:
+    key = str(game_name or "").strip().lower().replace(" ", "_").replace("'", "")
+    if key in VIDEO_ROI_GAME_PROFILE_MAP:
+        return VIDEO_ROI_GAME_PROFILE_MAP[key]
+    lowered = str(game_name or "").strip().lower()
+    if "firered" in lowered or "fire red" in lowered or "leafgreen" in lowered or "leaf green" in lowered:
+        return "FireRed / LeafGreen"
+    if "emerald" in lowered:
+        return "Emerald"
+    if "ruby" in lowered or "sapphire" in lowered:
+        return "Ruby / Sapphire"
+    if "gold" in lowered or "silver" in lowered or "crystal" in lowered:
+        return "Gen 2 (G/S/C)"
+    return "Generic Battle"
+
+
+def _normalize_roi_preset_payload(raw: object) -> Optional[Dict[str, str]]:
+    if not isinstance(raw, dict):
+        return None
+    ocr = str(raw.get("ocr_roi") or "").strip()
+    sprite = str(raw.get("sprite_roi") or "").strip()
+    shiny = str(raw.get("shiny_roi") or "").strip()
+    if not (ocr and sprite and shiny):
+        return None
+    return {
+        "ocr_roi": ocr,
+        "sprite_roi": sprite,
+        "shiny_roi": shiny,
+    }
+
+
+def _coerce_bool(value: object, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return bool(value)
+    if isinstance(value, (int, float)):
+        return bool(int(value))
+    text = str(value or "").strip().lower()
+    if text in {"1", "true", "yes", "on", "enabled"}:
+        return True
+    if text in {"0", "false", "no", "off", "disabled"}:
+        return False
+    return bool(default)
 
 LOGGER = logging.getLogger("pokeachieve_tracker")
 if not LOGGER.handlers:
@@ -1351,6 +1495,903 @@ class RetroArchClient:
         return {"status": "DISCONNECTED", "game": None}
 
 
+class OBSVideoEncounterReader:
+    """Video-based encounter reader using OBS screenshots and OCR."""
+
+    _WILD_APPEARED_PATTERNS = [
+        re.compile(r"\bW[I1!L]LD\s+([A-Z0-9'\.\-\s]{2,24}?)\s+APPEAR(?:ED|EO|E0)\b", re.IGNORECASE),
+        re.compile(r"\b([A-Z0-9'\.\-\s]{2,24}?)\s+APPEAR(?:ED|EO|E0)\b", re.IGNORECASE),
+    ]
+
+    def __init__(self, config: Optional[Dict[str, Any]] = None, species_lookup: Optional[Dict[int, str]] = None):
+        self.config = config if isinstance(config, dict) else {}
+        self._species_lookup = species_lookup if isinstance(species_lookup, dict) else {}
+        self._species_key_lookup: Dict[str, Tuple[int, str]] = {}
+        self._last_meta: Dict[str, object] = {}
+        self._last_error: str = ""
+        self._obs_client = None
+        self._obs_conn_fingerprint = ""
+        self._pending_signature = ""
+        self._pending_count = 0
+        self._last_emitted_signature = ""
+        self._last_emitted_at = 0.0
+        self._max_scene_profiles = 25
+        self._sprite_last_seen_signature = ""
+        self._sprite_last_seen_at = 0.0
+        self._rebuild_species_lookup()
+
+    def update_config(self, config: Optional[Dict[str, Any]] = None):
+        self.config = config if isinstance(config, dict) else {}
+
+    def update_species_lookup(self, species_lookup: Optional[Dict[int, str]] = None):
+        self._species_lookup = species_lookup if isinstance(species_lookup, dict) else {}
+        self._rebuild_species_lookup()
+
+    def get_last_meta(self) -> Dict[str, object]:
+        return dict(self._last_meta) if isinstance(self._last_meta, dict) else {}
+
+    def get_last_error(self) -> str:
+        return str(self._last_error or "")
+
+    def _set_meta(self, reason: str, **extra):
+        payload: Dict[str, object] = {"reason": str(reason)}
+        payload.update(extra)
+        self._last_meta = payload
+
+    def _cfg_bool(self, key: str, default: bool = False) -> bool:
+        raw = self.config.get(key, default)
+        if isinstance(raw, bool):
+            return bool(raw)
+        if isinstance(raw, (int, float)):
+            return bool(int(raw))
+        return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+    def _cfg_int(self, key: str, default: int) -> int:
+        raw = self.config.get(key, default)
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return int(default)
+
+    def _cfg_float(self, key: str, default: float) -> float:
+        raw = self.config.get(key, default)
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return float(default)
+
+    def _cfg_str(self, key: str, default: str = "") -> str:
+        raw = self.config.get(key, default)
+        return str(raw).strip() if raw is not None else str(default)
+
+    def is_enabled(self) -> bool:
+        return self._cfg_bool("video_encounter_enabled", False)
+
+    def _detection_mode(self) -> str:
+        raw = self._cfg_str("video_encounter_detection_mode", "sprite").lower()
+        if raw in {"text", "ocr", "text_ocr"}:
+            return "text"
+        return "sprite"
+
+    def is_ready(self) -> bool:
+        if not self.is_enabled():
+            self._set_meta("disabled")
+            return False
+        if not PIL_AVAILABLE:
+            self._set_meta("pil_unavailable", detail=str(PIL_IMPORT_ERROR or "Pillow import failed"), install_hint="pip install pillow")
+            return False
+        if not OBSWS_AVAILABLE:
+            self._set_meta("obsws_unavailable", detail=str(OBSWS_IMPORT_ERROR or "module import failed"), install_hint="python -m pip install obsws-python obs-websocket-py")
+            return False
+
+        detection_mode = self._detection_mode()
+        if detection_mode == "text" and not PYTESSERACT_AVAILABLE:
+            self._set_meta("pytesseract_unavailable", detail=str(PYTESSERACT_IMPORT_ERROR or "module import failed"), install_hint="pip install pytesseract")
+            return False
+
+        if not self._scene_profiles():
+            self._set_meta("obs_source_missing")
+            return False
+        return True
+
+    def _scene_profiles(self) -> List[Dict[str, Any]]:
+        profiles: List[Dict[str, Any]] = []
+        raw_profiles = self.config.get("video_obs_scene_profiles", [])
+        has_profile_payload = isinstance(raw_profiles, list) and len(raw_profiles) > 0
+        if isinstance(raw_profiles, list):
+            for idx, raw in enumerate(raw_profiles):
+                if len(profiles) >= self._max_scene_profiles:
+                    break
+                if not isinstance(raw, dict):
+                    continue
+                source_name = str(raw.get("source_name") or raw.get("source") or "").strip()
+                if not source_name:
+                    continue
+                enabled = _coerce_bool(raw.get("enabled", True), True)
+                if not enabled:
+                    continue
+                profile_name = str(raw.get("name") or f"Scene {idx + 1}").strip() or f"Scene {idx + 1}"
+                ocr_roi = str(raw.get("ocr_roi") or "0.05,0.70,0.95,0.96").strip() or "0.05,0.70,0.95,0.96"
+                sprite_roi = str(raw.get("sprite_roi") or "0.56,0.14,0.92,0.62").strip() or "0.56,0.14,0.92,0.62"
+                shiny_roi = str(raw.get("shiny_roi") or "0.58,0.16,0.92,0.52").strip() or "0.58,0.16,0.92,0.52"
+                profiles.append({
+                    "name": profile_name,
+                    "source_name": source_name,
+                    "enabled": True,
+                    "ocr_roi": ocr_roi,
+                    "sprite_roi": sprite_roi,
+                    "shiny_roi": shiny_roi,
+                })
+
+        if not profiles and not has_profile_payload:
+            source_name = self._cfg_str("video_obs_source_name", "")
+            if source_name:
+                profiles.append({
+                    "name": "Scene 1",
+                    "source_name": source_name,
+                    "enabled": True,
+                    "ocr_roi": self._cfg_str("video_ocr_roi", "0.05,0.70,0.95,0.96"),
+                    "sprite_roi": self._cfg_str("video_sprite_roi", "0.56,0.14,0.92,0.62"),
+                    "shiny_roi": self._cfg_str("video_shiny_roi", "0.58,0.16,0.92,0.52"),
+                })
+        return profiles
+
+    def _rebuild_species_lookup(self):
+        self._species_key_lookup = {}
+        for raw_id, raw_name in self._species_lookup.items():
+            try:
+                species_id = int(raw_id)
+            except (TypeError, ValueError):
+                continue
+            species_name = str(raw_name or "").strip()
+            if species_id <= 0 or not species_name:
+                continue
+            key = self._normalize_species_key(species_name)
+            if not key:
+                continue
+            self._species_key_lookup[key] = (species_id, species_name)
+
+        alias_map = {
+            "MRMIME": "MRMIME",
+            "NIDORANF": "NIDORANF",
+            "NIDORANM": "NIDORANM",
+            "FARFETCHD": "FARFETCHD",
+            "HOOH": "HOOH",
+        }
+        for alias_key, canonical_key in alias_map.items():
+            if canonical_key in self._species_key_lookup and alias_key not in self._species_key_lookup:
+                self._species_key_lookup[alias_key] = self._species_key_lookup[canonical_key]
+
+    @staticmethod
+    def _normalize_species_key(name: str) -> str:
+        if not isinstance(name, str):
+            return ""
+        text = name.upper()
+        text = text.replace(".", "").replace("-", "")
+        text = text.replace("'", "")
+        text = re.sub(r"[^A-Z0-9]", "", text)
+        return text.strip()
+
+    @staticmethod
+    def _normalize_ocr_text(text: str) -> str:
+        if not isinstance(text, str):
+            return ""
+        cleaned = text.upper()
+        cleaned = cleaned.replace("\n", " ").replace("\r", " ")
+        cleaned = cleaned.replace("VVILD", "WILD")
+        cleaned = cleaned.replace("WIID", "WILD")
+        cleaned = cleaned.replace("W1LD", "WILD")
+        cleaned = cleaned.replace("APPEAREO", "APPEARED")
+        cleaned = cleaned.replace("APPEARE0", "APPEARED")
+        cleaned = re.sub(r"[^A-Z0-9'\.\-!?: ]", " ", cleaned)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        return cleaned
+
+    def _resolve_species(self, candidate: str) -> Optional[Tuple[int, str]]:
+        key = self._normalize_species_key(candidate)
+        if not key:
+            return None
+        direct = self._species_key_lookup.get(key)
+        if direct:
+            return direct
+
+        matches = difflib.get_close_matches(key, list(self._species_key_lookup.keys()), n=1, cutoff=0.74)
+        if matches:
+            return self._species_key_lookup.get(matches[0])
+        return None
+
+    def _parse_roi_spec_raw(self, raw: str, default_raw: str, width: int, height: int) -> Tuple[int, int, int, int]:
+        parts = [p.strip() for p in str(raw).split(",")]
+        default_parts = [p.strip() for p in str(default_raw).split(",")]
+        if len(parts) != 4:
+            parts = list(default_parts)
+        vals: List[float] = []
+        for idx, part in enumerate(parts):
+            try:
+                value = float(part)
+            except (TypeError, ValueError):
+                value = float(default_parts[idx]) if idx < len(default_parts) else 0.0
+            vals.append(max(0.0, min(1.0, value)))
+        x1 = int(vals[0] * width)
+        y1 = int(vals[1] * height)
+        x2 = int(vals[2] * width)
+        y2 = int(vals[3] * height)
+        if x2 <= x1:
+            x1, x2 = 0, max(1, width)
+        if y2 <= y1:
+            y1, y2 = 0, max(1, height)
+        return x1, y1, x2, y2
+
+    def _parse_roi_spec(self, key: str, default_raw: str, width: int, height: int) -> Tuple[int, int, int, int]:
+        raw = self._cfg_str(key, default_raw)
+        return self._parse_roi_spec_raw(raw, default_raw, width, height)
+
+    def _parse_roi(self, width: int, height: int) -> Tuple[int, int, int, int]:
+        return self._parse_roi_spec("video_ocr_roi", "0.05,0.70,0.95,0.96", width, height)
+
+
+    def _ensure_obs_client(self):
+        host = self._cfg_str("video_obs_host", "127.0.0.1") or "127.0.0.1"
+        port = max(1, min(65535, self._cfg_int("video_obs_port", 4455)))
+        password = self._cfg_str("video_obs_password", "")
+        timeout = max(1.0, min(10.0, self._cfg_float("video_obs_timeout_sec", 3.0)))
+        fingerprint = f"{host}:{port}:{password}:{timeout}:{OBSWS_BACKEND}"
+        if self._obs_client is not None and self._obs_conn_fingerprint == fingerprint:
+            return self._obs_client
+        self._obs_client = None
+        self._obs_conn_fingerprint = ""
+        try:
+            if OBSWS_BACKEND == "obsws_python":
+                self._obs_client = obsws.ReqClient(host=host, port=port, password=password, timeout=timeout)
+            elif OBSWS_BACKEND == "obswebsocket_py" and _obswebsocket_client_cls is not None:
+                self._obs_client = _obswebsocket_client_cls(host, port, password)
+                self._obs_client.connect()
+            else:
+                self._set_meta("obsws_unavailable", detail=str(OBSWS_IMPORT_ERROR or "module import failed"))
+                return None
+            self._obs_conn_fingerprint = fingerprint
+            return self._obs_client
+        except Exception as exc:
+            self._last_error = str(exc)
+            self._set_meta("obs_connect_failed", host=host, port=port, backend=OBSWS_BACKEND, error=str(exc))
+            return None
+
+    def _capture_frame_payload(self, source_override: Optional[str] = None):
+        client = self._ensure_obs_client()
+        if client is None:
+            return None
+
+        source_name = str(source_override or self._cfg_str("video_obs_source_name", "")).strip()
+        if not source_name:
+            self._set_meta("obs_source_missing")
+            return None
+
+        width = max(320, min(1920, self._cfg_int("video_capture_width", 960)))
+        height = max(180, min(1080, self._cfg_int("video_capture_height", 540)))
+        compression = max(0, min(100, self._cfg_int("video_capture_quality", 100)))
+
+        image_data = ""
+        try:
+            if OBSWS_BACKEND == "obsws_python":
+                response = None
+                # Handle signature differences across obsws_python versions.
+                try:
+                    response = client.get_source_screenshot(
+                        source_name=source_name,
+                        image_format="png",
+                        image_width=width,
+                        image_height=height,
+                        image_compression_quality=compression,
+                    )
+                except TypeError:
+                    try:
+                        response = client.get_source_screenshot(
+                            sourceName=source_name,
+                            imageFormat="png",
+                            imageWidth=width,
+                            imageHeight=height,
+                            imageCompressionQuality=compression,
+                        )
+                    except TypeError:
+                        try:
+                            response = client.get_source_screenshot(source_name, "png", width, height, compression)
+                        except TypeError:
+                            response = client.get_source_screenshot(sourceName=source_name, imageFormat="png")
+                image_data = str(getattr(response, "image_data", "") or getattr(response, "imageData", "") or "")
+            elif OBSWS_BACKEND == "obswebsocket_py" and _obswebsocket_requests is not None:
+                request_factory = getattr(_obswebsocket_requests, "GetSourceScreenshot", None)
+                if request_factory is not None:
+                    request_obj = request_factory(
+                        sourceName=source_name,
+                        imageFormat="png",
+                        imageWidth=width,
+                        imageHeight=height,
+                        imageCompressionQuality=compression,
+                    )
+                else:
+                    # Older obs-websocket-py builds expose TakeSourceScreenshot instead.
+                    request_factory = getattr(_obswebsocket_requests, "TakeSourceScreenshot", None)
+                    if request_factory is None:
+                        raise RuntimeError("obswebsocket backend missing screenshot request")
+                    request_obj = request_factory(
+                        sourceName=source_name,
+                        embedPictureFormat="png",
+                        width=width,
+                        height=height,
+                    )
+                response = client.call(request_obj)
+                if hasattr(response, "getImageData"):
+                    image_data = str(response.getImageData() or "")
+                elif isinstance(getattr(response, "datain", None), dict):
+                    datain = response.datain
+                    image_data = str(datain.get("imageData") or datain.get("img") or "")
+                else:
+                    image_data = str(getattr(response, "image_data", "") or "")
+            else:
+                self._set_meta("obsws_unavailable", detail=str(OBSWS_IMPORT_ERROR or "module import failed"))
+                return None
+        except Exception as exc:
+            self._last_error = str(exc)
+            self._set_meta("obs_capture_failed", source=source_name, backend=OBSWS_BACKEND, error=str(exc))
+            return None
+
+        if not image_data:
+            self._set_meta("obs_capture_empty", source=source_name)
+            return None
+
+        if image_data.startswith("data:image"):
+            _, encoded = image_data.split(",", 1)
+        else:
+            encoded = image_data
+        try:
+            blob = base64.b64decode(encoded)
+        except Exception as exc:
+            self._last_error = str(exc)
+            self._set_meta("obs_image_decode_failed", error=str(exc))
+            return None
+
+        image = None
+        frame_width = int(width)
+        frame_height = int(height)
+        if PIL_AVAILABLE:
+            try:
+                image = Image.open(io.BytesIO(blob))
+                image.load()
+                frame_width = int(image.width)
+                frame_height = int(image.height)
+            except Exception as exc:
+                self._last_error = str(exc)
+                self._set_meta("obs_image_decode_failed", error=str(exc))
+                return None
+
+        return {
+            "image": image,
+            "png_blob": blob,
+            "source": source_name,
+            "width": frame_width,
+            "height": frame_height,
+        }
+
+    def _capture_frame(self, source_override: Optional[str] = None):
+        payload = self._capture_frame_payload(source_override=source_override)
+        if not isinstance(payload, dict):
+            return None
+        image = payload.get("image")
+        return image if image is not None else None
+
+    def _sprite_roi(self, image, sprite_roi_raw: Optional[str] = None) -> Tuple[int, int, int, int]:
+        if sprite_roi_raw:
+            return self._parse_roi_spec_raw(str(sprite_roi_raw), "0.56,0.14,0.92,0.62", int(image.width), int(image.height))
+        return self._parse_roi_spec("video_sprite_roi", "0.56,0.14,0.92,0.62", int(image.width), int(image.height))
+
+    def _sprite_metrics(self, image, sprite_roi_raw: Optional[str] = None) -> Tuple[int, str, float, float]:
+        if image is None or not PIL_AVAILABLE:
+            return 0, "", 0.0, 0.0
+
+        roi = self._sprite_roi(image, sprite_roi_raw=sprite_roi_raw)
+        crop = image.crop(roi).convert("L")
+        crop = ImageOps.autocontrast(crop)
+        try:
+            resample = Image.Resampling.BILINEAR
+        except Exception:
+            resample = Image.BILINEAR
+
+        metric_img = crop.resize((32, 32), resample)
+        pixels = list(metric_img.getdata())
+        if not pixels:
+            return 0, "", 0.0, 0.0
+
+        total = float(len(pixels))
+        mean = float(sum(int(px) for px in pixels)) / total
+        detail_count = sum(1 for px in pixels if abs(float(int(px)) - mean) >= 20.0)
+        detail_ratio = float(detail_count) / total
+
+        edge_total = 0.0
+        width = 32
+        height = 32
+        for y in range(height - 1):
+            row = y * width
+            next_row = (y + 1) * width
+            for x in range(width - 1):
+                idx = row + x
+                px = float(int(pixels[idx]))
+                edge_total += abs(px - float(int(pixels[idx + 1])))
+                edge_total += abs(px - float(int(pixels[next_row + x])))
+
+        max_edge = float((width - 1) * (height - 1) * 255 * 2)
+        edge_ratio = (edge_total / max_edge) if max_edge > 0 else 0.0
+
+        hash_img = crop.resize((16, 16), resample)
+        hash_pixels = list(hash_img.getdata())
+        if hash_pixels:
+            hash_mean = float(sum(int(px) for px in hash_pixels)) / float(len(hash_pixels))
+            bits = "".join("1" if float(int(px)) >= hash_mean else "0" for px in hash_pixels)
+            try:
+                signature = format(int(bits, 2), "064x")
+            except Exception:
+                signature = sha256(bits.encode("utf-8", errors="ignore")).hexdigest()[:64]
+        else:
+            signature = ""
+
+        score = int(max(0.0, min(1000.0, (detail_ratio * 0.55 + edge_ratio * 0.45) * 1000.0)))
+        return int(score), str(signature), float(detail_ratio), float(edge_ratio)
+
+    @staticmethod
+    def _sprite_hamming_distance(sig_a: str, sig_b: str) -> int:
+        if not sig_a or not sig_b or len(sig_a) != len(sig_b):
+            return 256
+        try:
+            bits_a = bin(int(sig_a, 16))[2:].zfill(len(sig_a) * 4)
+            bits_b = bin(int(sig_b, 16))[2:].zfill(len(sig_b) * 4)
+        except Exception:
+            return 256
+        return int(sum(1 for a, b in zip(bits_a, bits_b) if a != b))
+
+    def _sprite_present(self, image, sprite_roi_raw: Optional[str] = None) -> Tuple[bool, int, str, float, float]:
+        score, signature, detail_ratio, edge_ratio = self._sprite_metrics(image, sprite_roi_raw=sprite_roi_raw)
+        threshold = max(40, min(500, self._cfg_int("video_sprite_presence_threshold", 125)))
+        min_detail = max(0.01, min(0.45, self._cfg_float("video_sprite_min_detail_ratio", 0.10)))
+        max_detail = max(0.20, min(0.98, self._cfg_float("video_sprite_max_detail_ratio", 0.88)))
+        present = bool(score >= threshold and detail_ratio >= min_detail and detail_ratio <= max_detail and bool(signature))
+        return present, int(score), str(signature), float(detail_ratio), float(edge_ratio)
+
+    def _extract_text(self, image, ocr_roi_raw: Optional[str] = None) -> str:
+        if image is None:
+            return ""
+        if not PYTESSERACT_AVAILABLE or pytesseract is None:
+            return ""
+        if ocr_roi_raw:
+            x1, y1, x2, y2 = self._parse_roi_spec_raw(str(ocr_roi_raw), "0.05,0.70,0.95,0.96", int(image.width), int(image.height))
+        else:
+            x1, y1, x2, y2 = self._parse_roi(int(image.width), int(image.height))
+        cropped = image.crop((x1, y1, x2, y2))
+        gray = ImageOps.grayscale(cropped)
+        gray = ImageOps.autocontrast(gray)
+        threshold = max(80, min(230, self._cfg_int("video_ocr_threshold", 145)))
+        bw = gray.point(lambda px: 255 if int(px) >= threshold else 0)
+        try:
+            resample = Image.Resampling.BILINEAR
+        except Exception:
+            resample = Image.BILINEAR
+        scaled = bw.resize((max(1, int(bw.width * 2)), max(1, int(bw.height * 2))), resample)
+
+        tesseract_cmd = self._cfg_str("video_tesseract_cmd", "")
+        if tesseract_cmd:
+            try:
+                pytesseract.pytesseract.tesseract_cmd = tesseract_cmd
+            except Exception:
+                pass
+
+        ocr_config = self._cfg_str(
+            "video_ocr_config",
+            "--psm 6 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'.-!?: ",
+        )
+        try:
+            return str(pytesseract.image_to_string(scaled, config=ocr_config) or "")
+        except Exception as exc:
+            self._last_error = str(exc)
+            self._set_meta("ocr_failed", error=str(exc))
+            return ""
+
+    def _parse_wild_species(self, text: str) -> Optional[Tuple[int, str]]:
+        normalized = self._normalize_ocr_text(text)
+        if not normalized:
+            return None
+
+        for pattern in self._WILD_APPEARED_PATTERNS:
+            for match in pattern.finditer(normalized):
+                candidate = str(match.group(1) or "").strip(" !?.:-")
+                if not candidate:
+                    continue
+                resolved = self._resolve_species(candidate)
+                if resolved is not None:
+                    return resolved
+        return None
+
+    def _parse_level(self, text: str) -> Optional[int]:
+        normalized = self._normalize_ocr_text(text)
+        if not normalized:
+            return None
+        match = re.search(r"\bL[VW]\.\s*([0-9]{1,3})\b", normalized)
+        if not match:
+            match = re.search(r"\bL[VW]\s*([0-9]{1,3})\b", normalized)
+        if not match:
+            return None
+        try:
+            level = int(match.group(1))
+        except (TypeError, ValueError):
+            return None
+        if 1 <= level <= 100:
+            return int(level)
+        return None
+
+    def should_track_game(self, game_name: str) -> bool:
+        game_lower = str(game_name or "").strip().lower()
+        if not game_lower:
+            return False
+        if self._cfg_bool("video_track_all_games", False):
+            return True
+        return game_lower in {"pokemon firered", "pokemon leafgreen"}
+
+    def capture_preview_frame(self, config_override: Optional[Dict[str, Any]] = None):
+        previous_config = self.config
+        if isinstance(config_override, dict):
+            self.config = config_override
+        try:
+            if not OBSWS_AVAILABLE:
+                self._set_meta("obsws_unavailable", detail=str(OBSWS_IMPORT_ERROR or "module import failed"), install_hint="python -m pip install obsws-python obs-websocket-py")
+                return None
+            source_name = self._cfg_str("video_obs_source_name", "")
+            if not source_name:
+                profiles = self._scene_profiles()
+                if profiles:
+                    source_name = str(profiles[0].get("source_name") or "").strip()
+            if not source_name:
+                self._set_meta("obs_source_missing")
+                return None
+            payload = self._capture_frame_payload(source_override=source_name)
+            if payload is None:
+                return None
+            self._set_meta(
+                "preview_ok",
+                source=source_name,
+                width=int(payload.get("width") or 0),
+                height=int(payload.get("height") or 0),
+                pil_available=bool(PIL_AVAILABLE),
+            )
+            return payload
+        finally:
+            if isinstance(config_override, dict):
+                self.config = previous_config
+
+    def _shiny_score_for_frame(self, image, shiny_roi_raw: Optional[str] = None) -> int:
+        if image is None or not PIL_AVAILABLE:
+            return 0
+        if shiny_roi_raw:
+            roi = self._parse_roi_spec_raw(str(shiny_roi_raw), "0.58,0.16,0.92,0.52", int(image.width), int(image.height))
+        else:
+            roi = self._parse_roi_spec(
+                "video_shiny_roi",
+                "0.58,0.16,0.92,0.52",
+                int(image.width),
+                int(image.height),
+            )
+        crop = image.crop(roi).convert("RGB")
+        sample_step = max(1, min(4, self._cfg_int("video_shiny_sample_step", 2)))
+        width = int(crop.width)
+        height = int(crop.height)
+        if width <= 0 or height <= 0:
+            return 0
+        pixels = crop.load()
+        total = 0
+        sparkle = 0
+        for y in range(0, height, sample_step):
+            for x in range(0, width, sample_step):
+                r, g, b = pixels[x, y]
+                total += 1
+                max_c = max(int(r), int(g), int(b))
+                min_c = min(int(r), int(g), int(b))
+                if max_c < 200:
+                    continue
+                near_white = max_c >= 225 and (max_c - min_c) <= 24
+                warm_spark = int(r) >= 220 and int(g) >= 170 and int(b) <= 165 and (int(r) - int(g)) <= 75
+                cool_spark = int(b) >= 205 and int(g) >= 185 and int(r) <= 180
+                if near_white or warm_spark or cool_spark:
+                    sparkle += 1
+        if total <= 0:
+            return 0
+        return int((int(sparkle) * 10000) / int(total))
+
+    def _estimate_shiny_from_frames(self, frames: List[Any], require_burst: bool = True, shiny_roi_raw: Optional[str] = None) -> Tuple[bool, int, List[int], float]:
+        scores: List[int] = []
+        for frame in frames:
+            try:
+                score = int(self._shiny_score_for_frame(frame, shiny_roi_raw=shiny_roi_raw))
+            except Exception:
+                score = 0
+            scores.append(max(0, score))
+        if not scores:
+            return False, 0, [], 0.0
+
+        peak = max(scores)
+        base = min(scores)
+        threshold = max(1, min(1000, self._cfg_int("video_shiny_score_threshold", 38)))
+        burst_delta = max(0, min(1000, self._cfg_int("video_shiny_burst_delta", 12)))
+
+        if require_burst and len(scores) >= 2:
+            is_shiny = bool(peak >= threshold and (peak - base) >= burst_delta)
+        else:
+            is_shiny = bool(peak >= threshold)
+
+        confidence = float(max(0.0, min(1.0, (float(peak) - float(threshold) + 1.0) / max(1.0, float(threshold)))))
+        return is_shiny, int(peak), scores, confidence
+
+    def analyze_frame(self, image, game_name: str = "") -> Dict[str, object]:
+        if image is None:
+            return {
+                "reason": "frame_missing",
+                "species_id": 0,
+                "species_name": "",
+                "level": None,
+                "shiny": False,
+                "shiny_score": 0,
+                "scores": [],
+                "sprite_present": False,
+                "sprite_score": 0,
+                "sprite_signature": "",
+                "sprite_detail_ratio": 0.0,
+                "sprite_edge_ratio": 0.0,
+            }
+
+        text = self._extract_text(image)
+        species = self._parse_wild_species(text) if text else None
+        level = self._parse_level(text) if text else None
+        sprite_present, sprite_score, sprite_signature, sprite_detail_ratio, sprite_edge_ratio = self._sprite_present(image)
+        is_shiny, shiny_score, shiny_scores, shiny_confidence = self._estimate_shiny_from_frames([image], require_burst=False)
+
+        species_id = int(species[0]) if species else 0
+        species_name = str(species[1]) if species else ""
+        reason = "ok" if species else ("sprite_only" if sprite_present else ("ocr_empty" if not text else "wild_text_not_found"))
+        return {
+            "reason": reason,
+            "game": str(game_name or ""),
+            "species_id": species_id,
+            "species_name": species_name,
+            "level": int(level) if isinstance(level, int) and level > 0 else None,
+            "ocr_text": str(text or ""),
+            "shiny": bool(is_shiny),
+            "shiny_score": int(shiny_score),
+            "shiny_scores": list(shiny_scores),
+            "shiny_confidence": float(shiny_confidence),
+            "sprite_present": bool(sprite_present),
+            "sprite_score": int(sprite_score),
+            "sprite_signature": str(sprite_signature),
+            "sprite_detail_ratio": float(sprite_detail_ratio),
+            "sprite_edge_ratio": float(sprite_edge_ratio),
+        }
+
+    def read_wild_encounter(self, game_name: str) -> Optional[Dict[str, object]]:
+        if not self.is_ready():
+            return None
+        if not self.should_track_game(game_name):
+            self._set_meta("game_not_supported", game=game_name)
+            return None
+
+        profiles = self._scene_profiles()
+        if not profiles:
+            self._set_meta("obs_source_missing")
+            return None
+
+        detection_mode = self._detection_mode()
+        sprite_mode = detection_mode == "sprite"
+        required_text = max(1, min(6, self._cfg_int("video_ocr_confirmations", 2)))
+        required_sprite = max(1, min(8, self._cfg_int("video_sprite_confirmations", 3)))
+        required = required_sprite if sprite_mode else required_text
+
+        last_pending: Optional[Dict[str, object]] = None
+        candidate_found = False
+
+        selected_scene_name = ""
+        selected_scene_source = ""
+        selected_shiny_roi_raw = "0.58,0.16,0.92,0.52"
+        selected_sprite_signature = ""
+        selected_sprite_score = 0
+        selected_sprite_detail = 0.0
+        selected_sprite_edge = 0.0
+        image = None
+        level = None
+        species_id = 0
+        species_name = ""
+
+        for scene in profiles:
+            scene_source = str(scene.get("source_name") or "").strip()
+            if not scene_source:
+                continue
+            payload = self._capture_frame_payload(source_override=scene_source)
+            if payload is None:
+                continue
+            scene_image = payload.get("image")
+            if scene_image is None:
+                continue
+
+            scene_ocr_roi_raw = str(scene.get("ocr_roi") or "0.05,0.70,0.95,0.96")
+            scene_sprite_roi_raw = str(scene.get("sprite_roi") or "0.56,0.14,0.92,0.62")
+            scene_shiny_roi_raw = str(scene.get("shiny_roi") or "0.58,0.16,0.92,0.52")
+
+            sprite_present, sprite_score, sprite_signature, sprite_detail_ratio, sprite_edge_ratio = self._sprite_present(
+                scene_image,
+                sprite_roi_raw=scene_sprite_roi_raw,
+            )
+
+            text = ""
+            scene_species = None
+            scene_level = None
+            if PYTESSERACT_AVAILABLE:
+                text = self._extract_text(scene_image, ocr_roi_raw=scene_ocr_roi_raw)
+                if text:
+                    scene_species = self._parse_wild_species(text)
+                    scene_level = self._parse_level(text)
+
+            if sprite_mode:
+                if not sprite_present:
+                    continue
+                candidate_found = True
+                if scene_species is not None:
+                    scene_species_id, scene_species_name = scene_species
+                    candidate_signature = f"{game_name}:{scene_source}:species:{int(scene_species_id)}:{int(scene_level) if isinstance(scene_level, int) else 0}"
+                else:
+                    if not sprite_signature:
+                        continue
+                    candidate_signature = f"{game_name}:{scene_source}:sprite:{sprite_signature}"
+            else:
+                if scene_species is None:
+                    continue
+                candidate_found = True
+                scene_species_id, scene_species_name = scene_species
+                candidate_signature = f"{game_name}:{scene_source}:species:{int(scene_species_id)}:{int(scene_level) if isinstance(scene_level, int) else 0}"
+
+            if candidate_signature == self._pending_signature:
+                self._pending_count += 1
+            else:
+                self._pending_signature = candidate_signature
+                self._pending_count = 1
+
+            if self._pending_count < required:
+                pending_species_id = int(scene_species[0]) if scene_species else 0
+                pending_species_name = str(scene_species[1]) if scene_species else ""
+                last_pending = {
+                    "game": game_name,
+                    "species_id": pending_species_id,
+                    "species": pending_species_name,
+                    "confirmations": int(self._pending_count),
+                    "required": int(required),
+                    "scene": str(scene.get("name") or scene_source),
+                    "source": scene_source,
+                    "sprite_mode": bool(sprite_mode),
+                    "sprite_score": int(sprite_score),
+                }
+                continue
+
+            selected_scene_name = str(scene.get("name") or scene_source)
+            selected_scene_source = scene_source
+            selected_shiny_roi_raw = scene_shiny_roi_raw
+            selected_sprite_signature = str(sprite_signature)
+            selected_sprite_score = int(sprite_score)
+            selected_sprite_detail = float(sprite_detail_ratio)
+            selected_sprite_edge = float(sprite_edge_ratio)
+            image = scene_image
+            level = scene_level
+            if scene_species is not None:
+                species_id = int(scene_species[0])
+                species_name = str(scene_species[1])
+            else:
+                species_id = 0
+                species_name = ""
+            break
+
+        if image is None:
+            if isinstance(last_pending, dict):
+                self._set_meta("pending_confirmations", **last_pending)
+            elif candidate_found:
+                self._set_meta("wild_text_not_found", game=game_name)
+                self._pending_signature = ""
+                self._pending_count = 0
+            else:
+                self._set_meta("sprite_not_present" if sprite_mode else "ocr_empty", game=game_name)
+                self._pending_signature = ""
+                self._pending_count = 0
+            return None
+
+        shiny_enabled = self._cfg_bool("video_shiny_detection_enabled", True)
+        shiny_probe_frames = max(0, min(4, self._cfg_int("video_shiny_probe_frames", 2)))
+        shiny_probe_delay_ms = max(40, min(500, self._cfg_int("video_shiny_probe_delay_ms", 120)))
+        shiny_frames: List[Any] = [image]
+        if shiny_enabled and shiny_probe_frames > 0:
+            for _ in range(shiny_probe_frames):
+                time.sleep(float(shiny_probe_delay_ms) / 1000.0)
+                extra_frame = self._capture_frame(source_override=selected_scene_source)
+                if extra_frame is not None:
+                    shiny_frames.append(extra_frame)
+
+        is_shiny = False
+        shiny_score = 0
+        shiny_scores: List[int] = []
+        shiny_confidence = 0.0
+        if shiny_enabled:
+            is_shiny, shiny_score, shiny_scores, shiny_confidence = self._estimate_shiny_from_frames(
+                shiny_frames,
+                require_burst=True,
+                shiny_roi_raw=selected_shiny_roi_raw,
+            )
+
+        if species_id > 0:
+            emit_signature = f"{game_name}:{selected_scene_source}:species:{species_id}:{int(level) if isinstance(level, int) else 0}:{1 if bool(is_shiny) else 0}"
+        else:
+            emit_signature = f"{game_name}:{selected_scene_source}:sprite:{selected_sprite_signature}:{1 if bool(is_shiny) else 0}"
+        now = time.monotonic()
+        duplicate_window = max(0.5, min(10.0, self._cfg_float("video_duplicate_window_sec", 2.8)))
+        if emit_signature == self._last_emitted_signature and (now - float(self._last_emitted_at or 0.0)) < duplicate_window:
+            self._set_meta(
+                "duplicate_suppressed",
+                game=game_name,
+                scene=selected_scene_name,
+                source_name=selected_scene_source,
+                species_id=species_id,
+                species=species_name,
+                shiny=bool(is_shiny),
+                detection_mode=detection_mode,
+            )
+            return None
+
+        self._last_emitted_signature = emit_signature
+        self._last_emitted_at = now
+
+        source_kind = "obs_video_sprite" if sprite_mode else "obs_video_ocr"
+        self._set_meta(
+            "ok",
+            game=game_name,
+            scene=selected_scene_name,
+            source_name=selected_scene_source,
+            species_id=species_id,
+            species=species_name,
+            level=level,
+            shiny=bool(is_shiny),
+            shiny_score=int(shiny_score),
+            shiny_scores=list(shiny_scores),
+            shiny_confidence=float(shiny_confidence),
+            source=source_kind,
+            detection_mode=detection_mode,
+            sprite_score=int(selected_sprite_score),
+            sprite_signature=str(selected_sprite_signature),
+            sprite_detail_ratio=float(selected_sprite_detail),
+            sprite_edge_ratio=float(selected_sprite_edge),
+        )
+
+        signature = f"video:{emit_signature}"
+        return {
+            "species_id": int(species_id),
+            "species_name": str(species_name),
+            "level": int(level) if isinstance(level, int) and level > 0 else None,
+            "shiny": bool(is_shiny),
+            "personality": None,
+            "ot_id": None,
+            "enemy_count": 1,
+            "is_wild": True,
+            "signature": signature,
+            "source": source_kind,
+            "scene": selected_scene_name,
+            "source_name": selected_scene_source,
+            "shiny_score": int(shiny_score),
+            "shiny_confidence": float(shiny_confidence),
+            "sprite_score": int(selected_sprite_score),
+            "sprite_signature": str(selected_sprite_signature),
+            "sprite_detail_ratio": float(selected_sprite_detail),
+            "sprite_edge_ratio": float(selected_sprite_edge),
+            "video_sprite_present": bool(selected_sprite_signature),
+            "detection_mode": detection_mode,
+        }
+
+
 class PokemonMemoryReader:
     """Reads Pokemon data from game memory"""
     
@@ -2339,8 +3380,8 @@ class PokemonMemoryReader:
                 return
             candidate_addrs.append(addr_text)
 
-        _append_candidate(self._avatar_flags_addr_cache.get(game_key))
         _append_candidate(config.get("player_avatar_flags") or _GEN3_PLAYER_AVATAR_FLAGS_ADDR_BY_LAYOUT.get(layout_id))
+        _append_candidate(self._avatar_flags_addr_cache.get(game_key))
 
         raw_cfg_candidates = config.get("player_avatar_flags_candidates")
         if isinstance(raw_cfg_candidates, (list, tuple)):
@@ -2371,8 +3412,11 @@ class PokemonMemoryReader:
             return int(raw_flag) & 0xFF
 
         def _is_plausible_avatar_flags(flags_byte: int) -> bool:
-            movement_bits = int(flags_byte) & 0x1F
-            # Expected movement states from PLAYER_AVATAR_FLAG_* bits.
+            flags_value = int(flags_byte) & 0xFF
+            # PLAYER_AVATAR_FLAG_* only uses lower 5 bits; high bits indicate a bad source.
+            if (flags_value & 0xE0) != 0:
+                return False
+            movement_bits = flags_value & 0x1F
             if movement_bits not in {0x01, 0x02, 0x04, 0x08, 0x10, 0x18}:
                 return False
             return True
@@ -7464,6 +8508,12 @@ class PokeAchieveGUI:
                 api_key=self.config["api_key"]
             )
         self.tracker = AchievementTracker(self.retroarch, self.api)
+        self.video_encounter_reader = OBSVideoEncounterReader(
+            config=self.config,
+            species_lookup=dict(PokemonMemoryReader.POKEMON_NAMES),
+        )
+        self._video_reader_last_reason = ""
+        self._video_reader_last_log_at = 0.0
         
         # State
         self.is_running = False
@@ -8716,12 +9766,13 @@ class PokeAchieveGUI:
                     is_surfing = reader.read_is_surfing(game_name)
                 except Exception:
                     is_surfing = None
-            if specific_route and route_lookup not in entries:
-                surf_route = f"{route_lookup} (Surf)"
+            if specific_route:
+                base_route = route_lookup[:-7] if route_lookup.endswith(" (Surf)") else route_lookup
+                surf_route = f"{base_route} (Surf)"
                 if bool(is_surfing) and surf_route in entries:
                     route_lookup = surf_route
-                elif route_lookup.endswith(" (Surf)") and route_lookup[:-7] in entries:
-                    route_lookup = route_lookup[:-7]
+                elif base_route in entries:
+                    route_lookup = base_route
 
             if specific_route and route_lookup in entries:
                 species_ids = list(entries.get(route_lookup, []))
@@ -9116,7 +10167,7 @@ class PokeAchieveGUI:
     def _auto_select_hunt_route_from_live_location(self, game_name: str, mode: str) -> bool:
         if not bool(self.hunt_auto_route_var.get()):
             return False
-        if mode not in {"Wild Encounter Hunt", "Fishing Encounter Hunt"}:
+        if mode not in {"Wild Encounter Hunt", "Fishing Encounter Hunt", "Soft Reset Hunt"}:
             return False
         if not self.tracker or not self.tracker.pokemon_reader:
             return False
@@ -9129,29 +10180,27 @@ class PokeAchieveGUI:
         if isinstance(self._hunt_live_location_label, ttk.Label):
             self._hunt_live_location_label.configure(text=f"Detected Location: {location_name}")
 
-
         is_surfing = self.tracker.pokemon_reader.read_is_surfing(game_name)
 
         def _resolve_route_for_mode(candidate_mode: str) -> Tuple[List[str], str]:
             candidate_values = self._get_hunt_route_values(game_name, candidate_mode)
             candidate_route = ""
-            if location_name in candidate_values:
+            surf_name = f"{location_name} (Surf)"
+            if bool(is_surfing) and surf_name in candidate_values:
+                candidate_route = surf_name
+            elif location_name in candidate_values:
                 candidate_route = location_name
             else:
-                surf_name = f"{location_name} (Surf)"
                 if candidate_mode == "Wild Encounter Hunt":
-                    if bool(is_surfing) and surf_name in candidate_values:
-                        candidate_route = surf_name
-                    elif location_name.endswith(" (Surf)") and location_name[:-7] in candidate_values:
+                    if location_name.endswith(" (Surf)") and location_name[:-7] in candidate_values:
                         candidate_route = location_name[:-7]
                 elif candidate_mode == "Fishing Encounter Hunt":
-                    if surf_name in candidate_values:
-                        candidate_route = surf_name
-                    elif location_name.endswith(" (Surf)") and location_name[:-7] in candidate_values:
+                    if location_name.endswith(" (Surf)") and location_name[:-7] in candidate_values:
                         candidate_route = location_name[:-7]
             if not candidate_route:
                 candidate_route = location_name
             return candidate_values, candidate_route
+
 
         route_values, selected_route = _resolve_route_for_mode(mode)
         previous_mode = mode
@@ -10304,15 +11353,24 @@ class PokeAchieveGUI:
         except (TypeError, ValueError):
             enemy_count = 0
 
+        encounter_source = str(encounter.get("source") or "")
         reader_meta: Dict[str, object] = {}
-        if self.tracker and self.tracker.pokemon_reader:
-            try:
-                reader_meta = self.tracker.pokemon_reader.get_last_wild_read_meta()
-            except Exception:
-                reader_meta = {}
-        read_reason = str(reader_meta.get("reason", "unknown"))
-        enemy_count_source = str(reader_meta.get("enemy_count_source", ""))
-        enemy_start = reader_meta.get("enemy_start")
+        if encounter_source.startswith("obs_video_sprite"):
+            read_reason = "video_sprite"
+            enemy_count_source = encounter_source or "obs_video_sprite"
+        elif encounter_source.startswith("obs_video"):
+            read_reason = "video_ocr"
+            enemy_count_source = encounter_source or "obs_video_ocr"
+            enemy_start = None
+        else:
+            if self.tracker and self.tracker.pokemon_reader:
+                try:
+                    reader_meta = self.tracker.pokemon_reader.get_last_wild_read_meta()
+                except Exception:
+                    reader_meta = {}
+            read_reason = str(reader_meta.get("reason", "unknown"))
+            enemy_count_source = str(reader_meta.get("enemy_count_source", ""))
+            enemy_start = reader_meta.get("enemy_start")
 
         is_wild = bool(encounter.get("is_wild", True))
         is_shiny = bool(encounter.get("shiny", False))
@@ -10459,6 +11517,14 @@ class PokeAchieveGUI:
                 encounter_signature = str(encounter.get("signature", "")).strip()
                 marker = f"enemy:{encounter_signature}" if encounter_signature else f"enemy:{encounter_species_id}"
                 return True, marker, bool(encounter.get("shiny", False)), species_name, encounter_species_id
+
+            encounter_source = str(encounter.get("source") or "")
+            sprite_present = bool(encounter.get("video_sprite_present", False))
+            if encounter_source.startswith("obs_video_sprite") and sprite_present and bool(encounter.get("is_wild", True)):
+                sprite_sig = str(encounter.get("sprite_signature") or encounter.get("signature") or "").strip()
+                marker = f"video:{sprite_sig}" if sprite_sig else "video:sprite"
+                species_name = str(encounter.get("species_name") or self.tracker.pokemon_reader.get_pokemon_name(target_id))
+                return True, marker, bool(encounter.get("shiny", False)), species_name, target_id
 
         def _resolve_target_from_party(party_data: object) -> Tuple[bool, Optional[str], bool, str, int]:
             if not isinstance(party_data, list):
@@ -10773,6 +11839,90 @@ class PokeAchieveGUI:
 
         self._hunt_last_party_snapshot = snapshot
 
+    def _video_encounter_mode_enabled(self) -> bool:
+        raw = self.config.get("video_encounter_enabled", False)
+        if isinstance(raw, bool):
+            return bool(raw)
+        if isinstance(raw, (int, float)):
+            return bool(int(raw))
+        return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+    def _video_encounter_game_supported(self, game_name: str) -> bool:
+        game_lower = str(game_name or "").strip().lower()
+        if not game_lower:
+            return False
+        if bool(self.config.get("video_track_all_games", False)):
+            return True
+        return game_lower in {"pokemon firered", "pokemon leafgreen"}
+
+    def _should_use_video_encounter_reader(self, game_name: str, mode: str) -> bool:
+        if mode not in {"Wild Encounter Hunt", "Fishing Encounter Hunt", "Soft Reset Hunt"}:
+            return False
+        if not self._video_encounter_mode_enabled():
+            return False
+        if not self._video_encounter_game_supported(game_name):
+            return False
+
+        prefer_video = bool(self.config.get("video_encounter_prefer_video", False))
+        if self.retroarch.connected and not prefer_video:
+            return False
+        return True
+
+    def _read_video_hunt_encounter(self, game_name: str, mode: str) -> Optional[Dict[str, object]]:
+        if not self._should_use_video_encounter_reader(game_name, mode):
+            return None
+
+        self.video_encounter_reader.update_config(self.config)
+        encounter = self.video_encounter_reader.read_wild_encounter(game_name)
+        meta = self.video_encounter_reader.get_last_meta() if self.video_encounter_reader else {}
+        reason = str(meta.get("reason") or "")
+
+        if isinstance(encounter, dict):
+            log_event(
+                logging.INFO,
+                "video_encounter_detected",
+                game=game_name,
+                mode=mode,
+                species_id=encounter.get("species_id"),
+                species=encounter.get("species_name"),
+                level=encounter.get("level"),
+                route=self.hunt_route_var.get().strip(),
+                source=str(encounter.get("source") or "obs_video_ocr"),
+                shiny=bool(encounter.get("shiny", False)),
+                shiny_score=encounter.get("shiny_score"),
+            )
+            self._video_reader_last_reason = "ok"
+            return encounter
+
+        now = time.monotonic()
+        blocking_reasons = {
+            "obsws_unavailable",
+            "pytesseract_unavailable",
+            "obs_source_missing",
+            "obs_connect_failed",
+            "obs_capture_failed",
+        }
+        should_log = False
+        if reason in blocking_reasons:
+            if reason != self._video_reader_last_reason or (now - float(self._video_reader_last_log_at or 0.0)) >= 15.0:
+                should_log = True
+        elif reason and reason != self._video_reader_last_reason and (now - float(self._video_reader_last_log_at or 0.0)) >= 6.0:
+            should_log = True
+
+        if should_log:
+            self._video_reader_last_log_at = now
+            self._video_reader_last_reason = reason
+            log_event(
+                logging.INFO,
+                "video_encounter_waiting",
+                game=game_name,
+                mode=mode,
+                reason=reason,
+                details=meta,
+            )
+
+        return None
+
     def _process_hunt_updates(self):
         """Poll hunt counters from live memory state."""
         if not self.is_running:
@@ -10820,7 +11970,10 @@ class PokeAchieveGUI:
                 else:
                     hunt_unstable = bool(getattr(self.retroarch, "is_unstable_io", lambda: False)())
                     encounter = None
-                    if not (hunt_unstable and mode in {"Wild Encounter Hunt", "Fishing Encounter Hunt"}):
+                    use_video_reader = self._should_use_video_encounter_reader(game_for_hunt, mode)
+                    if use_video_reader:
+                        encounter = self._read_video_hunt_encounter(game_for_hunt, mode)
+                    elif not (hunt_unstable and mode in {"Wild Encounter Hunt", "Fishing Encounter Hunt"}):
                         encounter = self.tracker.pokemon_reader.read_wild_encounter(game_for_hunt) if self.tracker and self.tracker.pokemon_reader else None
                     if mode == "Soft Reset Hunt":
                         self._handle_hunt_soft_reset_progress(encounter, game_for_hunt)
@@ -10978,7 +12131,8 @@ class PokeAchieveGUI:
     def _run_status_probe(self) -> Dict:
         """Run network status checks outside the Tk main thread."""
         ra_connected = self.retroarch.connected
-        if not ra_connected:
+        video_mode_active = bool(self._video_encounter_mode_enabled())
+        if not ra_connected and not video_mode_active:
             ra_connected = self.retroarch.connect()
 
         game_name = self.retroarch.get_current_game() if ra_connected else None
@@ -10986,8 +12140,8 @@ class PokeAchieveGUI:
             "ra_connected": ra_connected,
             "game_name": game_name,
             "api_configured": bool(self.api),
+            "video_mode_active": video_mode_active,
         }
-
     def _check_status(self):
         """Check RetroArch connection and game status without freezing the UI."""
         if self._status_check_in_flight:
@@ -11009,7 +12163,10 @@ class PokeAchieveGUI:
                 self.ra_status_label.configure(text="RetroArch: Connected")
                 self._detect_game(status.get("game_name"))
             else:
-                self.ra_status_label.configure(text="RetroArch: Disconnected")
+                if status.get("video_mode_active"):
+                    self.ra_status_label.configure(text="RetroArch: Disconnected (OBS Video Mode)")
+                else:
+                    self.ra_status_label.configure(text="RetroArch: Disconnected")
 
             if status.get("api_configured"):
                 if self._api_status_state == "Not configured":
@@ -11199,27 +12356,35 @@ class PokeAchieveGUI:
             self._log(f"Could not sync with website: {e}", "warning")
     
     def _start_tracking(self):
-        """Start achievement and collection tracking"""
-        if not self.retroarch.connected:
+        """Start achievement and collection tracking."""
+        video_mode_active = bool(self._video_encounter_mode_enabled())
+        retroarch_ready = bool(self.retroarch.connected)
+        has_memory_game = bool(self.tracker.achievements or self.tracker.game_name)
+
+        if not retroarch_ready and not video_mode_active:
             messagebox.showwarning("Not Connected", "Not connected to RetroArch.")
             return
-        
-        if not self.tracker.achievements and not self.tracker.game_name:
+
+        if not has_memory_game and not video_mode_active:
             messagebox.showwarning("No Game", "No game loaded. Load a Pokemon ROM in RetroArch first.")
             return
-        
+
         self.is_running = True
-        self.tracker.start_polling(self.poll_interval)
+        if retroarch_ready and has_memory_game:
+            self.tracker.start_polling(self.poll_interval)
+            self._log("Tracking started - Monitoring achievements and Pokemon collection", "success")
+        else:
+            self._log("Tracking started - OBS video encounter mode enabled", "success")
+
         self.start_btn.configure(state='disabled')
         self.stop_btn.configure(state='normal')
         self._start_api_worker()
-        self._log("Tracking started - Monitoring achievements and Pokemon collection", "success")
-        
+
         # Start processing queues
         self._check_unlocks()
         self._process_collection_updates()
         self._process_hunt_updates()
-    
+
     def _stop_tracking(self):
         """Stop tracking"""
         self.is_running = False
@@ -12796,21 +13961,155 @@ class PokeAchieveGUI:
             msgbox.showinfo("Sync Complete", f"Synced {newly_synced} achievements from server!")
         except Exception as e:
             msgbox.showerror("Sync Error", f"Failed to sync: {e}")
-    
+
+    def _get_settings_help_text(self) -> str:
+        """Detailed help text for settings fields."""
+        return """
+PokeAchieve Tracker - Settings Help
+
+Quick Start (First-Time Setup)
+1) In OBS, enable WebSocket server (Tools -> WebSocket Server Settings).
+2) In tracker Settings, enable video encounter tracking.
+3) Fill OBS Host, Port, Password.
+4) Under Tracked OBS Scenes, set correct Source Name for each profile.
+5) Keep Encounter Detection on Sprite (recommended).
+6) Pick a Game Default ROI profile and click Apply.
+7) Click Test OBS Feed and align ROIs using mini/fullscreen preview.
+8) Save settings.
+
+Core Video Settings
+- OBS Host / Port / Password: Connection details for OBS WebSocket.
+- OBS Source Name: Exact source in OBS.
+- Encounter Detection:
+  Sprite: Best for soft reset hunts and cases where text is late.
+  Text OCR: Uses "Wild ... appeared" text.
+
+Tracked OBS Scenes (up to 25)
+- Each scene profile stores its own Source, OCR ROI, Sprite ROI, and Shiny ROI.
+- Enable/Disable controls whether that scene is scanned during live tracking.
+- Select a scene, then edit fields to tune that scene only.
+
+Preview + Alignment
+- Test OBS Feed: Captures one frame and runs analysis.
+- Detection Debug strip:
+  mode, score/threshold, confirmation progress, candidate state.
+- Open Fullscreen Preview: Larger alignment workspace.
+- Edit ROI: Chooses which ROI drag/resize edits.
+- Show OCR/Sprite/Shiny/Grid: Visual alignment guides.
+
+ROI Defaults & Presets
+- Game Default: Built-in profile list.
+- Soft Reset (Sprite-tight): Tighter sprite ROI preset for reset hunts.
+- Apply: Apply selected default to current scene.
+- Reset To Default: Re-apply selected default to current scene.
+- Apply To All Scenes: Push selected default to every scene profile.
+- Custom Preset Load/Save: Store your own ROI sets.
+- Export/Import: Move custom ROI presets between installs.
+- Calibration Wizard: Samples live frames and suggests sprite threshold + confirmations.
+
+Detection Accuracy Controls
+- Sprite ROI: Main region for encounter presence.
+- Sprite Presence Threshold: Higher = stricter.
+- Sprite Confirmations: More confirmations = fewer false positives.
+- OCR ROI / OCR Confirmations: Used for text mode.
+
+Shiny Detection Controls
+- Shiny ROI: Region used for sparkle analysis.
+- Shiny Score Threshold / Burst Delta: Shiny strictness.
+- Probe Frames / Delay: Extra verification captures.
+
+Troubleshooting
+- Preview failed: obsws_unavailable
+  Install: python -m pip install obsws-python obs-websocket-py
+- Preview failed: pil_unavailable
+  Install: python -m pip install pillow
+- OCR unavailable in text mode
+  Install: python -m pip install pytesseract
+- False positives
+  Raise Sprite Threshold and/or Sprite Confirmations.
+- Missed encounters
+  Lower Sprite Threshold slightly or widen Sprite ROI.
+""".strip()
+    def _show_settings_help_dialog(self, parent: tk.Toplevel):
+        """Show detailed help for all settings fields."""
+        help_dialog = tk.Toplevel(parent)
+        help_dialog.title("Settings Help")
+        screen_w = int(help_dialog.winfo_screenwidth() or 1920)
+        screen_h = int(help_dialog.winfo_screenheight() or 1080)
+        help_w = min(1100, max(900, int(screen_w * 0.9)))
+        help_h = min(980, max(780, int(screen_h * 0.9)))
+        help_dialog.geometry(f"{help_w}x{help_h}")
+        help_dialog.minsize(900, 780)
+        help_dialog.transient(parent)
+
+        text_box = scrolledtext.ScrolledText(help_dialog, wrap=tk.WORD, font=("Segoe UI", 10))
+        text_box.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+        text_box.insert("1.0", self._get_settings_help_text())
+        text_box.configure(state="disabled")
+
+        ttk.Button(help_dialog, text="Close", command=help_dialog.destroy).grid(row=1, column=0, pady=(0, 10))
+
+        help_dialog.columnconfigure(0, weight=1)
+        help_dialog.rowconfigure(0, weight=1)
+
     def _show_settings(self):
         """Show settings dialog"""
         dialog = tk.Toplevel(self.root)
         dialog.title("Settings")
-        dialog.geometry("500x400")
+        screen_w = int(dialog.winfo_screenwidth() or 1920)
+        screen_h = int(dialog.winfo_screenheight() or 1080)
+        settings_w = min(1180, max(960, int(screen_w * 0.94)))
+        settings_h = min(1220, max(980, int(screen_h * 0.95)))
+        dialog.geometry(f"{settings_w}x{settings_h}")
+        dialog.minsize(960, 980)
         dialog.transient(self.root)
         dialog.grab_set()
-        
+
+        scroll_container = ttk.Frame(dialog)
+        scroll_container.grid(row=0, column=0, sticky="nsew")
+        scroll_container.columnconfigure(0, weight=1)
+        scroll_container.rowconfigure(0, weight=1)
+
+        settings_canvas = tk.Canvas(scroll_container, highlightthickness=0)
+        settings_canvas.grid(row=0, column=0, sticky="nsew")
+        settings_scrollbar = ttk.Scrollbar(scroll_container, orient="vertical", command=settings_canvas.yview)
+        settings_scrollbar.grid(row=0, column=1, sticky="ns")
+        settings_canvas.configure(yscrollcommand=settings_scrollbar.set)
+
+        settings_body = ttk.Frame(settings_canvas)
+        settings_window = settings_canvas.create_window((0, 0), window=settings_body, anchor="nw")
+
+        def _on_settings_body_configure(_event=None):
+            settings_canvas.configure(scrollregion=settings_canvas.bbox("all"))
+
+        def _on_settings_canvas_configure(event):
+            settings_canvas.itemconfigure(settings_window, width=max(1, int(event.width)))
+
+        def _settings_mousewheel(event):
+            if getattr(event, "num", None) == 4:
+                settings_canvas.yview_scroll(-1, "units")
+                return "break"
+            if getattr(event, "num", None) == 5:
+                settings_canvas.yview_scroll(1, "units")
+                return "break"
+            delta = int(getattr(event, "delta", 0))
+            if delta != 0:
+                settings_canvas.yview_scroll(int(-1 * (delta / 120)), "units")
+                return "break"
+            return None
+
+        settings_body.bind("<Configure>", _on_settings_body_configure)
+        settings_canvas.bind("<Configure>", _on_settings_canvas_configure)
+        dialog.bind("<MouseWheel>", _settings_mousewheel, add="+")
+        dialog.bind("<Button-4>", _settings_mousewheel, add="+")
+        dialog.bind("<Button-5>", _settings_mousewheel, add="+")
+
         # API Settings
-        api_frame = ttk.LabelFrame(dialog, text="PokeAchieve API", padding="10")
+        api_frame = ttk.LabelFrame(settings_body, text="PokeAchieve API", padding="10")
         api_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=10)
         api_frame.columnconfigure(1, weight=1)
 
-        retro_frame = ttk.LabelFrame(dialog, text="RetroArch", padding="10")
+        retro_frame = ttk.LabelFrame(settings_body, text="RetroArch", padding="10")
         retro_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 10))
         retro_frame.columnconfigure(1, weight=1)
         ttk.Label(retro_frame, text="Host:").grid(row=0, column=0, sticky="w", pady=5)
@@ -12821,17 +14120,1468 @@ class PokeAchieveGUI:
         port_entry = ttk.Entry(retro_frame)
         port_entry.insert(0, str(self.config.get("retroarch_port", 55355)))
         port_entry.grid(row=1, column=1, sticky="ew", padx=(10, 0), pady=5)
-        
+
+        video_frame = ttk.LabelFrame(settings_body, text="OBS Video Encounter Mode", padding="10")
+        video_frame.grid(row=2, column=0, sticky="nsew", padx=10, pady=(0, 10))
+        video_frame.columnconfigure(1, weight=1)
+
+        video_enabled_var = tk.BooleanVar(value=bool(self.config.get("video_encounter_enabled", False)))
+        ttk.Checkbutton(video_frame, text="Enable video encounter tracking", variable=video_enabled_var).grid(
+            row=0, column=0, columnspan=2, sticky="w", pady=(0, 8)
+        )
+
+        ttk.Label(video_frame, text="OBS Host:").grid(row=1, column=0, sticky="w", pady=3)
+        video_host_entry = ttk.Entry(video_frame)
+        video_host_entry.insert(0, str(self.config.get("video_obs_host", "127.0.0.1")))
+        video_host_entry.grid(row=1, column=1, sticky="ew", padx=(10, 0), pady=3)
+
+        ttk.Label(video_frame, text="OBS Port:").grid(row=2, column=0, sticky="w", pady=3)
+        video_port_entry = ttk.Entry(video_frame)
+        video_port_entry.insert(0, str(self.config.get("video_obs_port", 4455)))
+        video_port_entry.grid(row=2, column=1, sticky="ew", padx=(10, 0), pady=3)
+
+        ttk.Label(video_frame, text="OBS Password:").grid(row=3, column=0, sticky="w", pady=3)
+        video_password_entry = ttk.Entry(video_frame, show="*")
+        video_password_entry.insert(0, str(self.config.get("video_obs_password", "")))
+        video_password_entry.grid(row=3, column=1, sticky="ew", padx=(10, 0), pady=3)
+
+        ttk.Label(video_frame, text="OBS Source Name:").grid(row=4, column=0, sticky="w", pady=3)
+        video_source_entry = ttk.Entry(video_frame)
+        video_source_entry.insert(0, str(self.config.get("video_obs_source_name", "")))
+        video_source_entry.grid(row=4, column=1, sticky="ew", padx=(10, 0), pady=3)
+
+        ttk.Label(video_frame, text="OCR ROI (x1,y1,x2,y2):").grid(row=5, column=0, sticky="w", pady=3)
+        video_roi_entry = ttk.Entry(video_frame)
+        video_roi_entry.insert(0, str(self.config.get("video_ocr_roi", "0.05,0.70,0.95,0.96")))
+        video_roi_entry.grid(row=5, column=1, sticky="ew", padx=(10, 0), pady=3)
+
+        ttk.Label(video_frame, text="OCR Confirmations:").grid(row=6, column=0, sticky="w", pady=3)
+        video_confirm_entry = ttk.Entry(video_frame)
+        video_confirm_entry.insert(0, str(self.config.get("video_ocr_confirmations", 2)))
+        video_confirm_entry.grid(row=6, column=1, sticky="ew", padx=(10, 0), pady=3)
+
+        ttk.Label(video_frame, text="Tesseract Path (optional):").grid(row=7, column=0, sticky="w", pady=3)
+        video_tesseract_entry = ttk.Entry(video_frame)
+        video_tesseract_entry.insert(0, str(self.config.get("video_tesseract_cmd", "")))
+        video_tesseract_entry.grid(row=7, column=1, sticky="ew", padx=(10, 0), pady=3)
+
+        video_shiny_enabled_var = tk.BooleanVar(value=bool(self.config.get("video_shiny_detection_enabled", True)))
+        ttk.Checkbutton(video_frame, text="Enable shiny detection from video", variable=video_shiny_enabled_var).grid(
+            row=8, column=0, columnspan=2, sticky="w", pady=(8, 4)
+        )
+
+        ttk.Label(video_frame, text="Shiny ROI (x1,y1,x2,y2):").grid(row=9, column=0, sticky="w", pady=3)
+        video_shiny_roi_entry = ttk.Entry(video_frame)
+        video_shiny_roi_entry.insert(0, str(self.config.get("video_shiny_roi", "0.58,0.16,0.92,0.52")))
+        video_shiny_roi_entry.grid(row=9, column=1, sticky="ew", padx=(10, 0), pady=3)
+
+        ttk.Label(video_frame, text="Shiny Score Threshold:").grid(row=10, column=0, sticky="w", pady=3)
+        video_shiny_threshold_entry = ttk.Entry(video_frame)
+        video_shiny_threshold_entry.insert(0, str(self.config.get("video_shiny_score_threshold", 38)))
+        video_shiny_threshold_entry.grid(row=10, column=1, sticky="ew", padx=(10, 0), pady=3)
+
+        ttk.Label(video_frame, text="Shiny Burst Delta:").grid(row=11, column=0, sticky="w", pady=3)
+        video_shiny_burst_entry = ttk.Entry(video_frame)
+        video_shiny_burst_entry.insert(0, str(self.config.get("video_shiny_burst_delta", 12)))
+        video_shiny_burst_entry.grid(row=11, column=1, sticky="ew", padx=(10, 0), pady=3)
+
+        ttk.Label(video_frame, text="Shiny Probe Frames:").grid(row=12, column=0, sticky="w", pady=3)
+        video_shiny_frames_entry = ttk.Entry(video_frame)
+        video_shiny_frames_entry.insert(0, str(self.config.get("video_shiny_probe_frames", 2)))
+        video_shiny_frames_entry.grid(row=12, column=1, sticky="ew", padx=(10, 0), pady=3)
+
+        ttk.Label(video_frame, text="Shiny Probe Delay (ms):").grid(row=13, column=0, sticky="w", pady=3)
+        video_shiny_delay_entry = ttk.Entry(video_frame)
+        video_shiny_delay_entry.insert(0, str(self.config.get("video_shiny_probe_delay_ms", 120)))
+        video_shiny_delay_entry.grid(row=13, column=1, sticky="ew", padx=(10, 0), pady=3)
+
+        ttk.Label(video_frame, text="Encounter Detection:").grid(row=14, column=0, sticky="w", pady=3)
+        _detection_mode_display = {
+            "sprite": "Sprite (Recommended)",
+            "text": "Text OCR",
+        }
+        _detection_mode_reverse = {v: k for k, v in _detection_mode_display.items()}
+        raw_detection_mode = str(self.config.get("video_encounter_detection_mode", "sprite")).strip().lower()
+        if raw_detection_mode not in _detection_mode_display:
+            raw_detection_mode = "sprite"
+        video_detection_mode_var = tk.StringVar(value=_detection_mode_display[raw_detection_mode])
+        ttk.Combobox(
+            video_frame,
+            textvariable=video_detection_mode_var,
+            values=tuple(_detection_mode_display.values()),
+            state="readonly",
+            width=24,
+        ).grid(row=14, column=1, sticky="w", padx=(10, 0), pady=3)
+
+        ttk.Label(video_frame, text="Sprite ROI (x1,y1,x2,y2):").grid(row=15, column=0, sticky="w", pady=3)
+        video_sprite_roi_entry = ttk.Entry(video_frame)
+        video_sprite_roi_entry.insert(0, str(self.config.get("video_sprite_roi", "0.56,0.14,0.92,0.62")))
+        video_sprite_roi_entry.grid(row=15, column=1, sticky="ew", padx=(10, 0), pady=3)
+
+        ttk.Label(video_frame, text="Sprite Confirmations:").grid(row=16, column=0, sticky="w", pady=3)
+        video_sprite_confirm_entry = ttk.Entry(video_frame)
+        video_sprite_confirm_entry.insert(0, str(self.config.get("video_sprite_confirmations", 3)))
+        video_sprite_confirm_entry.grid(row=16, column=1, sticky="ew", padx=(10, 0), pady=3)
+
+        ttk.Label(video_frame, text="Sprite Presence Threshold:").grid(row=17, column=0, sticky="w", pady=3)
+        video_sprite_threshold_entry = ttk.Entry(video_frame)
+        video_sprite_threshold_entry.insert(0, str(self.config.get("video_sprite_presence_threshold", 125)))
+        video_sprite_threshold_entry.grid(row=17, column=1, sticky="ew", padx=(10, 0), pady=3)
+
+        raw_custom_roi_presets = self.config.get("video_roi_custom_presets", {})
+        custom_roi_presets: Dict[str, Dict[str, str]] = {}
+        if isinstance(raw_custom_roi_presets, dict):
+            for raw_name, raw_payload in raw_custom_roi_presets.items():
+                name = str(raw_name or "").strip()
+                if not name:
+                    continue
+                parsed_payload = _normalize_roi_preset_payload(raw_payload)
+                if parsed_payload is None:
+                    continue
+                custom_roi_presets[name] = parsed_payload
+
+        raw_scene_profiles = self.config.get("video_obs_scene_profiles", [])
+        scene_profiles: List[Dict[str, Any]] = []
+        if isinstance(raw_scene_profiles, list):
+            for idx, raw in enumerate(raw_scene_profiles):
+                if len(scene_profiles) >= 25:
+                    break
+                if not isinstance(raw, dict):
+                    continue
+                source_name = str(raw.get("source_name") or raw.get("source") or "").strip()
+                if not source_name:
+                    continue
+                scene_profiles.append(
+                    {
+                        "name": str(raw.get("name") or f"Scene {idx + 1}").strip() or f"Scene {idx + 1}",
+                        "source_name": source_name,
+                        "enabled": _coerce_bool(raw.get("enabled", True), True),
+                        "ocr_roi": str(raw.get("ocr_roi") or self.config.get("video_ocr_roi", "0.05,0.70,0.95,0.96")),
+                        "sprite_roi": str(raw.get("sprite_roi") or self.config.get("video_sprite_roi", "0.56,0.14,0.92,0.62")),
+                        "shiny_roi": str(raw.get("shiny_roi") or self.config.get("video_shiny_roi", "0.58,0.16,0.92,0.52")),
+                    }
+                )
+        if not scene_profiles:
+            fallback_source = str(self.config.get("video_obs_source_name", "")).strip() or "Game Capture"
+            scene_profiles.append(
+                {
+                    "name": "Scene 1",
+                    "source_name": fallback_source,
+                    "enabled": True,
+                    "ocr_roi": str(self.config.get("video_ocr_roi", "0.05,0.70,0.95,0.96")),
+                    "sprite_roi": str(self.config.get("video_sprite_roi", "0.56,0.14,0.92,0.62")),
+                    "shiny_roi": str(self.config.get("video_shiny_roi", "0.58,0.16,0.92,0.52")),
+                }
+            )
+        selected_scene_index_var = tk.IntVar(value=0)
+
+        scene_frame = ttk.LabelFrame(video_frame, text="Tracked OBS Scenes (max 25)", padding="8")
+        scene_frame.grid(row=19, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        scene_frame.columnconfigure(0, weight=1)
+        scene_frame.columnconfigure(1, weight=0)
+        scene_frame.columnconfigure(2, weight=1)
+
+        scene_listbox = tk.Listbox(scene_frame, height=6, exportselection=False)
+        scene_listbox.grid(row=0, column=0, rowspan=6, sticky="nsew")
+
+        scene_buttons = ttk.Frame(scene_frame)
+        scene_buttons.grid(row=0, column=1, rowspan=6, sticky="ns", padx=8)
+
+        ttk.Label(scene_frame, text="Selected Scene Name:").grid(row=0, column=2, sticky="w")
+        scene_name_entry = ttk.Entry(scene_frame)
+        scene_name_entry.grid(row=1, column=2, sticky="ew", pady=(2, 6))
+        ttk.Label(scene_frame, text="Selected Scene Source:").grid(row=2, column=2, sticky="w")
+        scene_source_entry = ttk.Entry(scene_frame)
+        scene_source_entry.grid(row=3, column=2, sticky="ew", pady=(2, 4))
+        scene_enabled_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            scene_frame,
+            text="Enable this scene for tracking",
+            variable=scene_enabled_var,
+            command=lambda: _refresh_scene_list(int(selected_scene_index_var.get())),
+        ).grid(row=4, column=2, sticky="w", pady=(0, 6))
+
+        def _scene_summary(profile: Dict[str, Any], idx: int) -> str:
+            state = "ON" if _coerce_bool(profile.get("enabled", True), True) else "OFF"
+            return f"{idx + 1:02d}. [{state}] {profile.get('name') or f'Scene {idx + 1}'} [{profile.get('source_name') or ''}]"
+
+        def _commit_selected_scene_profile() -> int:
+            idx = int(selected_scene_index_var.get())
+            if not (0 <= idx < len(scene_profiles)):
+                return idx
+            scene_profiles[idx]["name"] = scene_name_entry.get().strip() or f"Scene {idx + 1}"
+            scene_profiles[idx]["source_name"] = scene_source_entry.get().strip() or scene_profiles[idx].get("source_name") or "Game Capture"
+            scene_profiles[idx]["enabled"] = bool(scene_enabled_var.get())
+            scene_profiles[idx]["ocr_roi"] = video_roi_entry.get().strip() or "0.05,0.70,0.95,0.96"
+            scene_profiles[idx]["sprite_roi"] = video_sprite_roi_entry.get().strip() or "0.56,0.14,0.92,0.62"
+            scene_profiles[idx]["shiny_roi"] = video_shiny_roi_entry.get().strip() or "0.58,0.16,0.92,0.52"
+            return idx
+
+        def _load_scene_into_fields(idx: int):
+            if not (0 <= idx < len(scene_profiles)):
+                return
+            profile = scene_profiles[idx]
+            selected_scene_index_var.set(int(idx))
+            scene_name_entry.delete(0, tk.END)
+            scene_name_entry.insert(0, str(profile.get("name") or f"Scene {idx + 1}"))
+            scene_source_entry.delete(0, tk.END)
+            scene_source_entry.insert(0, str(profile.get("source_name") or ""))
+            scene_enabled_var.set(_coerce_bool(profile.get("enabled", True), True))
+            video_source_entry.delete(0, tk.END)
+            video_source_entry.insert(0, str(profile.get("source_name") or ""))
+            video_roi_entry.delete(0, tk.END)
+            video_roi_entry.insert(0, str(profile.get("ocr_roi") or "0.05,0.70,0.95,0.96"))
+            video_sprite_roi_entry.delete(0, tk.END)
+            video_sprite_roi_entry.insert(0, str(profile.get("sprite_roi") or "0.56,0.14,0.92,0.62"))
+            video_shiny_roi_entry.delete(0, tk.END)
+            video_shiny_roi_entry.insert(0, str(profile.get("shiny_roi") or "0.58,0.16,0.92,0.52"))
+
+        def _refresh_scene_list(select_idx: Optional[int] = None):
+            current_idx = _commit_selected_scene_profile()
+            scene_listbox.delete(0, tk.END)
+            for idx, profile in enumerate(scene_profiles):
+                scene_listbox.insert(tk.END, _scene_summary(profile, idx))
+            if not scene_profiles:
+                return
+            target_idx = current_idx if select_idx is None else int(select_idx)
+            target_idx = max(0, min(len(scene_profiles) - 1, target_idx))
+            scene_listbox.selection_clear(0, tk.END)
+            scene_listbox.selection_set(target_idx)
+            scene_listbox.activate(target_idx)
+            _load_scene_into_fields(target_idx)
+
+        def _on_scene_select(_event=None):
+            sel = scene_listbox.curselection()
+            if not sel:
+                return
+            _commit_selected_scene_profile()
+            _load_scene_into_fields(int(sel[0]))
+            _refresh_preview_guides_only()
+
+        def _add_scene_profile():
+            _commit_selected_scene_profile()
+            if len(scene_profiles) >= 25:
+                messagebox.showwarning("Scene Limit", "You can track up to 25 OBS scenes.")
+                return
+            base_idx = int(selected_scene_index_var.get())
+            base = scene_profiles[base_idx] if 0 <= base_idx < len(scene_profiles) else {
+                "name": "Scene",
+                "source_name": "Game Capture",
+                "enabled": True,
+                "ocr_roi": "0.05,0.70,0.95,0.96",
+                "sprite_roi": "0.56,0.14,0.92,0.62",
+                "shiny_roi": "0.58,0.16,0.92,0.52",
+            }
+            new_profile = {
+                "name": f"{base.get('name') or 'Scene'} Copy",
+                "source_name": str(base.get("source_name") or "Game Capture"),
+                "enabled": _coerce_bool(base.get("enabled", True), True),
+                "ocr_roi": str(base.get("ocr_roi") or "0.05,0.70,0.95,0.96"),
+                "sprite_roi": str(base.get("sprite_roi") or "0.56,0.14,0.92,0.62"),
+                "shiny_roi": str(base.get("shiny_roi") or "0.58,0.16,0.92,0.52"),
+            }
+            scene_profiles.append(new_profile)
+            _refresh_scene_list(len(scene_profiles) - 1)
+
+        def _remove_scene_profile():
+            if len(scene_profiles) <= 1:
+                messagebox.showwarning("Cannot Remove", "At least one scene profile is required.")
+                return
+            idx = int(selected_scene_index_var.get())
+            if not (0 <= idx < len(scene_profiles)):
+                return
+            del scene_profiles[idx]
+            _refresh_scene_list(max(0, idx - 1))
+
+        def _rename_scene_profile():
+            idx = int(selected_scene_index_var.get())
+            if not (0 <= idx < len(scene_profiles)):
+                return
+            scene_profiles[idx]["name"] = scene_name_entry.get().strip() or f"Scene {idx + 1}"
+            _refresh_scene_list(idx)
+
+        def _edit_scene_source():
+            idx = int(selected_scene_index_var.get())
+            if not (0 <= idx < len(scene_profiles)):
+                return
+            current = str(scene_profiles[idx].get("source_name") or "Game Capture")
+            new_source = simpledialog.askstring(
+                "Scene Source",
+                "OBS source for this scene profile:",
+                initialvalue=current,
+                parent=dialog,
+            )
+            if new_source is None:
+                return
+            cleaned = new_source.strip() or current
+            scene_profiles[idx]["source_name"] = cleaned
+            scene_source_entry.delete(0, tk.END)
+            scene_source_entry.insert(0, cleaned)
+            video_source_entry.delete(0, tk.END)
+            video_source_entry.insert(0, cleaned)
+            _refresh_scene_list(idx)
+
+        def _set_selected_scene_enabled(enabled: bool):
+            idx = int(selected_scene_index_var.get())
+            if not (0 <= idx < len(scene_profiles)):
+                return
+            scene_enabled_var.set(bool(enabled))
+            scene_profiles[idx]["enabled"] = bool(enabled)
+            _refresh_scene_list(idx)
+
+        ttk.Button(scene_buttons, text="Add", command=_add_scene_profile).grid(row=0, column=0, sticky="ew", pady=(0, 4))
+        ttk.Button(scene_buttons, text="Remove", command=_remove_scene_profile).grid(row=1, column=0, sticky="ew", pady=(0, 4))
+        ttk.Button(scene_buttons, text="Rename", command=_rename_scene_profile).grid(row=2, column=0, sticky="ew", pady=(0, 4))
+        ttk.Button(scene_buttons, text="Edit Source", command=_edit_scene_source).grid(row=3, column=0, sticky="ew", pady=(0, 4))
+        ttk.Button(scene_buttons, text="Enable", command=lambda: _set_selected_scene_enabled(True)).grid(row=4, column=0, sticky="ew", pady=(0, 4))
+        ttk.Button(scene_buttons, text="Disable", command=lambda: _set_selected_scene_enabled(False)).grid(row=5, column=0, sticky="ew", pady=(0, 4))
+
+        scene_listbox.bind("<<ListboxSelect>>", _on_scene_select)
+        _refresh_scene_list(0)
+        preview_frame = ttk.LabelFrame(video_frame, text="OBS Preview", padding="8")
+        preview_frame.grid(row=20, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        preview_frame.columnconfigure(0, weight=1)
+
+        preview_canvas_width = 420
+        preview_canvas_height = 210
+        preview_status_var = tk.StringVar(value="Click 'Test OBS Feed' to verify OBS connectivity and source framing.")
+        preview_debug_var = tk.StringVar(value="Detection Debug: waiting for first frame.")
+        show_ocr_roi_var = tk.BooleanVar(value=True)
+        show_sprite_roi_var = tk.BooleanVar(value=True)
+        show_shiny_roi_var = tk.BooleanVar(value=True)
+        show_grid_var = tk.BooleanVar(value=True)
+        edit_roi_var = tk.StringVar(value="OCR ROI")
+
+        _preview_fullscreen_state: Dict[str, Any] = {"window": None, "canvas": None, "status": None}
+        _last_preview_state: Dict[str, Any] = {
+            "payload": None,
+            "test_config": None,
+            "analysis": None,
+            "display_backend": "none",
+            "frame_width": 0,
+            "frame_height": 0,
+            "debug_signature": "",
+            "debug_count": 0,
+        }
+        _overlay_drag_state: Dict[str, Any] = {"active": False, "canvas": None}
+
+        controls_frame = ttk.Frame(preview_frame)
+        controls_frame.grid(row=0, column=0, sticky="ew")
+        controls_frame.columnconfigure(8, weight=1)
+
+        preview_canvas = tk.Canvas(
+            preview_frame,
+            width=preview_canvas_width,
+            height=preview_canvas_height,
+            bg="#101010",
+            highlightthickness=1,
+            highlightbackground="#333333",
+        )
+        preview_canvas.grid(row=4, column=0, sticky="ew", pady=(6, 0))
+        preview_canvas.create_text(
+            preview_canvas_width // 2,
+            preview_canvas_height // 2,
+            text="No preview yet",
+            fill="#CCCCCC",
+            font=("Segoe UI", 10),
+            tags=("placeholder",),
+        )
+
+        preview_status_label = ttk.Label(preview_frame, textvariable=preview_status_var, justify="left", wraplength=760)
+        preview_status_label.grid(row=1, column=0, sticky="ew", pady=(6, 2))
+
+        preview_debug_label = ttk.Label(preview_frame, textvariable=preview_debug_var, justify="left", font=("Consolas", 9), wraplength=760)
+        preview_debug_label.grid(row=2, column=0, sticky="ew", pady=(0, 3))
+
+        preview_tip_label = ttk.Label(
+            preview_frame,
+            text="Drag inside selected ROI to move it. Drag square handles to resize. Edit target selects which ROI you adjust.",
+            justify="left",
+            foreground="#4A4A4A",
+            wraplength=760,
+        )
+        preview_tip_label.grid(row=3, column=0, sticky="w")
+
+        def _get_edit_roi_key() -> str:
+            raw = str(edit_roi_var.get() or "OCR ROI").strip().lower()
+            if raw.startswith("shiny"):
+                return "video_shiny_roi"
+            if raw.startswith("sprite"):
+                return "video_sprite_roi"
+            return "video_ocr_roi"
+
+        def _entry_for_roi_key(roi_key: str):
+            if roi_key == "video_shiny_roi":
+                return video_shiny_roi_entry
+            if roi_key == "video_sprite_roi":
+                return video_sprite_roi_entry
+            return video_roi_entry
+
+        def _parse_norm_roi_text(raw: str) -> Optional[Tuple[float, float, float, float]]:
+            parts = [p.strip() for p in str(raw or "").split(",")]
+            if len(parts) != 4:
+                return None
+            vals: List[float] = []
+            for part in parts:
+                try:
+                    vals.append(float(part))
+                except (TypeError, ValueError):
+                    return None
+            x1, y1, x2, y2 = vals
+            x1 = max(0.0, min(1.0, x1))
+            y1 = max(0.0, min(1.0, y1))
+            x2 = max(0.0, min(1.0, x2))
+            y2 = max(0.0, min(1.0, y2))
+            if x2 <= x1 or y2 <= y1:
+                return None
+            return x1, y1, x2, y2
+
+        def _format_norm_roi(roi: Tuple[float, float, float, float]) -> str:
+            x1, y1, x2, y2 = roi
+            return f"{x1:.3f},{y1:.3f},{x2:.3f},{y2:.3f}"
+
+        def _sanitize_norm_roi(roi: Tuple[float, float, float, float], min_span: float = 0.02) -> Tuple[float, float, float, float]:
+            x1, y1, x2, y2 = roi
+            x1 = max(0.0, min(1.0, float(x1)))
+            y1 = max(0.0, min(1.0, float(y1)))
+            x2 = max(0.0, min(1.0, float(x2)))
+            y2 = max(0.0, min(1.0, float(y2)))
+            if x2 < x1 + min_span:
+                x2 = min(1.0, x1 + min_span)
+                x1 = max(0.0, x2 - min_span)
+            if y2 < y1 + min_span:
+                y2 = min(1.0, y1 + min_span)
+                y1 = max(0.0, y2 - min_span)
+            return x1, y1, x2, y2
+
+        def _apply_roi_to_ui(roi_key: str, roi: Tuple[float, float, float, float]):
+            clean = _sanitize_norm_roi(roi)
+            txt = _format_norm_roi(clean)
+            entry = _entry_for_roi_key(roi_key)
+            entry.delete(0, tk.END)
+            entry.insert(0, txt)
+            cfg = _last_preview_state.get("test_config")
+            if isinstance(cfg, dict):
+                cfg[roi_key] = txt
+
+        def _build_preview_photo(payload: Dict[str, Any], max_w: int, max_h: int):
+            frame = payload.get("image") if isinstance(payload, dict) else None
+            png_blob = payload.get("png_blob") if isinstance(payload, dict) else None
+
+            if max_w <= 0:
+                max_w = preview_canvas_width
+            if max_h <= 0:
+                max_h = preview_canvas_height
+
+            if frame is not None:
+                if not PIL_AVAILABLE or ImageTk is None:
+                    return None, 0, 0, 0, 0, "pil_no_imagetk"
+                preview_image = frame.copy().convert("RGB")
+                orig_w = int(preview_image.width)
+                orig_h = int(preview_image.height)
+                if orig_w <= 0 or orig_h <= 0:
+                    return None, 0, 0, 0, 0, "invalid_frame_dims"
+                scale = min(float(max_w) / float(orig_w), float(max_h) / float(orig_h), 1.0)
+                new_w = max(1, int(orig_w * scale))
+                new_h = max(1, int(orig_h * scale))
+                if new_w != orig_w or new_h != orig_h:
+                    try:
+                        preview_image = preview_image.resize((new_w, new_h), Image.Resampling.BILINEAR)
+                    except Exception:
+                        preview_image = preview_image.resize((new_w, new_h), Image.BILINEAR)
+                photo = ImageTk.PhotoImage(preview_image)
+                return photo, int(new_w), int(new_h), int(orig_w), int(orig_h), "imagetk"
+
+            if isinstance(png_blob, (bytes, bytearray)):
+                try:
+                    encoded_png = base64.b64encode(bytes(png_blob)).decode("ascii")
+                    base_photo = tk.PhotoImage(data=encoded_png, format="png")
+                    orig_w = int(base_photo.width())
+                    orig_h = int(base_photo.height())
+                    if orig_w <= 0 or orig_h <= 0:
+                        return None, 0, 0, 0, 0, "tk_invalid_dims"
+                    max_ratio = max(float(orig_w) / float(max_w), float(orig_h) / float(max_h), 1.0)
+                    factor = int(max_ratio)
+                    if float(factor) < float(max_ratio):
+                        factor += 1
+                    factor = max(1, factor)
+                    if factor > 1:
+                        photo = base_photo.subsample(factor, factor)
+                    else:
+                        photo = base_photo
+                    return photo, int(photo.width()), int(photo.height()), int(orig_w), int(orig_h), "tk_photoimage"
+                except Exception:
+                    return None, 0, 0, 0, 0, "tk_decode_failed"
+
+            return None, 0, 0, 0, 0, "no_preview_data"
+
+        def _draw_preview_guides(
+            canvas: tk.Canvas,
+            draw_x: int,
+            draw_y: int,
+            draw_w: int,
+            draw_h: int,
+            cfg: Dict[str, Any],
+        ):
+            canvas.delete("guide")
+            canvas._roi_render_ctx = None
+            if draw_w <= 0 or draw_h <= 0:
+                return
+
+            if bool(show_grid_var.get()):
+                for i in (1, 2):
+                    gx = draw_x + int((draw_w * i) / 3)
+                    gy = draw_y + int((draw_h * i) / 3)
+                    canvas.create_line(gx, draw_y, gx, draw_y + draw_h, fill="#4D4D4D", dash=(3, 3), tags=("guide",))
+                    canvas.create_line(draw_x, gy, draw_x + draw_w, gy, fill="#4D4D4D", dash=(3, 3), tags=("guide",))
+                cx = draw_x + (draw_w // 2)
+                cy = draw_y + (draw_h // 2)
+                canvas.create_line(cx - 14, cy, cx + 14, cy, fill="#777777", tags=("guide",))
+                canvas.create_line(cx, cy - 14, cx, cy + 14, fill="#777777", tags=("guide",))
+
+            active_key = _get_edit_roi_key()
+            rois: Dict[str, Dict[str, Any]] = {}
+
+            def _draw_roi(roi_key: str, color: str, label: str):
+                raw_roi = str(cfg.get(roi_key) or "")
+                parsed = _parse_norm_roi_text(raw_roi)
+                if not parsed:
+                    return
+                x1, y1, x2, y2 = parsed
+                rx1 = draw_x + int(x1 * draw_w)
+                ry1 = draw_y + int(y1 * draw_h)
+                rx2 = draw_x + int(x2 * draw_w)
+                ry2 = draw_y + int(y2 * draw_h)
+                rois[roi_key] = {
+                    "norm": (x1, y1, x2, y2),
+                    "rect": (rx1, ry1, rx2, ry2),
+                    "visible": True,
+                }
+                width = 3 if roi_key == active_key else 2
+                canvas.create_rectangle(rx1, ry1, rx2, ry2, outline=color, width=width, tags=("guide",))
+                canvas.create_text(
+                    rx1 + 6,
+                    max(draw_y + 10, ry1 - 8),
+                    text=label + (" (editing)" if roi_key == active_key else ""),
+                    fill=color,
+                    anchor="w",
+                    font=("Segoe UI", 9, "bold"),
+                    tags=("guide",),
+                )
+                if roi_key == active_key:
+                    handle_size = 5
+                    for hx, hy in ((rx1, ry1), (rx2, ry1), (rx1, ry2), (rx2, ry2)):
+                        canvas.create_rectangle(
+                            hx - handle_size,
+                            hy - handle_size,
+                            hx + handle_size,
+                            hy + handle_size,
+                            fill=color,
+                            outline="#111111",
+                            tags=("guide",),
+                        )
+
+            if bool(show_ocr_roi_var.get()):
+                _draw_roi("video_ocr_roi", "#00D084", "OCR ROI")
+            if bool(show_sprite_roi_var.get()):
+                _draw_roi("video_sprite_roi", "#42A5F5", "Sprite ROI")
+            if bool(show_shiny_roi_var.get()):
+                _draw_roi("video_shiny_roi", "#FFC857", "Shiny ROI")
+
+            canvas._roi_render_ctx = {
+                "draw_x": draw_x,
+                "draw_y": draw_y,
+                "draw_w": draw_w,
+                "draw_h": draw_h,
+                "rois": rois,
+                "active_key": active_key,
+            }
+
+        def _render_preview_into_canvas(
+            canvas: tk.Canvas,
+            payload: Optional[Dict[str, Any]],
+            cfg: Dict[str, Any],
+            max_w: int,
+            max_h: int,
+            placeholder: str,
+        ) -> str:
+            canvas.delete("all")
+            if not isinstance(payload, dict):
+                canvas.create_text(max_w // 2, max_h // 2, text=placeholder, fill="#CCCCCC", font=("Segoe UI", 11))
+                canvas._roi_render_ctx = None
+                return "none"
+
+            photo, draw_w, draw_h, _, _, backend = _build_preview_photo(payload, max_w, max_h)
+            if photo is None:
+                canvas.create_text(
+                    max_w // 2,
+                    max_h // 2,
+                    text=f"Preview unavailable ({backend})",
+                    fill="#CCCCCC",
+                    font=("Segoe UI", 11),
+                )
+                canvas._roi_render_ctx = None
+                return backend
+
+            canvas_w = max(1, int(canvas.winfo_width() or max_w))
+            canvas_h = max(1, int(canvas.winfo_height() or max_h))
+            draw_x = max(0, (canvas_w - int(draw_w)) // 2)
+            draw_y = max(0, (canvas_h - int(draw_h)) // 2)
+            canvas.create_image(draw_x, draw_y, image=photo, anchor="nw", tags=("preview_img",))
+            canvas._preview_photo = photo
+
+            _draw_preview_guides(canvas, draw_x, draw_y, int(draw_w), int(draw_h), cfg)
+            return backend
+
+        def _refresh_preview_guides_only():
+            payload = _last_preview_state.get("payload")
+            cfg = _last_preview_state.get("test_config") or _collect_video_settings()
+            _render_preview_into_canvas(
+                preview_canvas,
+                payload if isinstance(payload, dict) else None,
+                cfg,
+                preview_canvas_width,
+                preview_canvas_height,
+                "No preview yet",
+            )
+            _refresh_fullscreen_preview()
+
+        def _update_preview_debug_strip(test_config: Dict[str, Any], analysis: Optional[Dict[str, Any]], meta: Optional[Dict[str, Any]] = None):
+            cfg = test_config if isinstance(test_config, dict) else {}
+            payload = analysis if isinstance(analysis, dict) else {}
+            mode_raw = str(cfg.get("video_encounter_detection_mode", "sprite") or "sprite").strip().lower()
+            mode = "text" if mode_raw in {"text", "ocr", "text_ocr"} else "sprite"
+            sprite_score = int(payload.get("sprite_score") or 0)
+            threshold = max(40, min(500, int(cfg.get("video_sprite_presence_threshold", 125) or 125)))
+            required = int(cfg.get("video_sprite_confirmations", 3) if mode == "sprite" else cfg.get("video_ocr_confirmations", 2))
+            required = max(1, min(8 if mode == "sprite" else 6, required))
+
+            species_id = int(payload.get("species_id") or 0)
+            species_name = str(payload.get("species_name") or "").strip()
+            level = int(payload.get("level") or 0)
+            sprite_present = bool(payload.get("sprite_present"))
+            sprite_signature = str(payload.get("sprite_signature") or "")
+            signature = ""
+            if mode == "sprite":
+                if species_id > 0:
+                    signature = f"{mode}:species:{species_id}:{level}"
+                elif sprite_present and sprite_signature:
+                    signature = f"{mode}:sprite:{sprite_signature}"
+            else:
+                if species_id > 0:
+                    signature = f"{mode}:species:{species_id}:{level}"
+
+            prior_sig = str(_last_preview_state.get("debug_signature") or "")
+            prior_count = int(_last_preview_state.get("debug_count") or 0)
+            if signature:
+                debug_count = prior_count + 1 if signature == prior_sig else 1
+                _last_preview_state["debug_signature"] = signature
+                _last_preview_state["debug_count"] = int(debug_count)
+            else:
+                debug_count = 0
+                _last_preview_state["debug_signature"] = ""
+                _last_preview_state["debug_count"] = 0
+
+            if not signature:
+                state = "NO_CANDIDATE"
+            elif debug_count >= required:
+                state = "COUNT_READY"
+            else:
+                state = "PENDING"
+
+            if mode == "sprite":
+                metric = f"score={sprite_score}/{threshold}"
+            else:
+                metric = f"ocr={'hit' if species_id > 0 else 'miss'}"
+
+            candidate = species_name if species_name else ("sprite-signature" if ":sprite:" in signature else "-")
+            reason = str((meta or {}).get("reason") or "").strip()
+            reason_suffix = f" | reason={reason}" if reason and reason != "preview_ok" else ""
+            preview_debug_var.set(
+                f"Detection Debug | mode={mode} | {metric} | conf={debug_count}/{required} | state={state} | candidate={candidate}{reason_suffix}"
+            )
+
+        def _on_overlay_mouse_down(canvas: tk.Canvas, event):
+            ctx = getattr(canvas, "_roi_render_ctx", None)
+            if not isinstance(ctx, dict):
+                return
+            active_key = str(ctx.get("active_key") or "")
+            roi_item = (ctx.get("rois") or {}).get(active_key)
+            if not isinstance(roi_item, dict):
+                return
+
+            rx1, ry1, rx2, ry2 = roi_item.get("rect")
+            nx1, ny1, nx2, ny2 = roi_item.get("norm")
+            x = int(event.x)
+            y = int(event.y)
+            hit_size = 10
+            mode = None
+            handle = ""
+            handles = {
+                "nw": (rx1, ry1),
+                "ne": (rx2, ry1),
+                "sw": (rx1, ry2),
+                "se": (rx2, ry2),
+            }
+            for name, (hx, hy) in handles.items():
+                if abs(x - hx) <= hit_size and abs(y - hy) <= hit_size:
+                    mode = "resize"
+                    handle = name
+                    break
+            if mode is None and rx1 <= x <= rx2 and ry1 <= y <= ry2:
+                mode = "move"
+
+            if mode is None:
+                return
+
+            _overlay_drag_state["active"] = True
+            _overlay_drag_state["canvas"] = canvas
+            _overlay_drag_state["mode"] = mode
+            _overlay_drag_state["handle"] = handle
+            _overlay_drag_state["key"] = active_key
+            _overlay_drag_state["start_x"] = x
+            _overlay_drag_state["start_y"] = y
+            _overlay_drag_state["start_norm"] = (nx1, ny1, nx2, ny2)
+            _overlay_drag_state["ctx_dims"] = (ctx.get("draw_w"), ctx.get("draw_h"))
+
+        def _on_overlay_mouse_drag(canvas: tk.Canvas, event):
+            if not bool(_overlay_drag_state.get("active")):
+                return
+            if _overlay_drag_state.get("canvas") is not canvas:
+                return
+
+            draw_w, draw_h = _overlay_drag_state.get("ctx_dims") or (0, 0)
+            if not draw_w or not draw_h:
+                return
+            start_x = int(_overlay_drag_state.get("start_x") or 0)
+            start_y = int(_overlay_drag_state.get("start_y") or 0)
+            dx = (int(event.x) - start_x) / float(draw_w)
+            dy = (int(event.y) - start_y) / float(draw_h)
+
+            x1, y1, x2, y2 = _overlay_drag_state.get("start_norm")
+            key = str(_overlay_drag_state.get("key") or "video_ocr_roi")
+            mode = str(_overlay_drag_state.get("mode") or "")
+            if mode == "move":
+                w = x2 - x1
+                h = y2 - y1
+                nx1 = max(0.0, min(1.0 - w, x1 + dx))
+                ny1 = max(0.0, min(1.0 - h, y1 + dy))
+                nx2 = nx1 + w
+                ny2 = ny1 + h
+            else:
+                handle = str(_overlay_drag_state.get("handle") or "se")
+                nx1, ny1, nx2, ny2 = x1, y1, x2, y2
+                if "w" in handle:
+                    nx1 = x1 + dx
+                if "e" in handle:
+                    nx2 = x2 + dx
+                if "n" in handle:
+                    ny1 = y1 + dy
+                if "s" in handle:
+                    ny2 = y2 + dy
+                nx1, ny1, nx2, ny2 = _sanitize_norm_roi((nx1, ny1, nx2, ny2), min_span=0.02)
+
+            _apply_roi_to_ui(key, (nx1, ny1, nx2, ny2))
+            _refresh_preview_guides_only()
+
+        def _on_overlay_mouse_up(_canvas: tk.Canvas, _event):
+            _overlay_drag_state["active"] = False
+            _overlay_drag_state["canvas"] = None
+
+        def _on_overlay_mouse_move(canvas: tk.Canvas, event):
+            if bool(_overlay_drag_state.get("active")) and _overlay_drag_state.get("canvas") is canvas:
+                mode = str(_overlay_drag_state.get("mode") or "")
+                if mode == "move":
+                    canvas.configure(cursor="fleur")
+                else:
+                    canvas.configure(cursor="sizing")
+                return
+
+            ctx = getattr(canvas, "_roi_render_ctx", None)
+            if not isinstance(ctx, dict):
+                canvas.configure(cursor="")
+                return
+            active_key = str(ctx.get("active_key") or "")
+            roi_item = (ctx.get("rois") or {}).get(active_key)
+            if not isinstance(roi_item, dict):
+                canvas.configure(cursor="")
+                return
+            rx1, ry1, rx2, ry2 = roi_item.get("rect")
+            x = int(event.x)
+            y = int(event.y)
+            hit_size = 10
+            for hx, hy in ((rx1, ry1), (rx2, ry1), (rx1, ry2), (rx2, ry2)):
+                if abs(x - hx) <= hit_size and abs(y - hy) <= hit_size:
+                    canvas.configure(cursor="sizing")
+                    return
+            if rx1 <= x <= rx2 and ry1 <= y <= ry2:
+                canvas.configure(cursor="fleur")
+                return
+            canvas.configure(cursor="")
+
+        def _bind_overlay_drag_events(canvas: tk.Canvas):
+            canvas.bind("<Button-1>", lambda e, c=canvas: _on_overlay_mouse_down(c, e))
+            canvas.bind("<B1-Motion>", lambda e, c=canvas: _on_overlay_mouse_drag(c, e))
+            canvas.bind("<ButtonRelease-1>", lambda e, c=canvas: _on_overlay_mouse_up(c, e))
+            canvas.bind("<Motion>", lambda e, c=canvas: _on_overlay_mouse_move(c, e))
+            canvas.bind("<Leave>", lambda _e, c=canvas: c.configure(cursor=""))
+
+        def _refresh_fullscreen_preview():
+            window = _preview_fullscreen_state.get("window")
+            canvas = _preview_fullscreen_state.get("canvas")
+            status_label = _preview_fullscreen_state.get("status")
+            if window is None or canvas is None:
+                return
+            if not bool(window.winfo_exists()):
+                _preview_fullscreen_state["window"] = None
+                _preview_fullscreen_state["canvas"] = None
+                _preview_fullscreen_state["status"] = None
+                return
+
+            payload = _last_preview_state.get("payload")
+            cfg = _last_preview_state.get("test_config") or _collect_video_settings()
+            max_w = max(640, int(canvas.winfo_width() or 1280) - 10)
+            max_h = max(360, int(canvas.winfo_height() or 720) - 10)
+            backend = _render_preview_into_canvas(
+                canvas,
+                payload if isinstance(payload, dict) else None,
+                cfg,
+                max_w,
+                max_h,
+                "No preview yet",
+            )
+            if status_label is not None:
+                status_label.configure(text=f"Fullscreen Preview | Backend: {backend} | {preview_debug_var.get()}")
+
+        def _open_fullscreen_preview():
+            if not isinstance(_last_preview_state.get("payload"), dict):
+                test_video_feed()
+                if not isinstance(_last_preview_state.get("payload"), dict):
+                    return
+
+            existing = _preview_fullscreen_state.get("window")
+            if existing is not None and bool(existing.winfo_exists()):
+                existing.deiconify()
+                existing.lift()
+                _refresh_fullscreen_preview()
+                return
+
+            fs = tk.Toplevel(dialog)
+            fs.title("OBS Fullscreen Preview")
+            fs.geometry("1280x820")
+            fs.transient(dialog)
+
+            top_bar = ttk.Frame(fs)
+            top_bar.grid(row=0, column=0, sticky="ew", padx=10, pady=(8, 4))
+            top_bar.columnconfigure(1, weight=1)
+            ttk.Button(top_bar, text="Refresh Frame", command=lambda: test_video_feed()).grid(row=0, column=0, sticky="w")
+            fs_status = ttk.Label(top_bar, text="Fullscreen Preview")
+            fs_status.grid(row=0, column=1, sticky="w", padx=(10, 0))
+            ttk.Label(top_bar, text="Edit ROI:").grid(row=0, column=2, sticky="e", padx=(10, 4))
+            ttk.Combobox(
+                top_bar,
+                textvariable=edit_roi_var,
+                values=("OCR ROI", "Sprite ROI", "Shiny ROI"),
+                width=10,
+                state="readonly",
+            ).grid(row=0, column=3, sticky="w")
+            ttk.Button(top_bar, text="Close", command=fs.destroy).grid(row=0, column=4, sticky="e", padx=(8, 0))
+
+            fs_canvas = tk.Canvas(fs, bg="#101010", highlightthickness=1, highlightbackground="#333333")
+            fs_canvas.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
+            _bind_overlay_drag_events(fs_canvas)
+
+            fs.columnconfigure(0, weight=1)
+            fs.rowconfigure(1, weight=1)
+
+            _preview_fullscreen_state["window"] = fs
+            _preview_fullscreen_state["canvas"] = fs_canvas
+            _preview_fullscreen_state["status"] = fs_status
+
+            fs.bind("<Configure>", lambda _e: _refresh_fullscreen_preview())
+            fs.bind("<Escape>", lambda _e: fs.destroy())
+            _refresh_fullscreen_preview()
+
+        _bind_overlay_drag_events(preview_canvas)
+
+        ttk.Button(controls_frame, text="Test OBS Feed", command=lambda: test_video_feed()).grid(row=0, column=0, sticky="w")
+        ttk.Button(controls_frame, text="Open Fullscreen Preview", command=_open_fullscreen_preview).grid(row=0, column=1, sticky="w", padx=(6, 0))
+        ttk.Label(controls_frame, text="Edit ROI:").grid(row=0, column=2, sticky="w", padx=(10, 0))
+        ttk.Combobox(
+            controls_frame,
+            textvariable=edit_roi_var,
+            values=("OCR ROI", "Sprite ROI", "Shiny ROI"),
+            width=10,
+            state="readonly",
+        ).grid(row=0, column=3, sticky="w", padx=(4, 0))
+        ttk.Checkbutton(
+            controls_frame,
+            text="Show OCR ROI",
+            variable=show_ocr_roi_var,
+            command=_refresh_preview_guides_only,
+        ).grid(row=0, column=4, sticky="w", padx=(10, 0))
+        ttk.Checkbutton(
+            controls_frame,
+            text="Show Sprite ROI",
+            variable=show_sprite_roi_var,
+            command=_refresh_preview_guides_only,
+        ).grid(row=0, column=5, sticky="w", padx=(8, 0))
+        ttk.Checkbutton(
+            controls_frame,
+            text="Show Shiny ROI",
+            variable=show_shiny_roi_var,
+            command=_refresh_preview_guides_only,
+        ).grid(row=0, column=6, sticky="w", padx=(8, 0))
+        ttk.Checkbutton(
+            controls_frame,
+            text="Show Grid",
+            variable=show_grid_var,
+            command=_refresh_preview_guides_only,
+        ).grid(row=0, column=7, sticky="w", padx=(8, 0))
+
+        edit_roi_var.trace_add("write", lambda *_args: _refresh_preview_guides_only())
+
+        default_profile_names = list(VIDEO_ROI_PRESETS.keys())
+        inferred_default_profile = _default_video_roi_profile_for_game(self.hunt_game_var.get().strip() or self.tracker.game_name or "")
+        stored_default_profile = str(self.config.get("video_roi_default_profile", "")).strip()
+        if stored_default_profile not in VIDEO_ROI_PRESETS:
+            stored_default_profile = inferred_default_profile if inferred_default_profile in VIDEO_ROI_PRESETS else "Generic Battle"
+
+        roi_default_profile_var = tk.StringVar(value=stored_default_profile)
+        roi_custom_profile_var = tk.StringVar(value="")
+
+        roi_tools_frame = ttk.LabelFrame(video_frame, text="ROI Defaults & Presets", padding="8")
+        roi_tools_frame.grid(row=18, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        roi_tools_frame.columnconfigure(1, weight=1)
+
+        ttk.Label(roi_tools_frame, text="Game Default:").grid(row=0, column=0, sticky="w")
+        roi_default_combo = ttk.Combobox(
+            roi_tools_frame,
+            textvariable=roi_default_profile_var,
+            values=tuple(default_profile_names),
+            state="readonly",
+            width=28,
+        )
+        roi_default_combo.grid(row=0, column=1, sticky="ew", padx=(8, 6))
+
+        def _current_roi_payload() -> Dict[str, str]:
+            return {
+                "ocr_roi": video_roi_entry.get().strip() or "0.05,0.70,0.95,0.96",
+                "sprite_roi": video_sprite_roi_entry.get().strip() or "0.56,0.14,0.92,0.62",
+                "shiny_roi": video_shiny_roi_entry.get().strip() or "0.58,0.16,0.92,0.52",
+            }
+
+        def _apply_roi_payload(payload: Dict[str, str]):
+            if not isinstance(payload, dict):
+                return
+            ocr = str(payload.get("ocr_roi") or "").strip()
+            sprite = str(payload.get("sprite_roi") or "").strip()
+            shiny = str(payload.get("shiny_roi") or "").strip()
+            if not (ocr and sprite and shiny):
+                return
+            video_roi_entry.delete(0, tk.END)
+            video_roi_entry.insert(0, ocr)
+            video_sprite_roi_entry.delete(0, tk.END)
+            video_sprite_roi_entry.insert(0, sprite)
+            video_shiny_roi_entry.delete(0, tk.END)
+            video_shiny_roi_entry.insert(0, shiny)
+            _commit_selected_scene_profile()
+            _refresh_scene_list(int(selected_scene_index_var.get()))
+            _refresh_preview_guides_only()
+
+        def _apply_selected_default_roi_profile():
+            profile_name = str(roi_default_profile_var.get() or "").strip()
+            payload = VIDEO_ROI_PRESETS.get(profile_name)
+            if payload is None:
+                return
+            _apply_roi_payload(payload)
+
+        def _apply_selected_default_roi_profile_all_scenes():
+            profile_name = str(roi_default_profile_var.get() or "").strip()
+            payload = VIDEO_ROI_PRESETS.get(profile_name)
+            if payload is None:
+                return
+            _commit_selected_scene_profile()
+            ocr = str(payload.get("ocr_roi") or "").strip()
+            sprite = str(payload.get("sprite_roi") or "").strip()
+            shiny = str(payload.get("shiny_roi") or "").strip()
+            if not (ocr and sprite and shiny):
+                return
+            for idx in range(len(scene_profiles)):
+                scene_profiles[idx]["ocr_roi"] = ocr
+                scene_profiles[idx]["sprite_roi"] = sprite
+                scene_profiles[idx]["shiny_roi"] = shiny
+            _refresh_scene_list(int(selected_scene_index_var.get()))
+            _refresh_preview_guides_only()
+
+        ttk.Button(roi_tools_frame, text="Apply", command=_apply_selected_default_roi_profile).grid(row=0, column=2, sticky="w")
+        ttk.Button(roi_tools_frame, text="Reset To Default", command=_apply_selected_default_roi_profile).grid(row=0, column=3, sticky="w", padx=(6, 0))
+        ttk.Button(roi_tools_frame, text="Apply To All Scenes", command=_apply_selected_default_roi_profile_all_scenes).grid(row=0, column=4, sticky="w", padx=(6, 0))
+
+        ttk.Label(roi_tools_frame, text="Custom Preset:").grid(row=1, column=0, sticky="w", pady=(8, 0))
+        roi_custom_combo = ttk.Combobox(
+            roi_tools_frame,
+            textvariable=roi_custom_profile_var,
+            values=tuple(sorted(custom_roi_presets.keys())),
+            state="readonly",
+            width=28,
+        )
+        roi_custom_combo.grid(row=1, column=1, sticky="ew", padx=(8, 6), pady=(8, 0))
+
+        def _refresh_custom_roi_combo_values():
+            names = sorted(custom_roi_presets.keys())
+            roi_custom_combo.configure(values=tuple(names))
+            current = str(roi_custom_profile_var.get() or "").strip()
+            if current not in custom_roi_presets:
+                roi_custom_profile_var.set(names[0] if names else "")
+
+        def _load_selected_custom_roi_profile():
+            name = str(roi_custom_profile_var.get() or "").strip()
+            payload = custom_roi_presets.get(name)
+            if payload is None:
+                return
+            _apply_roi_payload(payload)
+
+        def _save_current_as_custom_roi_profile():
+            initial = str(roi_custom_profile_var.get() or "").strip() or "My ROI"
+            name = simpledialog.askstring("Save ROI Preset", "Preset name:", initialvalue=initial, parent=dialog)
+            if name is None:
+                return
+            clean_name = name.strip()
+            if not clean_name:
+                messagebox.showwarning("Invalid Name", "Preset name cannot be empty.")
+                return
+            custom_roi_presets[clean_name] = _current_roi_payload()
+            _refresh_custom_roi_combo_values()
+            roi_custom_profile_var.set(clean_name)
+
+        def _export_roi_presets():
+            export_payload = {
+                "kind": "pokeachieve_video_roi_presets",
+                "version": 1,
+                "exported_at": datetime.now().isoformat(),
+                "default_profile": str(roi_default_profile_var.get() or "").strip() or "Generic Battle",
+                "custom_presets": {name: dict(payload) for name, payload in custom_roi_presets.items()},
+            }
+            default_file = f"video_roi_presets_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            output_path = filedialog.asksaveasfilename(
+                parent=dialog,
+                title="Export ROI Presets",
+                defaultextension=".json",
+                initialfile=default_file,
+                initialdir=str(self.data_dir),
+                filetypes=[("JSON", "*.json")],
+            )
+            if not output_path:
+                return
+            try:
+                with open(output_path, "w", encoding="utf-8") as handle:
+                    json.dump(export_payload, handle, indent=2)
+                messagebox.showinfo("ROI Presets Exported", f"Saved ROI presets to:\n{output_path}")
+            except OSError as exc:
+                messagebox.showerror("Export Failed", f"Could not export ROI presets:\n{exc}")
+
+        def _import_roi_presets():
+            input_path = filedialog.askopenfilename(
+                parent=dialog,
+                title="Import ROI Presets",
+                initialdir=str(self.data_dir),
+                filetypes=[("JSON", "*.json"), ("All files", "*.*")],
+            )
+            if not input_path:
+                return
+            try:
+                with open(input_path, "r", encoding="utf-8") as handle:
+                    raw = json.load(handle)
+            except (OSError, ValueError) as exc:
+                messagebox.showerror("Import Failed", f"Could not read preset file:\n{exc}")
+                return
+
+            imported_default = ""
+            candidate_presets: Dict[str, Dict[str, str]] = {}
+            if isinstance(raw, dict) and isinstance(raw.get("custom_presets"), dict):
+                imported_default = str(raw.get("default_profile") or "").strip()
+                for key, value in raw.get("custom_presets", {}).items():
+                    name = str(key or "").strip()
+                    payload = _normalize_roi_preset_payload(value)
+                    if name and payload:
+                        candidate_presets[name] = payload
+            elif isinstance(raw, dict):
+                for key, value in raw.items():
+                    name = str(key or "").strip()
+                    payload = _normalize_roi_preset_payload(value)
+                    if name and payload:
+                        candidate_presets[name] = payload
+            if not candidate_presets:
+                messagebox.showwarning("Nothing Imported", "No valid ROI presets found in file.")
+                return
+
+            collisions = [name for name in candidate_presets.keys() if name in custom_roi_presets]
+            allow_overwrite = True
+            if collisions:
+                allow_overwrite = messagebox.askyesno(
+                    "Overwrite Existing Presets?",
+                    f"{len(collisions)} preset name(s) already exist. Overwrite them?",
+                    parent=dialog,
+                )
+
+            imported_count = 0
+            skipped_count = 0
+            for name, payload in candidate_presets.items():
+                if name in custom_roi_presets and not allow_overwrite:
+                    skipped_count += 1
+                    continue
+                custom_roi_presets[name] = payload
+                imported_count += 1
+
+            if imported_default in VIDEO_ROI_PRESETS:
+                roi_default_profile_var.set(imported_default)
+
+            _refresh_custom_roi_combo_values()
+            messagebox.showinfo(
+                "ROI Presets Imported",
+                f"Imported: {imported_count}\nSkipped: {skipped_count}\nFile: {input_path}",
+                parent=dialog,
+            )
+
+        def _run_roi_calibration_wizard():
+            _commit_selected_scene_profile()
+            if not messagebox.askyesno(
+                "Calibration Wizard",
+                "Calibration captures multiple OBS frames and suggests sprite threshold + confirmations.\n\n"
+                "Stand in a live encounter before continuing.\nContinue?",
+                parent=dialog,
+            ):
+                return
+
+            sample_count = simpledialog.askinteger(
+                "Calibration Samples",
+                "How many frames to sample? (4-20)",
+                parent=dialog,
+                initialvalue=8,
+                minvalue=4,
+                maxvalue=20,
+            )
+            if sample_count is None:
+                return
+            delay_ms = simpledialog.askinteger(
+                "Calibration Delay",
+                "Delay between samples in milliseconds (60-1200)",
+                parent=dialog,
+                initialvalue=180,
+                minvalue=60,
+                maxvalue=1200,
+            )
+            if delay_ms is None:
+                return
+
+            test_config = dict(self.config)
+            test_config.update(_collect_video_settings())
+            analysis_game = self.hunt_game_var.get().strip() or self.tracker.game_name or ""
+            sample_scores: List[int] = []
+            sample_details: List[float] = []
+            sample_present = 0
+
+            progress = tk.Toplevel(dialog)
+            progress.title("Calibrating")
+            progress.transient(dialog)
+            progress.grab_set()
+            ttk.Label(progress, text=f"Capturing {sample_count} frame(s)...").grid(row=0, column=0, padx=12, pady=(10, 6), sticky="w")
+            progress_var = tk.StringVar(value="0 / 0")
+            ttk.Label(progress, textvariable=progress_var).grid(row=1, column=0, padx=12, pady=(0, 10), sticky="w")
+            progress.update_idletasks()
+
+            try:
+                for idx in range(int(sample_count)):
+                    progress_var.set(f"{idx + 1} / {sample_count}")
+                    progress.update_idletasks()
+                    payload = self.video_encounter_reader.capture_preview_frame(config_override=test_config)
+                    frame = payload.get("image") if isinstance(payload, dict) else None
+                    if frame is not None and PIL_AVAILABLE:
+                        analysis = self.video_encounter_reader.analyze_frame(frame, analysis_game)
+                        sample_scores.append(int(analysis.get("sprite_score") or 0))
+                        sample_details.append(float(analysis.get("sprite_detail_ratio") or 0.0))
+                        if bool(analysis.get("sprite_present")):
+                            sample_present += 1
+                    if idx < int(sample_count) - 1:
+                        time.sleep(float(delay_ms) / 1000.0)
+            finally:
+                progress.destroy()
+
+            if not sample_scores:
+                messagebox.showerror("Calibration Failed", "No frames were captured. Verify OBS and source settings.", parent=dialog)
+                return
+
+            scores_sorted = sorted(int(v) for v in sample_scores)
+            details_sorted = sorted(float(v) for v in sample_details)
+
+            def _pct(values: List[float], pct: float) -> float:
+                if not values:
+                    return 0.0
+                if len(values) == 1:
+                    return float(values[0])
+                pos = max(0.0, min(1.0, float(pct))) * float(len(values) - 1)
+                lo = int(pos)
+                hi = min(len(values) - 1, lo + 1)
+                frac = pos - float(lo)
+                return float(values[lo] * (1.0 - frac) + values[hi] * frac)
+
+            q25 = _pct([float(v) for v in scores_sorted], 0.25)
+            q50 = _pct([float(v) for v in scores_sorted], 0.50)
+            q75 = _pct([float(v) for v in scores_sorted], 0.75)
+            spread = max(0.0, q75 - q25)
+            hit_rate = float(sample_present) / float(len(sample_scores))
+
+            suggested_threshold = int(max(55.0, min(280.0, round(q25 * 0.88))))
+            if hit_rate < 0.55:
+                suggested_threshold = int(max(50.0, min(260.0, round(q50 * 0.78))))
+            suggested_confirmations = 3
+            if spread >= 42.0:
+                suggested_confirmations = 4
+            if hit_rate < 0.35:
+                suggested_confirmations = 5
+            suggested_confirmations = max(2, min(6, int(suggested_confirmations)))
+
+            current_threshold = int(test_config.get("video_sprite_presence_threshold", 125) or 125)
+            current_conf = int(test_config.get("video_sprite_confirmations", 3) or 3)
+            apply_changes = messagebox.askyesno(
+                "Calibration Result",
+                "Calibration complete.\n\n"
+                f"Samples: {len(sample_scores)}\n"
+                f"Sprite present hit-rate: {hit_rate * 100.0:.1f}%\n"
+                f"Score quartiles: Q25={q25:.1f}, Median={q50:.1f}, Q75={q75:.1f}\n"
+                f"Detail median: {_pct(details_sorted, 0.50):.3f}\n\n"
+                f"Current threshold: {current_threshold}\n"
+                f"Suggested threshold: {suggested_threshold}\n"
+                f"Current confirmations: {current_conf}\n"
+                f"Suggested confirmations: {suggested_confirmations}\n\n"
+                "Apply suggested values now?",
+                parent=dialog,
+            )
+            if not apply_changes:
+                return
+
+            video_sprite_threshold_entry.delete(0, tk.END)
+            video_sprite_threshold_entry.insert(0, str(suggested_threshold))
+            video_sprite_confirm_entry.delete(0, tk.END)
+            video_sprite_confirm_entry.insert(0, str(suggested_confirmations))
+            test_video_feed()
+
+        ttk.Button(roi_tools_frame, text="Load", command=_load_selected_custom_roi_profile).grid(row=1, column=2, sticky="w", pady=(8, 0))
+        ttk.Button(roi_tools_frame, text="Save Current", command=_save_current_as_custom_roi_profile).grid(row=1, column=3, sticky="w", padx=(6, 0), pady=(8, 0))
+        ttk.Button(roi_tools_frame, text="Export", command=_export_roi_presets).grid(row=1, column=4, sticky="w", padx=(6, 0), pady=(8, 0))
+        ttk.Button(roi_tools_frame, text="Import", command=_import_roi_presets).grid(row=1, column=5, sticky="w", padx=(6, 0), pady=(8, 0))
+        ttk.Button(roi_tools_frame, text="Calibration Wizard", command=_run_roi_calibration_wizard).grid(row=2, column=0, columnspan=2, sticky="w", pady=(8, 0))
+
+        _refresh_custom_roi_combo_values()
+
         ttk.Label(api_frame, text="Platform URL:").grid(row=0, column=0, sticky="w", pady=5)
         url_entry = ttk.Entry(api_frame)
         url_entry.insert(0, self.config.get("api_url", "https://pokeachieve.com"))
         url_entry.grid(row=0, column=1, sticky="ew", padx=(10, 0), pady=5)
-        
+
         ttk.Label(api_frame, text="API Key:").grid(row=1, column=0, sticky="w", pady=5)
         key_entry = ttk.Entry(api_frame, show="*")
         key_entry.insert(0, self.config.get("api_key", ""))
         key_entry.grid(row=1, column=1, sticky="ew", padx=(10, 0), pady=5)
-        
+
+        def _build_scene_profiles_for_save() -> List[Dict[str, Any]]:
+            _commit_selected_scene_profile()
+            saved: List[Dict[str, Any]] = []
+            for idx, profile in enumerate(scene_profiles):
+                if len(saved) >= 25:
+                    break
+                source_name = str(profile.get("source_name") or "").strip()
+                if not source_name:
+                    continue
+                saved.append(
+                    {
+                        "name": str(profile.get("name") or f"Scene {idx + 1}").strip() or f"Scene {idx + 1}",
+                        "source_name": source_name,
+                        "enabled": _coerce_bool(profile.get("enabled", True), True),
+                        "ocr_roi": str(profile.get("ocr_roi") or "0.05,0.70,0.95,0.96").strip() or "0.05,0.70,0.95,0.96",
+                        "sprite_roi": str(profile.get("sprite_roi") or "0.56,0.14,0.92,0.62").strip() or "0.56,0.14,0.92,0.62",
+                        "shiny_roi": str(profile.get("shiny_roi") or "0.58,0.16,0.92,0.52").strip() or "0.58,0.16,0.92,0.52",
+                    }
+                )
+            if not saved:
+                saved.append(
+                    {
+                        "name": "Scene 1",
+                        "source_name": "Game Capture",
+                        "enabled": True,
+                        "ocr_roi": "0.05,0.70,0.95,0.96",
+                        "sprite_roi": "0.56,0.14,0.92,0.62",
+                        "shiny_roi": "0.58,0.16,0.92,0.52",
+                    }
+                )
+            return saved
+        def _collect_video_settings() -> Dict[str, Any]:
+            scene_profiles_for_save = _build_scene_profiles_for_save()
+            primary_profile = scene_profiles_for_save[max(0, min(len(scene_profiles_for_save) - 1, int(selected_scene_index_var.get()))) if scene_profiles_for_save else 0]
+            settings: Dict[str, Any] = {
+                "video_encounter_enabled": bool(video_enabled_var.get()),
+                "video_obs_host": video_host_entry.get().strip() or "127.0.0.1",
+                "video_obs_password": video_password_entry.get().strip(),
+                "video_obs_source_name": str(primary_profile.get("source_name") or ""),
+                "video_ocr_roi": str(primary_profile.get("ocr_roi") or "0.05,0.70,0.95,0.96"),
+                "video_sprite_roi": str(primary_profile.get("sprite_roi") or "0.56,0.14,0.92,0.62"),
+                "video_tesseract_cmd": video_tesseract_entry.get().strip(),
+                "video_encounter_detection_mode": _detection_mode_reverse.get(str(video_detection_mode_var.get() or ""), "sprite"),
+                "video_shiny_detection_enabled": bool(video_shiny_enabled_var.get()),
+                "video_shiny_roi": str(primary_profile.get("shiny_roi") or "0.58,0.16,0.92,0.52"),
+                "video_obs_scene_profiles": scene_profiles_for_save,
+                "video_roi_default_profile": str(roi_default_profile_var.get() or "").strip() or "Generic Battle",
+                "video_roi_custom_presets": {name: dict(payload) for name, payload in custom_roi_presets.items()},
+            }
+            try:
+                settings["video_obs_port"] = int(video_port_entry.get())
+            except ValueError:
+                settings["video_obs_port"] = 4455
+            try:
+                settings["video_ocr_confirmations"] = int(video_confirm_entry.get())
+            except ValueError:
+                settings["video_ocr_confirmations"] = 2
+            try:
+                settings["video_sprite_confirmations"] = int(video_sprite_confirm_entry.get())
+            except ValueError:
+                settings["video_sprite_confirmations"] = 3
+            try:
+                settings["video_sprite_presence_threshold"] = int(video_sprite_threshold_entry.get())
+            except ValueError:
+                settings["video_sprite_presence_threshold"] = 125
+            try:
+                settings["video_shiny_score_threshold"] = int(video_shiny_threshold_entry.get())
+            except ValueError:
+                settings["video_shiny_score_threshold"] = 38
+            try:
+                settings["video_shiny_burst_delta"] = int(video_shiny_burst_entry.get())
+            except ValueError:
+                settings["video_shiny_burst_delta"] = 12
+            try:
+                settings["video_shiny_probe_frames"] = int(video_shiny_frames_entry.get())
+            except ValueError:
+                settings["video_shiny_probe_frames"] = 2
+            try:
+                settings["video_shiny_probe_delay_ms"] = int(video_shiny_delay_entry.get())
+            except ValueError:
+                settings["video_shiny_probe_delay_ms"] = 120
+            return settings
+
+        def test_video_feed():
+            test_config = dict(self.config)
+            test_config.update(_collect_video_settings())
+
+            preview_payload = self.video_encounter_reader.capture_preview_frame(config_override=test_config)
+            meta = self.video_encounter_reader.get_last_meta()
+            if not isinstance(preview_payload, dict):
+                reason = str(meta.get("reason") or "unknown")
+                detail = str(meta.get("detail") or meta.get("error") or "").strip()
+                hint = str(meta.get("install_hint") or "").strip()
+                status_text = f"Preview failed: {reason}."
+                if detail:
+                    status_text += f" Detail: {detail}."
+                if hint:
+                    status_text += f" {hint}."
+                status_text += " Verify OBS host/port/password/source and restart the tracker after installing dependencies."
+                preview_status_var.set(status_text)
+                mode_raw = str(test_config.get("video_encounter_detection_mode", "sprite") or "sprite").strip().lower()
+                mode_name = "text" if mode_raw in {"text", "ocr", "text_ocr"} else "sprite"
+                preview_debug_var.set(f"Detection Debug | mode={mode_name} | state=ERROR | reason={reason}")
+                _last_preview_state["payload"] = None
+                _last_preview_state["test_config"] = test_config
+                _last_preview_state["analysis"] = None
+                _last_preview_state["display_backend"] = "none"
+                _last_preview_state["frame_width"] = 0
+                _last_preview_state["frame_height"] = 0
+                _last_preview_state["debug_signature"] = ""
+                _last_preview_state["debug_count"] = 0
+                _render_preview_into_canvas(
+                    preview_canvas,
+                    None,
+                    test_config,
+                    preview_canvas_width,
+                    preview_canvas_height,
+                    "No preview",
+                )
+                _refresh_fullscreen_preview()
+                log_event(
+                    logging.WARNING,
+                    "video_preview_failed",
+                    reason=reason,
+                    detail=detail,
+                    hint=hint,
+                    obs_host=str(test_config.get("video_obs_host") or ""),
+                    obs_port=int(test_config.get("video_obs_port") or 0),
+                    obs_source=str(test_config.get("video_obs_source_name") or ""),
+                )
+                return
+
+            frame = preview_payload.get("image")
+            frame_width = int(preview_payload.get("width") or 0)
+            frame_height = int(preview_payload.get("height") or 0)
+
+            analysis_game = self.hunt_game_var.get().strip() or self.tracker.game_name or ""
+            analysis = {
+                "species_id": 0,
+                "species_name": "",
+                "level": None,
+                "shiny": False,
+                "shiny_score": 0,
+                "sprite_present": False,
+                "sprite_score": 0,
+            }
+            if frame is not None and PIL_AVAILABLE:
+                analysis = self.video_encounter_reader.analyze_frame(frame, analysis_game)
+
+            species_text = "OCR unavailable"
+            if frame is not None and PIL_AVAILABLE:
+                if PYTESSERACT_AVAILABLE:
+                    species_text = "OCR: no encounter text"
+                    if int(analysis.get("species_id") or 0) > 0:
+                        species_text = f"OCR: {analysis.get('species_name')} Lv.{analysis.get('level') or '?'}"
+                else:
+                    species_text = "OCR disabled (pytesseract missing)"
+
+            sprite_state = "Sprite: present" if bool(analysis.get("sprite_present")) else "Sprite: not detected"
+            sprite_score = int(analysis.get("sprite_score") or 0)
+            shiny_state = "Shiny likely" if bool(analysis.get("shiny")) else "Shiny not detected"
+            shiny_score = int(analysis.get("shiny_score") or 0)
+
+            display_backend = _render_preview_into_canvas(
+                preview_canvas,
+                preview_payload,
+                test_config,
+                preview_canvas_width,
+                preview_canvas_height,
+                "No preview yet",
+            )
+            _last_preview_state["payload"] = preview_payload
+            _last_preview_state["test_config"] = test_config
+            _last_preview_state["analysis"] = analysis
+            _last_preview_state["display_backend"] = display_backend
+            _last_preview_state["frame_width"] = frame_width
+            _last_preview_state["frame_height"] = frame_height
+
+            _update_preview_debug_strip(test_config, analysis, meta)
+            preview_status_var.set(
+                f"Frame OK ({frame_width}x{frame_height}) | {sprite_state} (score {sprite_score}) | {species_text} | {shiny_state} (score {shiny_score})"
+            )
+            _refresh_fullscreen_preview()
+
+            log_event(
+                logging.INFO,
+                "video_preview_ok",
+                frame_width=frame_width,
+                frame_height=frame_height,
+                display_backend=display_backend,
+                pil_available=bool(PIL_AVAILABLE),
+                pytesseract_available=bool(PYTESSERACT_AVAILABLE),
+                obs_host=str(test_config.get("video_obs_host") or ""),
+                obs_port=int(test_config.get("video_obs_port") or 0),
+                obs_source=str(test_config.get("video_obs_source_name") or ""),
+            )
+
         def test_api():
             test_api = PokeAchieveAPI(url_entry.get(), key_entry.get())
             success, message = test_api.test_auth()
@@ -12839,9 +15589,9 @@ class PokeAchieveGUI:
                 messagebox.showinfo("Success", f"API connection successful!\n{message}")
             else:
                 messagebox.showerror("Failed", f"API connection failed:\n{message}")
-        
+
         ttk.Button(api_frame, text="Test Connection", command=test_api).grid(row=2, column=0, columnspan=2, pady=10)
-        
+
         def save():
             normalized_url = PokeAchieveAPI.normalize_base_url(url_entry.get())
             self.config["api_url"] = normalized_url
@@ -12853,7 +15603,10 @@ class PokeAchieveGUI:
                 self.config["retroarch_port"] = 55355
             self.retroarch.host = self.config["retroarch_host"]
             self.retroarch.port = int(self.config["retroarch_port"])
-            
+
+            self.config.update(_collect_video_settings())
+            self.video_encounter_reader.update_config(self.config)
+
             if self.config["api_key"]:
                 self.api = PokeAchieveAPI(self.config["api_url"], self.config["api_key"])
                 self.tracker.api = self.api
@@ -12865,16 +15618,27 @@ class PokeAchieveGUI:
                 self._stop_api_worker()
 
             self._save_config()
+            if bool(self.config.get("video_encounter_enabled", False)):
+                if not self.video_encounter_reader.is_ready():
+                    video_meta = self.video_encounter_reader.get_last_meta()
+                    self._log(
+                        f"Video encounter mode not ready: {video_meta.get('reason')}",
+                        "warning",
+                    )
             if normalized_url != (url_entry.get() or "").strip():
                 self._log(f"Normalized API URL to {normalized_url}", "info")
             self._log("Settings saved")
             dialog.destroy()
             self._test_api_connection()
-        
-        ttk.Button(dialog, text="Save", command=save).grid(row=5, column=0, pady=10)
-        
+
+        button_row = ttk.Frame(dialog)
+        button_row.grid(row=1, column=0, sticky="e", padx=10, pady=10)
+        ttk.Button(button_row, text="Help", command=lambda: self._show_settings_help_dialog(dialog)).grid(row=0, column=0, padx=(0, 8))
+        ttk.Button(button_row, text="Save", command=save).grid(row=0, column=1)
+
         dialog.columnconfigure(0, weight=1)
-    
+        dialog.rowconfigure(0, weight=1)
+
     def _test_api_connection(self):
         """Test API connection"""
         if self.api:
@@ -12902,6 +15666,37 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
