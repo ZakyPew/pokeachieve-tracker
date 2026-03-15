@@ -15,6 +15,7 @@ import os
 import sys
 import base64
 import io
+import math
 import difflib
 from collections import Counter, deque
 import urllib.request
@@ -88,6 +89,18 @@ except Exception as exc:
     PYTESSERACT_AVAILABLE = False
     PYTESSERACT_IMPORT_ERROR = str(exc)
 
+ONNXRUNTIME_IMPORT_ERROR = ""
+onnxruntime = None
+np = None
+try:
+    import onnxruntime  # type: ignore
+except Exception as exc:
+    ONNXRUNTIME_IMPORT_ERROR = str(exc)
+try:
+    import numpy as np  # type: ignore
+except Exception:
+    np = None
+
 VIDEO_ROI_PRESETS: Dict[str, Dict[str, str]] = {
     "FireRed / LeafGreen": {
         "ocr_roi": "0.05,0.70,0.95,0.96",
@@ -119,6 +132,15 @@ VIDEO_ROI_PRESETS: Dict[str, Dict[str, str]] = {
         "sprite_roi": "0.52,0.14,0.92,0.64",
         "shiny_roi": "0.58,0.16,0.92,0.52",
     },
+}
+
+VIDEO_NAMEPLATE_ROI_PRESETS: Dict[str, str] = {
+    "FireRed / LeafGreen": "0.02,0.04,0.46,0.17",
+    "Soft Reset (Sprite-tight)": "0.02,0.04,0.46,0.17",
+    "Emerald": "0.02,0.04,0.46,0.17",
+    "Ruby / Sapphire": "0.02,0.04,0.46,0.17",
+    "Gen 2 (G/S/C)": "0.03,0.06,0.60,0.20",
+    "Generic Battle": "0.02,0.04,0.48,0.24",
 }
 
 VIDEO_ROI_GAME_PROFILE_MAP: Dict[str, str] = {
@@ -164,6 +186,10 @@ def _normalize_roi_preset_payload(raw: object) -> Optional[Dict[str, str]]:
     }
 
 
+
+def _default_video_nameplate_roi_for_game(game_name: str) -> str:
+    profile = _default_video_roi_profile_for_game(game_name)
+    return str(VIDEO_NAMEPLATE_ROI_PRESETS.get(profile) or VIDEO_NAMEPLATE_ROI_PRESETS["Generic Battle"])
 def _coerce_bool(value: object, default: bool = False) -> bool:
     if isinstance(value, bool):
         return bool(value)
@@ -175,6 +201,23 @@ def _coerce_bool(value: object, default: bool = False) -> bool:
     if text in {"0", "false", "no", "off", "disabled"}:
         return False
     return bool(default)
+
+
+def _is_supported_video_game_name(game_name: str) -> bool:
+    lowered = str(game_name or "").strip().lower()
+    if not lowered:
+        return False
+    canonical = lowered.replace("version", "").replace("pokemon", "").strip()
+    markers = (
+        "firered", "fire red", "leafgreen", "leaf green",
+        "emerald", "ruby", "sapphire",
+        "gold", "silver", "crystal",
+        "red", "blue", "yellow",
+        "x", "y",
+    )
+    if any(marker == canonical or marker in lowered for marker in markers):
+        return True
+    return lowered.startswith("pokemon ")
 
 LOGGER = logging.getLogger("pokeachieve_tracker")
 if not LOGGER.handlers:
@@ -1518,6 +1561,38 @@ class OBSVideoEncounterReader:
         self._max_scene_profiles = 25
         self._sprite_last_seen_signature = ""
         self._sprite_last_seen_at = 0.0
+        self._sprite_species_memory: Dict[str, Dict[str, Tuple[int, str, float]]] = {}
+        self._sprite_memory_limit = 240
+        self._sprite_scene_state: Dict[str, Dict[str, float]] = {}
+        self._sprite_absent_since = 0.0
+        self._unknown_sprite_key = ""
+        self._unknown_sprite_since = 0.0
+        self._scene_encounter_state: Dict[str, Dict[str, object]] = {}
+        self._scene_species_lock_state: Dict[str, Dict[str, object]] = {}
+        self._scene_sprite_roi_memory: Dict[str, Dict[str, object]] = {}
+        self._scene_encounter_seq = 0
+        self._sprite_reference_signature_cache: Dict[Tuple[str, int], List[str]] = {}
+        self._sprite_reference_missing: Set[Tuple[str, int]] = set()
+        self._sprite_reference_template_cache: Dict[Tuple[str, int], List[Dict[str, object]]] = {}
+        self._sprite_reference_template_missing: Set[Tuple[str, int]] = set()
+        self._sprite_last_signature_candidates: List[str] = []
+        self._sprite_last_foreground_sprite = None
+        self._sprite_last_area_ratio = 0.0
+        self._sprite_last_coverage_ratio = 0.0
+        self._sprite_last_roi: Tuple[int, int, int, int] = (0, 0, 0, 0)
+        self._sprite_last_match_debug: Dict[str, object] = {}
+        self._debug_frame_last_dump_at = 0.0
+        self._debug_frame_dump_count = 0
+        self._ai_species_scene_state: Dict[str, Dict[str, object]] = {}
+        self._ai_species_model_session = None
+        self._ai_species_model_path = ""
+        self._ai_species_model_labels: Dict[int, int] = {}
+        self._ai_species_model_input = ""
+        self._ai_species_model_output = ""
+        self._ai_dataset_last_capture_at = 0.0
+        self._ai_dataset_token_counts: Dict[str, int] = {}
+        self._ai_dataset_session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self._ai_source_profile_cache: Dict[str, Dict[str, float]] = {}
         self._rebuild_species_lookup()
 
     def update_config(self, config: Optional[Dict[str, Any]] = None):
@@ -1527,6 +1602,23 @@ class OBSVideoEncounterReader:
         self._species_lookup = species_lookup if isinstance(species_lookup, dict) else {}
         self._rebuild_species_lookup()
 
+    def warm_sprite_reference_cache(self, game_name: str, species_ids: List[int]):
+        if not isinstance(species_ids, (list, tuple, set)):
+            return
+        limit = max(1, min(256, self._cfg_int("video_sprite_prewarm_limit", 96)))
+        warmed = 0
+        for raw_species_id in species_ids:
+            if warmed >= limit:
+                break
+            try:
+                species_id = int(raw_species_id)
+            except (TypeError, ValueError):
+                continue
+            if species_id <= 0:
+                continue
+            self._sprite_reference_signatures_for_species(game_name, species_id)
+            warmed += 1
+
     def get_last_meta(self) -> Dict[str, object]:
         return dict(self._last_meta) if isinstance(self._last_meta, dict) else {}
 
@@ -1534,10 +1626,79 @@ class OBSVideoEncounterReader:
         return str(self._last_error or "")
 
     def _set_meta(self, reason: str, **extra):
+        if isinstance(extra, dict) and "reason" in extra:
+            extra.pop("reason", None)
         payload: Dict[str, object] = {"reason": str(reason)}
         payload.update(extra)
         self._last_meta = payload
 
+    def _debug_dump_frame(
+        self,
+        image,
+        reason: str,
+        game_name: str = "",
+        scene_name: str = "",
+        source_name: str = "",
+        extra: Optional[Dict[str, object]] = None,
+    ):
+        if image is None or not PIL_AVAILABLE:
+            return
+        if not self._cfg_bool("video_debug_capture_enabled", False):
+            return
+
+        now = float(time.monotonic())
+        min_interval = max(0.2, min(30.0, self._cfg_float("video_debug_capture_interval_sec", 2.0)))
+        if (now - float(self._debug_frame_last_dump_at or 0.0)) < min_interval:
+            return
+
+        max_dumps = max(10, min(5000, self._cfg_int("video_debug_capture_max_files", 400)))
+        if int(self._debug_frame_dump_count or 0) >= int(max_dumps):
+            return
+
+        try:
+            debug_dir_raw = self._cfg_str("video_debug_capture_dir", "")
+            if debug_dir_raw:
+                debug_dir = Path(debug_dir_raw).expanduser()
+            else:
+                debug_dir = Path.cwd() / "debug" / "video_detection"
+            debug_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            return
+
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        safe_reason = re.sub(r"[^a-z0-9_\-]+", "_", str(reason or "unknown").strip().lower())[:48] or "unknown"
+        safe_game = re.sub(r"[^a-z0-9_\-]+", "_", str(game_name or "game").strip().lower())[:32] or "game"
+        safe_scene = re.sub(r"[^a-z0-9_\-]+", "_", str(scene_name or source_name or "scene").strip().lower())[:32] or "scene"
+        png_path = debug_dir / f"{stamp}_{safe_game}_{safe_scene}_{safe_reason}.png"
+
+        try:
+            image.save(str(png_path), format="PNG")
+        except Exception:
+            return
+
+        payload: Dict[str, object] = {
+            "timestamp": datetime.now().isoformat(),
+            "reason": str(reason or ""),
+            "game": str(game_name or ""),
+            "scene": str(scene_name or ""),
+            "source_name": str(source_name or ""),
+            "image": str(png_path),
+        }
+        if isinstance(extra, dict):
+            for key, value in extra.items():
+                if key in payload:
+                    continue
+                payload[str(key)] = value
+
+        try:
+            manifest = debug_dir / "captures.jsonl"
+            with manifest.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(payload, ensure_ascii=True) + "\n")
+        except Exception:
+            pass
+
+        self._debug_frame_last_dump_at = now
+        self._debug_frame_dump_count = int(self._debug_frame_dump_count or 0) + 1
     def _cfg_bool(self, key: str, default: bool = False) -> bool:
         raw = self.config.get(key, default)
         if isinstance(raw, bool):
@@ -1564,6 +1725,211 @@ class OBSVideoEncounterReader:
         raw = self.config.get(key, default)
         return str(raw).strip() if raw is not None else str(default)
 
+    
+    def _species_engine(self) -> str:
+        raw = self._cfg_str("video_species_engine", "reference").strip().lower()
+        if raw in {"onnx", "ai_v2", "hybrid", "reference"}:
+            return raw
+        return "reference"
+
+    def _extract_sprite_crop(self, image, sprite_roi_raw: Optional[str] = None):
+        if image is None or not PIL_AVAILABLE:
+            return None
+        try:
+            roi = self._sprite_roi(image, sprite_roi_raw=sprite_roi_raw)
+            self._sprite_last_roi = tuple(int(v) for v in roi)
+            crop = image.crop(roi)
+            if int(getattr(crop, "width", 0) or 0) <= 2 or int(getattr(crop, "height", 0) or 0) <= 2:
+                return None
+            return crop
+        except Exception:
+            return None
+
+    def _load_ai_species_model(self) -> bool:
+        if onnxruntime is None or np is None:
+            return False
+        model_path = self._cfg_str("video_ai_species_model_path", "")
+        if not model_path:
+            return False
+        model_path_obj = Path(model_path).expanduser()
+        if not model_path_obj.exists():
+            return False
+        resolved = str(model_path_obj.resolve())
+        if self._ai_species_model_session is not None and str(self._ai_species_model_path) == resolved:
+            return True
+        try:
+            providers = ["CPUExecutionProvider"]
+            sess = onnxruntime.InferenceSession(resolved, providers=providers)
+            inputs = sess.get_inputs()
+            outputs = sess.get_outputs()
+            if not inputs or not outputs:
+                return False
+            self._ai_species_model_session = sess
+            self._ai_species_model_path = str(resolved)
+            self._ai_species_model_input = str(inputs[0].name)
+            self._ai_species_model_output = str(outputs[0].name)
+        except Exception:
+            self._ai_species_model_session = None
+            self._ai_species_model_path = ""
+            self._ai_species_model_input = ""
+            self._ai_species_model_output = ""
+            return False
+
+        labels_raw = self._cfg_str("video_ai_species_model_labels", "")
+        labels: Dict[int, int] = {}
+        if labels_raw:
+            try:
+                parsed = json.loads(labels_raw)
+                if isinstance(parsed, dict):
+                    for k, v in parsed.items():
+                        try:
+                            labels[int(k)] = int(v)
+                        except Exception:
+                            continue
+            except Exception:
+                labels = {}
+        self._ai_species_model_labels = labels
+        return True
+
+    def _predict_species_from_onnx(self, sprite_crop, candidate_ids: List[int]) -> Tuple[int, float]:
+        if sprite_crop is None or not candidate_ids:
+            return 0, 0.0
+        if not self._load_ai_species_model():
+            return 0, 0.0
+        if self._ai_species_model_session is None or np is None:
+            return 0, 0.0
+        try:
+            gray = ImageOps.grayscale(sprite_crop)
+            gray = ImageOps.autocontrast(gray)
+            try:
+                resample = Image.Resampling.BILINEAR
+            except Exception:
+                resample = Image.BILINEAR
+            size = max(24, min(128, self._cfg_int("video_ai_species_model_input_size", 64)))
+            x = gray.resize((size, size), resample)
+            arr = np.asarray(x, dtype=np.float32) / 255.0
+            arr = arr.reshape(1, 1, size, size)
+            outputs = self._ai_species_model_session.run([self._ai_species_model_output], {self._ai_species_model_input: arr})
+            if not outputs:
+                return 0, 0.0
+            logits = np.asarray(outputs[0]).reshape(-1)
+            if logits.size <= 0:
+                return 0, 0.0
+
+            idx = int(np.argmax(logits))
+            max_logit = float(logits[idx])
+            conf = 1.0 / (1.0 + math.exp(-max_logit))
+
+            mapped_species = int(self._ai_species_model_labels.get(idx, idx))
+            if mapped_species not in set(int(x) for x in candidate_ids):
+                return 0, float(conf)
+            return int(mapped_species), float(max(0.0, min(1.0, conf)))
+        except Exception:
+            return 0, 0.0
+
+    def _capture_ai_dataset_sample(
+        self,
+        image,
+        game_name: str,
+        source_name: str,
+        scene_key: str,
+        encounter_token: int,
+        sprite_signature: str,
+        species_id: int,
+        species_source: str,
+        stage: str,
+        sprite_score: int,
+        sprite_distance: int,
+        sprite_margin: int,
+        ai_confidence: float,
+    ):
+        if image is None or not PIL_AVAILABLE:
+            return
+        if not self._cfg_bool("video_ai_dataset_capture_enabled", False):
+            return
+        now = float(time.monotonic())
+        interval_sec = max(0.10, min(10.0, self._cfg_float("video_ai_dataset_capture_interval_sec", 0.35)))
+        if (now - float(self._ai_dataset_last_capture_at or 0.0)) < interval_sec:
+            return
+
+        root_raw = self._cfg_str("video_ai_dataset_capture_dir", "")
+        if root_raw:
+            root = Path(root_raw).expanduser()
+        else:
+            root = Path.cwd() / "debug" / "ai_dataset"
+
+        try:
+            root.mkdir(parents=True, exist_ok=True)
+            img_dir = root / "images"
+            img_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            return
+
+        key = f"{scene_key}:{int(encounter_token)}:{str(stage)}"
+        count = int(self._ai_dataset_token_counts.get(key, 0) or 0) + 1
+        self._ai_dataset_token_counts[key] = int(count)
+
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        safe_game = re.sub(r"[^a-z0-9_\-]+", "_", str(game_name or "game").lower())[:32] or "game"
+        safe_source = re.sub(r"[^a-z0-9_\-]+", "_", str(source_name or "source").lower())[:32] or "source"
+        img_name = f"{self._ai_dataset_session_id}_{stamp}_{safe_game}_{safe_source}_t{int(encounter_token)}_{str(stage)}_{int(count)}.png"
+        img_path = img_dir / img_name
+        try:
+            image.save(str(img_path), format="PNG")
+        except Exception:
+            return
+
+        row = {
+            "timestamp": datetime.now().isoformat(),
+            "session_id": str(self._ai_dataset_session_id),
+            "game": str(game_name or ""),
+            "source": str(source_name or ""),
+            "scene_key": str(scene_key or ""),
+            "encounter_token": int(encounter_token),
+            "stage": str(stage or ""),
+            "species_id": int(species_id),
+            "species_source": str(species_source or ""),
+            "sprite_signature": str(sprite_signature or ""),
+            "sprite_score": int(sprite_score),
+            "sprite_distance": int(sprite_distance),
+            "sprite_margin": int(sprite_margin),
+            "ai_confidence": float(ai_confidence),
+            "image": str(img_path),
+        }
+        try:
+            with (root / "manifest.jsonl").open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(row, ensure_ascii=True) + "\n")
+            self._ai_dataset_last_capture_at = float(now)
+        except Exception:
+            pass
+
+    def _register_context_loss(self, game_name: str, source_name: str, context_ok: bool):
+        key = self._scene_encounter_key(game_name, source_name)
+        state = self._scene_encounter_state.setdefault(key, {})
+        now = float(time.monotonic())
+        if bool(context_ok):
+            state["context_missing_since"] = 0.0
+            state["context_lost"] = False
+            return
+        missing_since = float(state.get("context_missing_since", 0.0) or 0.0)
+        if missing_since <= 0.0:
+            state["context_missing_since"] = float(now)
+            state["context_lost"] = False
+            return
+        release_sec = max(0.20, min(8.0, self._cfg_float("video_context_loss_release_sec", 1.30)))
+        context_lost = bool((now - float(missing_since)) >= float(release_sec))
+        state["context_lost"] = bool(context_lost)
+
+        # Do not end encounters by context loss alone unless explicitly enabled.
+        if not bool(self._cfg_bool("video_context_loss_end_encounter", True)):
+            return
+        if not bool(context_lost):
+            return
+
+        last_seen_at = float(state.get("last_seen_at", 0.0) or 0.0)
+        if last_seen_at > 0.0 and (now - float(last_seen_at)) < float(release_sec):
+            return
+        self._end_scene_encounter_for_source(game_name, source_name)
     def is_enabled(self) -> bool:
         return self._cfg_bool("video_encounter_enabled", False)
 
@@ -1614,6 +1980,8 @@ class OBSVideoEncounterReader:
                 ocr_roi = str(raw.get("ocr_roi") or "0.05,0.70,0.95,0.96").strip() or "0.05,0.70,0.95,0.96"
                 sprite_roi = str(raw.get("sprite_roi") or "0.56,0.14,0.92,0.62").strip() or "0.56,0.14,0.92,0.62"
                 shiny_roi = str(raw.get("shiny_roi") or "0.58,0.16,0.92,0.52").strip() or "0.58,0.16,0.92,0.52"
+                default_nameplate_roi = _default_video_nameplate_roi_for_game(str(self.config.get("selected_game") or ""))
+                nameplate_roi = str(raw.get("nameplate_roi") or self._cfg_str("video_nameplate_roi", default_nameplate_roi)).strip() or default_nameplate_roi
                 profiles.append({
                     "name": profile_name,
                     "source_name": source_name,
@@ -1621,6 +1989,7 @@ class OBSVideoEncounterReader:
                     "ocr_roi": ocr_roi,
                     "sprite_roi": sprite_roi,
                     "shiny_roi": shiny_roi,
+                    "nameplate_roi": nameplate_roi,
                 })
 
         if not profiles and not has_profile_payload:
@@ -1633,6 +2002,7 @@ class OBSVideoEncounterReader:
                     "ocr_roi": self._cfg_str("video_ocr_roi", "0.05,0.70,0.95,0.96"),
                     "sprite_roi": self._cfg_str("video_sprite_roi", "0.56,0.14,0.92,0.62"),
                     "shiny_roi": self._cfg_str("video_shiny_roi", "0.58,0.16,0.92,0.52"),
+                    "nameplate_roi": self._cfg_str("video_nameplate_roi", _default_video_nameplate_roi_for_game(str(self.config.get("selected_game") or ""))),
                 })
         return profiles
 
@@ -1687,7 +2057,7 @@ class OBSVideoEncounterReader:
         cleaned = re.sub(r"\s+", " ", cleaned).strip()
         return cleaned
 
-    def _resolve_species(self, candidate: str) -> Optional[Tuple[int, str]]:
+    def _resolve_species(self, candidate: str, cutoff: float = 0.74) -> Optional[Tuple[int, str]]:
         key = self._normalize_species_key(candidate)
         if not key:
             return None
@@ -1695,9 +2065,22 @@ class OBSVideoEncounterReader:
         if direct:
             return direct
 
-        matches = difflib.get_close_matches(key, list(self._species_key_lookup.keys()), n=1, cutoff=0.74)
+        try:
+            cutoff_value = float(cutoff)
+        except (TypeError, ValueError):
+            cutoff_value = 0.74
+        cutoff_value = max(0.35, min(0.98, cutoff_value))
+
+        choices = list(self._species_key_lookup.keys())
+        matches = difflib.get_close_matches(key, choices, n=1, cutoff=cutoff_value)
         if matches:
             return self._species_key_lookup.get(matches[0])
+
+        if len(key) >= 4:
+            prefix = key[: max(3, len(key) // 2)]
+            prefix_hits = [candidate_key for candidate_key in choices if candidate_key.startswith(prefix)]
+            if len(prefix_hits) == 1:
+                return self._species_key_lookup.get(prefix_hits[0])
         return None
 
     def _parse_roi_spec_raw(self, raw: str, default_raw: str, width: int, height: int) -> Tuple[int, int, int, int]:
@@ -1881,14 +2264,162 @@ class OBSVideoEncounterReader:
 
     def _sprite_roi(self, image, sprite_roi_raw: Optional[str] = None) -> Tuple[int, int, int, int]:
         if sprite_roi_raw:
-            return self._parse_roi_spec_raw(str(sprite_roi_raw), "0.56,0.14,0.92,0.62", int(image.width), int(image.height))
-        return self._parse_roi_spec("video_sprite_roi", "0.56,0.14,0.92,0.62", int(image.width), int(image.height))
+            x1, y1, x2, y2 = self._parse_roi_spec_raw(str(sprite_roi_raw), "0.56,0.14,0.92,0.62", int(image.width), int(image.height))
+        else:
+            x1, y1, x2, y2 = self._parse_roi_spec("video_sprite_roi", "0.56,0.14,0.92,0.62", int(image.width), int(image.height))
+        base_x1, base_y1, base_x2, base_y2 = int(x1), int(y1), int(x2), int(y2)
+
+        roi_w = max(1, int(x2 - x1))
+        roi_h = max(1, int(y2 - y1))
+        pad_ratio = max(0.0, min(0.30, self._cfg_float("video_sprite_roi_padding_ratio", 0.05)))
+        pad_x_ratio = max(0.0, min(0.35, self._cfg_float("video_sprite_roi_padding_x_ratio", pad_ratio)))
+        pad_y_ratio = max(0.0, min(0.35, self._cfg_float("video_sprite_roi_padding_y_ratio", pad_ratio)))
+        pad_x = int(round(float(roi_w) * float(pad_x_ratio)))
+        pad_y = int(round(float(roi_h) * float(pad_y_ratio)))
+
+        w = int(image.width)
+        h = int(image.height)
+        x1 = max(0, int(x1 - pad_x))
+        y1 = max(0, int(y1 - pad_y))
+        x2 = min(w, int(x2 + pad_x))
+        y2 = min(h, int(y2 + pad_y))
+
+        avoid_edge_clamp = self._cfg_bool("video_sprite_roi_avoid_edge_clamp", True)
+        base_has_margin = bool(base_x1 > 2 and base_y1 > 2 and base_x2 < (w - 2) and base_y2 < (h - 2))
+        expanded_touches_edge = bool(x1 <= 0 or y1 <= 0 or x2 >= w or y2 >= h)
+        if bool(avoid_edge_clamp) and bool(base_has_margin) and bool(expanded_touches_edge):
+            x1, y1, x2, y2 = int(base_x1), int(base_y1), int(base_x2), int(base_y2)
+
+        min_w = max(24, min(240, self._cfg_int("video_sprite_roi_min_width_px", 72)))
+        min_h = max(24, min(240, self._cfg_int("video_sprite_roi_min_height_px", 72)))
+        if (x2 - x1) < int(min_w):
+            cx = (x1 + x2) // 2
+            half = int(min_w) // 2
+            x1 = max(0, int(cx - half))
+            x2 = min(w, int(cx + half))
+        if (y2 - y1) < int(min_h):
+            cy = (y1 + y2) // 2
+            half = int(min_h) // 2
+            y1 = max(0, int(cy - half))
+            y2 = min(h, int(cy + half))
+
+        if bool(avoid_edge_clamp) and bool(base_has_margin) and bool(x1 <= 0 or y1 <= 0 or x2 >= w or y2 >= h):
+            x1, y1, x2, y2 = int(base_x1), int(base_y1), int(base_x2), int(base_y2)
+
+        if x2 <= x1:
+            x1, x2 = 0, max(1, w)
+        if y2 <= y1:
+            y1, y2 = 0, max(1, h)
+        return int(x1), int(y1), int(x2), int(y2)
+
+    @staticmethod
+    def _image_pixels_flat(img) -> List[int]:
+        if img is None:
+            return []
+        getter = getattr(img, "get_flattened_data", None)
+        if callable(getter):
+            try:
+                return [int(px) for px in getter()]
+            except Exception:
+                pass
+        try:
+            return [int(px) for px in img.getdata()]
+        except Exception:
+            return []
+
+    def _signature_from_grayscale(self, gray_img) -> str:
+        pixels = self._image_pixels_flat(gray_img)
+        if not pixels:
+            return ""
+        hash_mean = float(sum(int(px) for px in pixels)) / float(len(pixels))
+        bits = "".join("1" if float(int(px)) >= hash_mean else "0" for px in pixels)
+        try:
+            return format(int(bits, 2), "064x")
+        except Exception:
+            return sha256(bits.encode("utf-8", errors="ignore")).hexdigest()[:64]
+
+    def _extract_sprite_foreground_rgba(self, image, sprite_roi_raw: Optional[str] = None) -> Tuple[Optional[Any], float, float]:
+        if image is None or not PIL_AVAILABLE:
+            return None, 0.0, 0.0
+
+        try:
+            x1, y1, x2, y2 = self._sprite_roi(image, sprite_roi_raw=sprite_roi_raw)
+            crop_rgba = image.crop((x1, y1, x2, y2)).convert("RGBA")
+            gray = ImageOps.autocontrast(crop_rgba.convert("L"))
+        except Exception:
+            return None, 0.0, 0.0
+
+        pixels = self._image_pixels_flat(gray)
+        width = int(gray.width)
+        height = int(gray.height)
+        if not pixels or width <= 1 or height <= 1:
+            return None, 0.0, 0.0
+
+        border_values: List[int] = []
+        top_row = 0
+        bottom_row = max(0, (height - 1) * width)
+        for x in range(width):
+            border_values.append(int(pixels[top_row + x]))
+            border_values.append(int(pixels[bottom_row + x]))
+        for y in range(1, max(1, height - 1)):
+            row = y * width
+            border_values.append(int(pixels[row]))
+            border_values.append(int(pixels[row + max(0, width - 1)]))
+
+        if border_values:
+            ordered = sorted(border_values)
+            bg_luma = int(ordered[len(ordered) // 2])
+        else:
+            bg_luma = 128
+
+        fg_delta = max(8, min(96, self._cfg_int("video_sprite_fg_delta_threshold", 22)))
+        mask = gray.point(lambda px: 255 if abs(int(px) - int(bg_luma)) >= int(fg_delta) else 0)
+        mask_pixels = self._image_pixels_flat(mask)
+        if not mask_pixels:
+            return None, 0.0, 0.0
+
+        total = float(len(mask_pixels))
+        fg_pixels = sum(1 for px in mask_pixels if int(px) > 0)
+        coverage_ratio = float(fg_pixels) / total if total > 0 else 0.0
+
+        bbox = mask.getbbox()
+        if not bbox:
+            return None, 0.0, float(coverage_ratio)
+
+        bx1, by1, bx2, by2 = bbox
+        bbox_area = max(1, int((bx2 - bx1) * (by2 - by1)))
+        area_ratio = float(bbox_area) / float(max(1, width * height))
+
+        min_coverage = max(0.002, min(0.95, self._cfg_float("video_sprite_fg_min_coverage_ratio", 0.010)))
+        max_coverage = max(min_coverage + 0.01, min(0.98, self._cfg_float("video_sprite_fg_max_coverage_ratio", 0.95)))
+        min_area = max(0.002, min(0.95, self._cfg_float("video_sprite_fg_min_area_ratio", 0.015)))
+        max_area = max(min_area + 0.02, min(0.99, self._cfg_float("video_sprite_fg_max_area_ratio", 0.97)))
+
+        if coverage_ratio < min_coverage or coverage_ratio > max_coverage:
+            return None, float(area_ratio), float(coverage_ratio)
+        if area_ratio < min_area or area_ratio > max_area:
+            return None, float(area_ratio), float(coverage_ratio)
+
+        sprite = crop_rgba.crop(bbox)
+        alpha = mask.crop(bbox)
+        try:
+            sprite.putalpha(alpha)
+        except Exception:
+            return None, float(area_ratio), float(coverage_ratio)
+
+        return sprite, float(area_ratio), float(coverage_ratio)
 
     def _sprite_metrics(self, image, sprite_roi_raw: Optional[str] = None) -> Tuple[int, str, float, float]:
+        self._sprite_last_signature_candidates = []
+        self._sprite_last_foreground_sprite = None
+        self._sprite_last_area_ratio = 0.0
+        self._sprite_last_coverage_ratio = 0.0
+        self._sprite_last_roi = (0, 0, 0, 0)
         if image is None or not PIL_AVAILABLE:
             return 0, "", 0.0, 0.0
 
         roi = self._sprite_roi(image, sprite_roi_raw=sprite_roi_raw)
+        self._sprite_last_roi = tuple(int(v) for v in roi)
         crop = image.crop(roi).convert("L")
         crop = ImageOps.autocontrast(crop)
         try:
@@ -1897,7 +2428,7 @@ class OBSVideoEncounterReader:
             resample = Image.BILINEAR
 
         metric_img = crop.resize((32, 32), resample)
-        pixels = list(metric_img.getdata())
+        pixels = self._image_pixels_flat(metric_img)
         if not pixels:
             return 0, "", 0.0, 0.0
 
@@ -1922,17 +2453,30 @@ class OBSVideoEncounterReader:
         edge_ratio = (edge_total / max_edge) if max_edge > 0 else 0.0
 
         hash_img = crop.resize((16, 16), resample)
-        hash_pixels = list(hash_img.getdata())
-        if hash_pixels:
-            hash_mean = float(sum(int(px) for px in hash_pixels)) / float(len(hash_pixels))
-            bits = "".join("1" if float(int(px)) >= hash_mean else "0" for px in hash_pixels)
-            try:
-                signature = format(int(bits, 2), "064x")
-            except Exception:
-                signature = sha256(bits.encode("utf-8", errors="ignore")).hexdigest()[:64]
-        else:
-            signature = ""
+        base_signature = self._signature_from_grayscale(hash_img)
 
+        foreground_sprite, area_ratio, coverage_ratio = self._extract_sprite_foreground_rgba(image, sprite_roi_raw=sprite_roi_raw)
+        self._sprite_last_foreground_sprite = foreground_sprite
+        self._sprite_last_area_ratio = float(area_ratio)
+        self._sprite_last_coverage_ratio = float(coverage_ratio)
+
+        signature_candidates: List[str] = []
+        if foreground_sprite is not None:
+            signature_candidates.extend(self._sprite_reference_signatures_from_image(foreground_sprite))
+        if base_signature:
+            signature_candidates.append(str(base_signature))
+
+        deduped: List[str] = []
+        seen: Set[str] = set()
+        for signature in signature_candidates:
+            key = str(signature or "").strip().lower()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            deduped.append(key)
+        self._sprite_last_signature_candidates = list(deduped)
+
+        signature = deduped[0] if deduped else ""
         score = int(max(0.0, min(1000.0, (detail_ratio * 0.55 + edge_ratio * 0.45) * 1000.0)))
         return int(score), str(signature), float(detail_ratio), float(edge_ratio)
 
@@ -1949,13 +2493,1562 @@ class OBSVideoEncounterReader:
 
     def _sprite_present(self, image, sprite_roi_raw: Optional[str] = None) -> Tuple[bool, int, str, float, float]:
         score, signature, detail_ratio, edge_ratio = self._sprite_metrics(image, sprite_roi_raw=sprite_roi_raw)
+        area_ratio = float(getattr(self, "_sprite_last_area_ratio", 0.0) or 0.0)
+        coverage_ratio = float(getattr(self, "_sprite_last_coverage_ratio", 0.0) or 0.0)
+
         threshold = max(40, min(500, self._cfg_int("video_sprite_presence_threshold", 125)))
         min_detail = max(0.01, min(0.45, self._cfg_float("video_sprite_min_detail_ratio", 0.10)))
         max_detail = max(0.20, min(0.98, self._cfg_float("video_sprite_max_detail_ratio", 0.88)))
-        present = bool(score >= threshold and detail_ratio >= min_detail and detail_ratio <= max_detail and bool(signature))
+        min_edge = max(0.001, min(0.40, self._cfg_float("video_sprite_min_edge_ratio", 0.010)))
+        min_area = max(0.001, min(0.95, self._cfg_float("video_sprite_min_area_ratio", 0.018)))
+        max_area = max(min_area + 0.02, min(0.99, self._cfg_float("video_sprite_max_area_ratio", 0.96)))
+        min_coverage = max(0.001, min(0.95, self._cfg_float("video_sprite_min_coverage_ratio", 0.012)))
+        max_coverage = max(min_coverage + 0.01, min(0.98, self._cfg_float("video_sprite_max_coverage_ratio", 0.95)))
+
+        present = bool(
+            score >= threshold
+            and detail_ratio >= min_detail
+            and detail_ratio <= max_detail
+            and edge_ratio >= min_edge
+            and area_ratio >= min_area
+            and area_ratio <= max_area
+            and coverage_ratio >= min_coverage
+            and coverage_ratio <= max_coverage
+            and bool(signature)
+        )
         return present, int(score), str(signature), float(detail_ratio), float(edge_ratio)
 
-    def _extract_text(self, image, ocr_roi_raw: Optional[str] = None) -> str:
+    def _sprite_present_instant(
+        self,
+        scene_key: str,
+        raw_present: bool,
+        score: int,
+        signature: str,
+        detail_ratio: float,
+        edge_ratio: float,
+        instant_detection: bool,
+    ) -> bool:
+        state = self._sprite_scene_state.setdefault(str(scene_key or ""), {})
+        prev_score = int(state.get("score", 0.0) or 0.0)
+        now = float(time.monotonic())
+        present = bool(raw_present)
+
+        base_threshold = max(40, min(500, self._cfg_int("video_sprite_presence_threshold", 125)))
+        min_detail_cfg = max(0.01, min(0.45, self._cfg_float("video_sprite_min_detail_ratio", 0.10)))
+        hold_threshold_default = max(24, int(base_threshold) - 55)
+        hold_threshold = max(16, min(500, self._cfg_int("video_sprite_hold_threshold", hold_threshold_default)))
+        hold_detail_default = max(0.01, float(min_detail_cfg) * 0.50)
+        hold_detail = max(0.005, min(0.45, self._cfg_float("video_sprite_hold_min_detail_ratio", hold_detail_default)))
+        hold_edge = max(0.002, min(0.45, self._cfg_float("video_sprite_hold_min_edge_ratio", 0.010)))
+        latch_clear_sec = max(0.10, min(6.0, self._cfg_float("video_sprite_latch_clear_sec", 2.20)))
+        latched = bool(int(state.get("latched", 0.0) or 0.0))
+
+        if not present and latched and bool(signature):
+            if (
+                int(score) >= int(hold_threshold)
+                and float(detail_ratio) >= float(hold_detail)
+                and float(edge_ratio) >= float(hold_edge)
+            ):
+                present = True
+
+        if (not present) and bool(instant_detection) and bool(signature):
+            entry_threshold_default = max(32, int(base_threshold) - 48)
+            entry_threshold = max(20, min(500, self._cfg_int("video_sprite_entry_threshold", entry_threshold_default)))
+            entry_delta = max(0, min(300, self._cfg_int("video_sprite_entry_delta", 10)))
+            min_detail_entry = max(0.005, min(0.45, self._cfg_float("video_sprite_entry_min_detail_ratio", hold_detail)))
+            min_edge_entry = max(0.002, min(0.45, self._cfg_float("video_sprite_entry_min_edge_ratio", hold_edge)))
+            score_delta = int(score) - int(prev_score)
+
+            # Edge trigger: lock onto encounter as soon as sprite enters ROI.
+            if (
+                int(score) >= int(entry_threshold)
+                and float(detail_ratio) >= float(min_detail_entry)
+                and float(edge_ratio) >= float(min_edge_entry)
+                and (int(score_delta) >= int(entry_delta) or int(score) >= int(entry_threshold) + 14)
+            ):
+                present = True
+
+        state["score"] = float(score)
+        state["detail_ratio"] = float(detail_ratio)
+        state["edge_ratio"] = float(edge_ratio)
+        if present:
+            state["last_present_at"] = float(now)
+            state["present_streak"] = float(state.get("present_streak", 0.0) + 1.0)
+            state["absent_streak"] = 0.0
+            state["absent_since"] = 0.0
+            state["latched"] = 1.0
+            state["signature_hash"] = float(abs(hash(str(signature))) % 1000000)
+        else:
+            state["absent_streak"] = float(state.get("absent_streak", 0.0) + 1.0)
+            state["present_streak"] = 0.0
+            absent_since = float(state.get("absent_since", 0.0) or 0.0)
+            if absent_since <= 0.0:
+                absent_since = now
+            state["absent_since"] = float(absent_since)
+            if float(now - absent_since) >= float(latch_clear_sec):
+                state["latched"] = 0.0
+        return bool(present)
+
+    @staticmethod
+    def _parse_roi_raw_fractions(raw: str) -> Optional[Tuple[float, float, float, float]]:
+        text = str(raw or "").strip()
+        parts = [part.strip() for part in text.split(",")]
+        if len(parts) != 4:
+            return None
+        try:
+            x1, y1, x2, y2 = [float(part) for part in parts]
+        except Exception:
+            return None
+        x1 = max(0.0, min(0.98, float(x1)))
+        y1 = max(0.0, min(0.98, float(y1)))
+        x2 = max(float(x1) + 0.02, min(1.0, float(x2)))
+        y2 = max(float(y1) + 0.02, min(1.0, float(y2)))
+        return float(x1), float(y1), float(x2), float(y2)
+
+    @staticmethod
+    def _roi_touches_edge_px(roi_px: Tuple[int, int, int, int], width: int, height: int, margin_px: int = 2) -> bool:
+        try:
+            x1, y1, x2, y2 = [int(v) for v in roi_px]
+        except Exception:
+            return True
+        margin = max(0, int(margin_px))
+        w = max(1, int(width))
+        h = max(1, int(height))
+        return bool(x1 <= margin or y1 <= margin or x2 >= (w - margin) or y2 >= (h - margin))
+
+    @staticmethod
+    def _format_roi_raw_fractions(roi: Tuple[float, float, float, float]) -> str:
+        x1, y1, x2, y2 = [float(v) for v in roi]
+        return f"{x1:.4f},{y1:.4f},{x2:.4f},{y2:.4f}"
+
+    @staticmethod
+    def _roi_iou_fractions(a: Optional[Tuple[float, float, float, float]], b: Optional[Tuple[float, float, float, float]]) -> float:
+        if a is None or b is None:
+            return 0.0
+        try:
+            ax1, ay1, ax2, ay2 = [float(v) for v in a]
+            bx1, by1, bx2, by2 = [float(v) for v in b]
+        except Exception:
+            return 0.0
+        ix1 = max(float(ax1), float(bx1))
+        iy1 = max(float(ay1), float(by1))
+        ix2 = min(float(ax2), float(bx2))
+        iy2 = min(float(ay2), float(by2))
+        iw = max(0.0, float(ix2 - ix1))
+        ih = max(0.0, float(iy2 - iy1))
+        inter = float(iw * ih)
+        area_a = max(0.0, float(ax2 - ax1)) * max(0.0, float(ay2 - ay1))
+        area_b = max(0.0, float(bx2 - bx1)) * max(0.0, float(by2 - by1))
+        union = float(area_a + area_b - inter)
+        if union <= 0.0:
+            return 0.0
+        return max(0.0, min(1.0, float(inter / union)))
+
+    def _sprite_roi_search_specs(self, primary_raw: str, game_name: str) -> List[str]:
+        variants: List[str] = []
+
+        def _append(raw_roi: str):
+            parsed = self._parse_roi_raw_fractions(raw_roi)
+            if parsed is None:
+                return
+            avoid_edges = self._cfg_bool("video_sprite_roi_search_avoid_edges", True)
+            edge_margin = max(0.0, min(0.20, self._cfg_float("video_sprite_roi_search_edge_margin", 0.015)))
+            if bool(avoid_edges):
+                px1, py1, px2, py2 = [float(v) for v in parsed]
+                if px1 <= edge_margin or py1 <= edge_margin or px2 >= (1.0 - edge_margin) or py2 >= (1.0 - edge_margin):
+                    return
+            variants.append(self._format_roi_raw_fractions(parsed))
+
+        _append(str(primary_raw or ""))
+
+        cfg_fallbacks = str(self._cfg_str("video_sprite_roi_fallbacks", "") or "")
+        if cfg_fallbacks:
+            for chunk in re.split(r"[;\n|]+", cfg_fallbacks):
+                _append(str(chunk or ""))
+
+        profile = _default_video_roi_profile_for_game(game_name)
+        preset = VIDEO_ROI_PRESETS.get(profile) or VIDEO_ROI_PRESETS.get("Generic Battle") or {}
+        _append(str(preset.get("sprite_roi") or ""))
+        _append(str((VIDEO_ROI_PRESETS.get("Generic Battle") or {}).get("sprite_roi") or ""))
+
+        base = self._parse_roi_raw_fractions(str(primary_raw or ""))
+        if base is None:
+            base = self._parse_roi_raw_fractions(str(preset.get("sprite_roi") or "0.56,0.14,0.92,0.62"))
+
+        if base is not None:
+            x1, y1, x2, y2 = [float(v) for v in base]
+            shift_x = max(0.005, min(0.12, self._cfg_float("video_sprite_roi_search_shift_x", 0.03)))
+            shift_y = max(0.005, min(0.16, self._cfg_float("video_sprite_roi_search_shift_y", 0.04)))
+            grow = max(0.005, min(0.18, self._cfg_float("video_sprite_roi_search_grow", 0.035)))
+
+            def _clamp(nx1: float, ny1: float, nx2: float, ny2: float) -> Tuple[float, float, float, float]:
+                nx1 = max(0.0, min(0.98, float(nx1)))
+                ny1 = max(0.0, min(0.98, float(ny1)))
+                nx2 = max(float(nx1) + 0.02, min(1.0, float(nx2)))
+                ny2 = max(float(ny1) + 0.02, min(1.0, float(ny2)))
+                return float(nx1), float(ny1), float(nx2), float(ny2)
+
+            generated = [
+                _clamp(x1, y1 + shift_y, x2, y2 + shift_y),
+                _clamp(x1, y1 - shift_y, x2, y2 - shift_y),
+                _clamp(x1 - shift_x, y1, x2 - shift_x, y2),
+                _clamp(x1 + shift_x, y1, x2 + shift_x, y2),
+                _clamp(x1 - grow, y1 - grow, x2 + grow, y2 + grow),
+                _clamp(x1, y1 - grow, x2, y2 + grow),
+            ]
+            for roi in generated:
+                variants.append(self._format_roi_raw_fractions(roi))
+
+        deduped: List[str] = []
+        seen: Set[str] = set()
+        for raw in variants:
+            key = str(raw or "").strip()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            deduped.append(key)
+
+        max_candidates = max(2, min(20, self._cfg_int("video_sprite_roi_search_candidates", 8)))
+        return list(deduped[:max_candidates])
+
+    def _sprite_global_scan_specs(self, image, primary_raw: str, game_name: str = "") -> List[str]:
+        if image is None or not PIL_AVAILABLE:
+            return []
+
+        w = max(1, int(getattr(image, "width", 0) or 0))
+        h = max(1, int(getattr(image, "height", 0) or 0))
+
+        base = self._parse_roi_raw_fractions(str(primary_raw or ""))
+        if base is None:
+            profile = _default_video_roi_profile_for_game(game_name)
+            preset = VIDEO_ROI_PRESETS.get(profile) or VIDEO_ROI_PRESETS.get("Generic Battle") or {}
+            base = self._parse_roi_raw_fractions(str(preset.get("sprite_roi") or "0.56,0.14,0.92,0.62"))
+        if base is None:
+            base = (0.56, 0.14, 0.92, 0.62)
+
+        bx1, by1, bx2, by2 = [float(v) for v in base]
+        base_w = max(0.12, min(0.95, float(bx2 - bx1)))
+        base_h = max(0.10, min(0.95, float(by2 - by1)))
+
+        min_w_frac = max(0.08, min(0.70, self._cfg_float("video_sprite_global_scan_min_width_fraction", base_w * 0.55)))
+        min_h_frac = max(0.08, min(0.70, self._cfg_float("video_sprite_global_scan_min_height_fraction", base_h * 0.55)))
+        max_w_frac = max(min_w_frac + 0.04, min(0.96, self._cfg_float("video_sprite_global_scan_max_width_fraction", min(0.70, base_w * 1.55))))
+        max_h_frac = max(min_h_frac + 0.04, min(0.96, self._cfg_float("video_sprite_global_scan_max_height_fraction", min(0.76, base_h * 1.55))))
+        scan_max_y = max(0.40, min(1.0, self._cfg_float("video_sprite_global_scan_max_y_fraction", 0.96)))
+
+        scale_values: List[float] = []
+        scales_raw = str(self._cfg_str("video_sprite_global_scan_scales", "0.72,0.88,1.00,1.16,1.32") or "")
+        for chunk in scales_raw.split(","):
+            try:
+                value = float(str(chunk).strip())
+            except Exception:
+                continue
+            if value <= 0.01:
+                continue
+            scale_values.append(float(max(0.40, min(2.00, value))))
+        if not scale_values:
+            scale_values = [0.72, 0.88, 1.00, 1.16, 1.32]
+
+        grid_cols = max(2, min(14, self._cfg_int("video_sprite_global_scan_grid_cols", 8)))
+        grid_rows = max(2, min(10, self._cfg_int("video_sprite_global_scan_grid_rows", 5)))
+        max_candidates = max(6, min(240, self._cfg_int("video_sprite_global_scan_candidates", 72)))
+        avoid_edges = self._cfg_bool("video_sprite_global_scan_avoid_edges", True)
+        edge_margin = max(0.0, min(0.20, self._cfg_float("video_sprite_global_scan_edge_margin", 0.012)))
+
+        candidates: List[str] = []
+
+        def _append(nx1: float, ny1: float, nx2: float, ny2: float):
+            px1 = max(0.0, min(0.98, float(nx1)))
+            py1 = max(0.0, min(0.98, float(ny1)))
+            px2 = max(px1 + 0.02, min(1.0, float(nx2)))
+            py2 = max(py1 + 0.02, min(1.0, float(ny2)))
+            if bool(avoid_edges):
+                if px1 <= edge_margin or py1 <= edge_margin or px2 >= (1.0 - edge_margin) or py2 >= (1.0 - edge_margin):
+                    return
+            candidates.append(self._format_roi_raw_fractions((px1, py1, px2, py2)))
+
+        _append(bx1, by1, bx2, by2)
+
+        if self._cfg_bool("video_sprite_global_scan_use_localizer", True):
+            localized_full = self._localize_sprite_roi(image, "0.00,0.00,1.00,1.00", game_name=game_name)
+            parsed_local = self._parse_roi_raw_fractions(str(localized_full or ""))
+            if parsed_local is not None:
+                _append(float(parsed_local[0]), float(parsed_local[1]), float(parsed_local[2]), float(parsed_local[3]))
+
+        x_centers = [float(i + 0.5) / float(grid_cols) for i in range(grid_cols)]
+        y_centers = [float(j + 0.5) / float(grid_rows) * float(scan_max_y) for j in range(grid_rows)]
+
+        for scale in scale_values:
+            roi_w = max(min_w_frac, min(max_w_frac, float(base_w) * float(scale)))
+            roi_h = max(min_h_frac, min(max_h_frac, float(base_h) * float(scale)))
+            half_w = float(roi_w) * 0.5
+            half_h = float(roi_h) * 0.5
+            for cy in y_centers:
+                for cx in x_centers:
+                    _append(float(cx) - half_w, float(cy) - half_h, float(cx) + half_w, float(cy) + half_h)
+
+        deduped: List[str] = []
+        seen: Set[str] = set()
+        for raw in candidates:
+            key = str(raw or "").strip()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            deduped.append(key)
+            if len(deduped) >= int(max_candidates):
+                break
+
+        if not deduped:
+            emergency_raws = [
+                str(primary_raw or "").strip(),
+                "0.06,0.04,0.98,0.96",
+                "0.02,0.02,0.98,0.78",
+                "0.18,0.06,0.96,0.94",
+                "0.34,0.02,0.98,0.80",
+                "0.00,0.00,1.00,1.00",
+            ]
+            for raw in emergency_raws:
+                parsed = self._parse_roi_raw_fractions(str(raw or ""))
+                if parsed is None:
+                    continue
+                key = self._format_roi_raw_fractions(parsed)
+                if key in seen:
+                    continue
+                seen.add(key)
+                deduped.append(key)
+                if len(deduped) >= int(max_candidates):
+                    break
+
+        return list(deduped)
+
+    def _localize_sprite_roi(self, image, sprite_roi_raw: str, game_name: str = "") -> Optional[str]:
+        if image is None or not PIL_AVAILABLE:
+            return None
+        if not self._cfg_bool("video_sprite_localizer_enabled", False):
+            return None
+
+        base = self._parse_roi_raw_fractions(str(sprite_roi_raw or ""))
+        if base is None:
+            profile = _default_video_roi_profile_for_game(game_name)
+            preset = VIDEO_ROI_PRESETS.get(profile) or VIDEO_ROI_PRESETS.get("Generic Battle") or {}
+            base = self._parse_roi_raw_fractions(str(preset.get("sprite_roi") or "0.56,0.14,0.92,0.62"))
+        if base is None:
+            return None
+
+        w = int(image.width)
+        h = int(image.height)
+        bx1 = int(round(float(base[0]) * float(w)))
+        by1 = int(round(float(base[1]) * float(h)))
+        bx2 = int(round(float(base[2]) * float(w)))
+        by2 = int(round(float(base[3]) * float(h)))
+        bw = max(1, int(bx2 - bx1))
+        bh = max(1, int(by2 - by1))
+
+        expand_x = max(0.05, min(0.80, self._cfg_float("video_sprite_localizer_expand_x", 0.32)))
+        expand_y = max(0.05, min(0.80, self._cfg_float("video_sprite_localizer_expand_y", 0.34)))
+        sx1 = max(0, int(bx1 - (float(bw) * float(expand_x))))
+        sy1 = max(0, int(by1 - (float(bh) * float(expand_y))))
+        sx2 = min(w, int(bx2 + (float(bw) * float(expand_x))))
+        sy2 = min(h, int(by2 + (float(bh) * float(expand_y))))
+
+        max_y_frac = max(0.45, min(1.0, self._cfg_float("video_sprite_localizer_max_y_fraction", 0.78)))
+        sy2 = min(int(sy2), max(1, int(round(float(h) * float(max_y_frac)))))
+        if (sx2 - sx1) < 24 or (sy2 - sy1) < 24:
+            return None
+
+        try:
+            gray = image.crop((int(sx1), int(sy1), int(sx2), int(sy2))).convert("L")
+            gray = ImageOps.autocontrast(gray)
+        except Exception:
+            return None
+
+        sw = int(gray.width)
+        sh = int(gray.height)
+        px = self._image_pixels_flat(gray)
+        if not px or sw <= 2 or sh <= 2:
+            return None
+
+        border_vals: List[int] = []
+        top_row = 0
+        bottom_row = max(0, (sh - 1) * sw)
+        for x in range(sw):
+            border_vals.append(int(px[top_row + x]))
+            border_vals.append(int(px[bottom_row + x]))
+        for y in range(1, max(1, sh - 1)):
+            row = y * sw
+            border_vals.append(int(px[row]))
+            border_vals.append(int(px[row + max(0, sw - 1)]))
+        if not border_vals:
+            return None
+
+        ordered = sorted(border_vals)
+        bg_luma = int(ordered[len(ordered) // 2])
+        fg_delta = max(6, min(96, self._cfg_int("video_sprite_localizer_bg_delta", 20)))
+
+        mask: List[int] = [0] * len(px)
+        for idx, val in enumerate(px):
+            if abs(int(val) - int(bg_luma)) >= int(fg_delta):
+                mask[idx] = 1
+
+        min_comp_area = max(24, min(40000, self._cfg_int("video_sprite_localizer_min_component_area", 180)))
+        min_fill_ratio = max(0.02, min(0.95, self._cfg_float("video_sprite_localizer_min_fill_ratio", 0.08)))
+        min_area_ratio = max(0.002, min(0.95, self._cfg_float("video_sprite_localizer_min_area_ratio", 0.02)))
+        max_area_ratio = max(min_area_ratio + 0.02, min(0.99, self._cfg_float("video_sprite_localizer_max_area_ratio", 0.72)))
+
+        visited: Set[int] = set()
+        best_bbox = None
+        best_score = -1.0
+
+        for idx, bit in enumerate(mask):
+            if not bit or idx in visited:
+                continue
+            q = deque([idx])
+            visited.add(idx)
+            comp_count = 0
+            min_x = sw
+            min_y = sh
+            max_x = -1
+            max_y = -1
+            while q:
+                cur = q.popleft()
+                cy = cur // sw
+                cx = cur - (cy * sw)
+                comp_count += 1
+                if cx < min_x:
+                    min_x = cx
+                if cy < min_y:
+                    min_y = cy
+                if cx > max_x:
+                    max_x = cx
+                if cy > max_y:
+                    max_y = cy
+
+                if cx > 0:
+                    n = cur - 1
+                    if mask[n] and n not in visited:
+                        visited.add(n)
+                        q.append(n)
+                if cx < (sw - 1):
+                    n = cur + 1
+                    if mask[n] and n not in visited:
+                        visited.add(n)
+                        q.append(n)
+                if cy > 0:
+                    n = cur - sw
+                    if mask[n] and n not in visited:
+                        visited.add(n)
+                        q.append(n)
+                if cy < (sh - 1):
+                    n = cur + sw
+                    if mask[n] and n not in visited:
+                        visited.add(n)
+                        q.append(n)
+
+            if comp_count < int(min_comp_area) or max_x <= min_x or max_y <= min_y:
+                continue
+
+            bw2 = max(1, int(max_x - min_x + 1))
+            bh2 = max(1, int(max_y - min_y + 1))
+            bbox_area = float(bw2 * bh2)
+            fill_ratio = float(comp_count) / float(max(1.0, bbox_area))
+            area_ratio = bbox_area / float(max(1, sw * sh))
+            if float(fill_ratio) < float(min_fill_ratio):
+                continue
+            if float(area_ratio) < float(min_area_ratio) or float(area_ratio) > float(max_area_ratio):
+                continue
+
+            center_x = float(min_x + max_x) / 2.0
+            center_y = float(min_y + max_y) / 2.0
+            center_bias_x = 1.0 - min(1.0, abs(center_x - (sw * 0.62)) / float(max(1.0, sw * 0.62)))
+            center_bias_y = 1.0 - min(1.0, abs(center_y - (sh * 0.38)) / float(max(1.0, sh * 0.62)))
+            score = float(comp_count) * (0.70 + 0.30 * float(fill_ratio)) * (0.75 + 0.25 * float(center_bias_x)) * (0.75 + 0.25 * float(center_bias_y))
+            if float(score) > float(best_score):
+                best_score = float(score)
+                best_bbox = (int(min_x), int(min_y), int(max_x), int(max_y))
+
+        if not isinstance(best_bbox, tuple):
+            return None
+
+        min_x, min_y, max_x, max_y = [int(v) for v in best_bbox]
+        pad_frac = max(0.0, min(0.40, self._cfg_float("video_sprite_localizer_bbox_pad", 0.10)))
+        pad_x = int(round(float(max_x - min_x + 1) * float(pad_frac)))
+        pad_y = int(round(float(max_y - min_y + 1) * float(pad_frac)))
+
+        lx1 = max(0, int(sx1 + min_x - pad_x))
+        ly1 = max(0, int(sy1 + min_y - pad_y))
+        lx2 = min(w, int(sx1 + max_x + 1 + pad_x))
+        ly2 = min(h, int(sy1 + max_y + 1 + pad_y))
+
+        avoid_edges = self._cfg_bool("video_sprite_localizer_avoid_edges", True)
+        if bool(avoid_edges):
+            margin_px = max(1, min(24, self._cfg_int("video_sprite_localizer_edge_margin_px", 2)))
+            if lx1 <= margin_px or ly1 <= margin_px or lx2 >= (w - margin_px) or ly2 >= (h - margin_px):
+                return None
+
+        if (lx2 - lx1) < 20 or (ly2 - ly1) < 20:
+            return None
+
+        raw = self._format_roi_raw_fractions((
+            float(lx1) / float(max(1, w)),
+            float(ly1) / float(max(1, h)),
+            float(lx2) / float(max(1, w)),
+            float(ly2) / float(max(1, h)),
+        ))
+        return str(raw)
+    def _auto_detect_game_frame_bounds(self, image) -> Optional[Tuple[int, int, int, int]]:
+        if image is None or not PIL_AVAILABLE:
+            return None
+        try:
+            gray = image.convert("L")
+            orig_w = int(gray.width)
+            orig_h = int(gray.height)
+            if orig_w < 64 or orig_h < 64:
+                return None
+            sample_w = min(360, max(120, orig_w))
+            sample_h = max(80, int(float(sample_w) * float(orig_h) / float(max(1, orig_w))))
+            try:
+                if hasattr(Image, "Resampling"):
+                    resample = Image.Resampling.BILINEAR
+                else:
+                    resample = Image.BILINEAR
+            except Exception:
+                resample = Image.BILINEAR
+            sample = gray.resize((int(sample_w), int(sample_h)), resample)
+            px = self._image_pixels_flat(sample)
+            if not px:
+                return None
+            w = int(sample.width)
+            h = int(sample.height)
+            edge_thr = max(6, min(80, self._cfg_int("video_frame_edge_threshold", 22)))
+            min_edges = max(120, min(8000, self._cfg_int("video_frame_min_edge_pixels", 420)))
+            min_x = w
+            min_y = h
+            max_x = -1
+            max_y = -1
+            count = 0
+            for y in range(1, h - 1):
+                row = y * w
+                for x in range(1, w - 1):
+                    idx = row + x
+                    center = int(px[idx])
+                    dx = abs(center - int(px[idx + 1]))
+                    dy = abs(center - int(px[idx + w]))
+                    edge = max(dx, dy)
+                    if edge < int(edge_thr):
+                        continue
+                    count += 1
+                    if x < min_x:
+                        min_x = x
+                    if y < min_y:
+                        min_y = y
+                    if x > max_x:
+                        max_x = x
+                    if y > max_y:
+                        max_y = y
+            if count < int(min_edges) or max_x <= min_x or max_y <= min_y:
+                return None
+            pad_x = max(2, int((max_x - min_x) * 0.05))
+            pad_y = max(2, int((max_y - min_y) * 0.05))
+            min_x = max(0, min_x - pad_x)
+            min_y = max(0, min_y - pad_y)
+            max_x = min(w - 1, max_x + pad_x)
+            max_y = min(h - 1, max_y + pad_y)
+            bw = max_x - min_x + 1
+            bh = max_y - min_y + 1
+            if bw <= 8 or bh <= 8:
+                return None
+            target_aspect = max(1.0, min(2.0, self._cfg_float("video_frame_aspect_target", 1.5)))
+            tol = max(0.05, min(0.60, self._cfg_float("video_frame_aspect_tolerance", 0.35)))
+            aspect = float(bw) / float(max(1, bh))
+            if abs(aspect - target_aspect) > float(tol):
+                return None
+            area_ratio = float(bw * bh) / float(max(1, w * h))
+            min_area = max(0.10, min(0.95, self._cfg_float("video_frame_min_area_ratio", 0.20)))
+            if area_ratio < min_area:
+                return None
+            sx = float(orig_w) / float(w)
+            sy = float(orig_h) / float(h)
+            x1 = max(0, int(min_x * sx))
+            y1 = max(0, int(min_y * sy))
+            x2 = min(orig_w, int((max_x + 1) * sx))
+            y2 = min(orig_h, int((max_y + 1) * sy))
+            if (x2 - x1) < 32 or (y2 - y1) < 32:
+                return None
+            return int(x1), int(y1), int(x2), int(y2)
+        except Exception:
+            return None
+
+    def _normalize_scene_frame(self, image, game_name: str, source_name: str) -> Tuple[Any, Dict[str, object]]:
+        if image is None:
+            return image, {"normalized": False, "reason": "frame_missing"}
+        if not self._cfg_bool("video_frame_auto_normalize", False):
+            return image, {"normalized": False, "reason": "disabled"}
+
+        target_w = max(120, min(640, self._cfg_int("video_frame_normalized_width", 320)))
+        target_h = max(80, min(480, self._cfg_int("video_frame_normalized_height", 214)))
+        try:
+            if hasattr(Image, "Resampling"):
+                resample = Image.Resampling.BILINEAR
+            else:
+                resample = Image.BILINEAR
+        except Exception:
+            resample = Image.BILINEAR
+
+        bounds = self._auto_detect_game_frame_bounds(image)
+        if not bounds:
+            if not self._cfg_bool("video_frame_normalize_resize_when_bounds_missing", True):
+                return image, {"normalized": False, "reason": "bounds_not_found"}
+            try:
+                normalized = image.resize((int(target_w), int(target_h)), resample)
+            except Exception:
+                normalized = image
+            return normalized, {
+                "normalized": True,
+                "reason": "bounds_not_found_resized_full",
+                "out_width": int(getattr(normalized, "width", 0) or 0),
+                "out_height": int(getattr(normalized, "height", 0) or 0),
+            }
+
+        x1, y1, x2, y2 = bounds
+        try:
+            cropped = image.crop((int(x1), int(y1), int(x2), int(y2)))
+        except Exception:
+            if not self._cfg_bool("video_frame_normalize_resize_when_crop_fails", True):
+                return image, {"normalized": False, "reason": "crop_failed"}
+            cropped = image
+
+        try:
+            normalized = cropped.resize((int(target_w), int(target_h)), resample)
+        except Exception:
+            normalized = cropped
+        meta = {
+            "normalized": True,
+            "bounds": [int(x1), int(y1), int(x2), int(y2)],
+            "out_width": int(getattr(normalized, "width", 0) or 0),
+            "out_height": int(getattr(normalized, "height", 0) or 0),
+        }
+        return normalized, meta
+
+    def _scene_encounter_key(self, game_name: str, source_name: str) -> str:
+        return f"{str(game_name or '').strip().lower()}::{str(source_name or '').strip().lower()}"
+
+    def _start_or_get_scene_encounter_token(self, game_name: str, source_name: str) -> int:
+        key = self._scene_encounter_key(game_name, source_name)
+        state = self._scene_encounter_state.setdefault(key, {"active": False, "token": 0, "species_resolved": False})
+        active = bool(state.get("active", False))
+        token = int(state.get("token", 0) or 0)
+        if (not active) or token <= 0:
+            self._scene_encounter_seq = int(self._scene_encounter_seq) + 1
+            token = int(self._scene_encounter_seq)
+            state["token"] = int(token)
+            state["active"] = True
+            state["species_resolved"] = False
+            state["species_id"] = 0
+            state["species_name"] = ""
+            state["started_at"] = float(time.monotonic())
+            state["ended_at"] = 0.0
+            state["context_missing_since"] = 0.0
+            state["end_missing_since"] = 0.0
+            state["end_missing_count"] = 0
+            state["wild_text_missing_since"] = 0.0
+            state["wild_text_missing_count"] = 0
+            state["battle_hint"] = False
+            state["last_battle_hint_at"] = 0.0
+            self._scene_species_lock_state.pop(key, None)
+            self._ai_species_scene_state.pop(key, None)
+        return int(token)
+
+    def _end_scene_encounter_for_source(self, game_name: str, source_name: str):
+        key = self._scene_encounter_key(game_name, source_name)
+        state = self._scene_encounter_state.get(key)
+        if isinstance(state, dict):
+            state["active"] = False
+            state["ended_at"] = float(time.monotonic())
+            state["context_missing_since"] = 0.0
+            state["end_missing_since"] = 0.0
+            state["end_missing_count"] = 0
+            state["wild_text_missing_since"] = 0.0
+            state["wild_text_missing_count"] = 0
+            state["battle_hint"] = False
+            state["last_battle_hint_at"] = 0.0
+        self._scene_species_lock_state.pop(key, None)
+        self._ai_species_scene_state.pop(key, None)
+
+    def _end_scene_encounters_for_game(self, game_name: str):
+        prefix = f"{str(game_name or '').strip().lower()}::"
+        for key, state in list((self._scene_encounter_state or {}).items()):
+            if not str(key).startswith(prefix):
+                continue
+            if isinstance(state, dict):
+                state["active"] = False
+                state["ended_at"] = float(time.monotonic())
+                state["context_missing_since"] = 0.0
+                state["end_missing_since"] = 0.0
+                state["end_missing_count"] = 0
+                state["wild_text_missing_since"] = 0.0
+                state["wild_text_missing_count"] = 0
+                state["battle_hint"] = False
+        for key in list((self._scene_species_lock_state or {}).keys()):
+            if str(key).startswith(prefix):
+                self._scene_species_lock_state.pop(key, None)
+        for key in list((self._ai_species_scene_state or {}).keys()):
+            if str(key).startswith(prefix):
+                self._ai_species_scene_state.pop(key, None)
+
+    def _apply_scene_species_lock(
+        self,
+        game_name: str,
+        source_name: str,
+        species: Tuple[int, str],
+        species_source: str,
+        instant_detection: bool,
+        sprite_match_distance: int = 999,
+        sprite_distance_margin: int = 0,
+        sprite_confidence_ok: bool = False,
+        sprite_score: int = 0,
+    ) -> Tuple[Optional[Tuple[int, str]], int, int]:
+        try:
+            sid = int(species[0])
+        except Exception:
+            return None, 0, 0
+        sname = str(species[1] if len(species) > 1 else "").strip()
+        if sid <= 0 or not sname:
+            return None, 0, 0
+
+        key = self._scene_encounter_key(game_name, source_name)
+        encounter_state = self._scene_encounter_state.get(key) or {}
+        current_token = int((encounter_state or {}).get("token", 0) or 0)
+
+        state = self._scene_species_lock_state.setdefault(key, {"candidate_id": 0, "candidate_count": 0, "token": int(current_token)})
+        state_token = int(state.get("token", 0) or 0)
+        if int(state_token) != int(current_token):
+            state.clear()
+            state["candidate_id"] = 0
+            state["candidate_count"] = 0
+            state["token"] = int(current_token)
+
+        prev_id = int(state.get("candidate_id", 0) or 0)
+        prev_count = int(state.get("candidate_count", 0) or 0)
+
+        source_tag = str(species_source or "")
+        if source_tag in {"sprite_reference_locked", "sprite_reference", "sprite_memory", "sprite_memory_exact", "sprite_consensus", "sprite_consensus_locked"}:
+            default_required = 1 if instant_detection else 2
+            required = max(1, min(8, self._cfg_int("video_species_lock_confirmations", default_required)))
+        elif source_tag.startswith("sprite_ai"):
+            # AI labels already have temporal confidence gating; keep lock confirmations low to avoid stalls.
+            default_required = 1 if instant_detection else 2
+            required = max(1, min(8, self._cfg_int("video_species_lock_confirmations_ai", default_required)))
+        elif source_tag.startswith("sprite"):
+            default_required = 3 if instant_detection else 4
+            required = max(1, min(8, self._cfg_int("video_species_lock_confirmations", default_required)))
+        else:
+            default_required = 1 if instant_detection else 2
+            required = max(1, min(6, self._cfg_int("video_species_lock_confirmations_text", default_required)))
+
+        strong_lock_allowed = self._cfg_bool("video_species_lock_strong_reference_enabled", False)
+        if bool(strong_lock_allowed) and source_tag in {"sprite_reference", "sprite_reference_locked", "sprite_memory", "sprite_memory_exact", "sprite_consensus", "sprite_consensus_locked"}:
+            strong_max_distance = max(4, min(96, self._cfg_int("video_species_lock_strong_max_distance", 18)))
+            strong_min_margin = max(0, min(64, self._cfg_int("video_species_lock_strong_min_margin", 14)))
+            strong_min_score = max(80, min(900, self._cfg_int("video_species_lock_strong_min_score", 320)))
+            strong_min_required = max(1, min(4, self._cfg_int("video_species_lock_strong_min_required", 2)))
+            strong_lock = bool(
+                bool(sprite_confidence_ok)
+                and int(sprite_match_distance) <= int(strong_max_distance)
+                and int(sprite_distance_margin) >= int(strong_min_margin)
+                and int(sprite_score) >= int(strong_min_score)
+            )
+            if strong_lock:
+                required = min(int(required), int(strong_min_required))
+
+        if sid == prev_id:
+            count = int(prev_count) + 1
+        else:
+            count = 1
+            state["candidate_id"] = int(sid)
+        state["candidate_count"] = int(count)
+        state["token"] = int(current_token)
+
+        if int(count) >= int(required):
+            state["locked_id"] = int(sid)
+            state["locked_name"] = str(sname)
+            return (int(sid), str(sname)), int(count), int(required)
+        return None, int(count), int(required)
+
+    def _candidate_species_ids(self) -> List[int]:
+        raw = self.config.get("video_candidate_species_ids", [])
+        candidate_ids: List[int] = []
+        if isinstance(raw, list):
+            for item in raw:
+                try:
+                    pid = int(item)
+                except (TypeError, ValueError):
+                    continue
+                if pid > 0:
+                    candidate_ids.append(pid)
+        elif isinstance(raw, str):
+            for chunk in str(raw).split(","):
+                try:
+                    pid = int(str(chunk).strip())
+                except (TypeError, ValueError):
+                    continue
+                if pid > 0:
+                    candidate_ids.append(pid)
+
+        try:
+            target_id = int(self.config.get("video_target_species_id", 0) or 0)
+        except (TypeError, ValueError):
+            target_id = 0
+        if target_id > 0:
+            candidate_ids.append(target_id)
+
+        deduped: List[int] = []
+        seen: Set[int] = set()
+        for pid in candidate_ids:
+            if pid in seen:
+                continue
+            seen.add(pid)
+            deduped.append(int(pid))
+        return deduped[:256]
+
+    def _sprite_library_dir(self) -> Path:
+        fallback = str(Path.home() / ".pokeachieve" / "sprites")
+        raw = self._cfg_str("video_sprite_library_dir", fallback)
+        if not raw:
+            raw = fallback
+        return Path(raw).expanduser()
+
+    def _sprite_library_dirs(self, game_name: str) -> List[Path]:
+        base_dir = self._sprite_library_dir()
+        variant = re.sub(r"[^a-z0-9]+", "_", str(_party_game_variant_from_name(game_name) or "default").lower()).strip("_")
+        game_key = re.sub(r"[^a-z0-9]+", "_", str(game_name or "").lower()).strip("_")
+
+        ordered: List[Path] = []
+        seen: Set[str] = set()
+
+        def _add(path_obj: Path):
+            key = str(path_obj).lower()
+            if key in seen:
+                return
+            seen.add(key)
+            ordered.append(path_obj)
+
+        explicit_game_dir = self._cfg_str("video_sprite_library_game_dir", "")
+        if explicit_game_dir:
+            _add(Path(explicit_game_dir).expanduser())
+        if variant and variant != "default":
+            _add(base_dir / variant)
+        if game_key:
+            _add(base_dir / game_key)
+        _add(base_dir)
+        return [path_obj for path_obj in ordered if path_obj.exists()]
+
+    @staticmethod
+    def _sprite_reference_variant_tokens(game_name: str) -> List[str]:
+        variant = _party_game_variant_from_name(game_name)
+        mapping: Dict[str, List[str]] = {
+            "firered-leafgreen": ["generation_iii_firered_leafgreen", "generation_iii_emerald", "generation_iii_ruby_sapphire"],
+            "emerald": ["generation_iii_emerald", "generation_iii_ruby_sapphire", "generation_iii_firered_leafgreen"],
+            "ruby-sapphire": ["generation_iii_ruby_sapphire", "generation_iii_emerald", "generation_iii_firered_leafgreen"],
+            "crystal": ["generation_ii_crystal", "generation_ii_gold", "generation_ii_silver"],
+            "gold": ["generation_ii_gold", "generation_ii_silver", "generation_ii_crystal"],
+            "silver": ["generation_ii_silver", "generation_ii_gold", "generation_ii_crystal"],
+            "yellow": ["generation_i_yellow", "generation_i_red_blue"],
+            "red-blue": ["generation_i_red_blue", "generation_i_yellow"],
+            "default": ["default"],
+        }
+        tokens = mapping.get(str(variant), mapping["default"])
+        deduped: List[str] = []
+        seen: Set[str] = set()
+        for token in tokens:
+            key = str(token or "").strip().lower()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            deduped.append(key)
+        return deduped
+
+    def _sprite_reference_paths(self, game_name: str, species_id: int) -> List[Path]:
+        try:
+            pid = int(species_id)
+        except (TypeError, ValueError):
+            return []
+        if pid <= 0:
+            return []
+
+        base_dirs = self._sprite_library_dirs(game_name)
+        if not base_dirs:
+            return []
+
+        candidates: List[Path] = []
+        seen: Set[str] = set()
+
+        def _add(path_obj: Path):
+            key = str(path_obj).lower()
+            if key in seen:
+                return
+            seen.add(key)
+            candidates.append(path_obj)
+
+        for base_dir in base_dirs:
+            for token in self._sprite_reference_variant_tokens(game_name):
+                _add(base_dir / f"{token}_{pid}.png")
+                _add(base_dir / f"{token}_{pid}_shiny.png")
+
+            _add(base_dir / f"default_{pid}.png")
+            _add(base_dir / f"default_{pid}_shiny.png")
+            _add(base_dir / f"{pid}.png")
+            _add(base_dir / f"{pid}_shiny.png")
+
+        existing = [path_obj for path_obj in candidates if path_obj.exists()]
+        if existing:
+            return existing
+
+        for base_dir in base_dirs:
+            for path_obj in base_dir.glob(f"*_{pid}.png"):
+                _add(path_obj)
+            for path_obj in base_dir.glob(f"*_{pid}_shiny.png"):
+                _add(path_obj)
+
+        return [path_obj for path_obj in candidates if path_obj.exists()]
+
+    def _sprite_reference_signatures_from_image(self, image) -> List[str]:
+        if image is None or not PIL_AVAILABLE:
+            return []
+        try:
+            rgba = image.convert("RGBA")
+        except Exception:
+            return []
+
+        try:
+            alpha = rgba.split()[-1]
+            bbox = alpha.getbbox()
+        except Exception:
+            bbox = None
+        if not bbox:
+            return []
+
+        sprite = rgba.crop(bbox)
+        canvas_size = max(64, min(256, self._cfg_int("video_reference_canvas_size", 96)))
+        bg_luma = max(0, min(255, self._cfg_int("video_reference_bg_luma", 128)))
+
+        scales_raw = str(self.config.get("video_reference_sprite_scales", "0.62,0.74,0.86") or "").strip()
+        scales: List[float] = []
+        for token in scales_raw.split(","):
+            token = str(token).strip()
+            if not token:
+                continue
+            try:
+                scale = float(token)
+            except (TypeError, ValueError):
+                continue
+            scales.append(max(0.30, min(1.20, scale)))
+        if not scales:
+            scales = [0.62, 0.74, 0.86]
+
+        try:
+            if hasattr(Image, "Resampling"):
+                resample = Image.Resampling.BILINEAR
+            else:
+                resample = Image.BILINEAR
+        except Exception:
+            resample = Image.BILINEAR
+
+        signatures: List[str] = []
+        seen: Set[str] = set()
+        for scale in scales:
+            max_dim = max(8, int(float(canvas_size) * float(scale)))
+            w = max(1, int(sprite.width))
+            h = max(1, int(sprite.height))
+            scale_fit = min(float(max_dim) / float(w), float(max_dim) / float(h))
+            new_w = max(1, int(float(w) * scale_fit))
+            new_h = max(1, int(float(h) * scale_fit))
+
+            try:
+                resized = sprite.resize((new_w, new_h), resample)
+            except Exception:
+                continue
+
+            canvas = Image.new("RGBA", (canvas_size, canvas_size), (bg_luma, bg_luma, bg_luma, 255))
+            x = max(0, (canvas_size - new_w) // 2)
+            y = max(0, (canvas_size - new_h) // 2)
+            try:
+                canvas.alpha_composite(resized, (x, y))
+            except Exception:
+                try:
+                    canvas.paste(resized, (x, y), resized)
+                except Exception:
+                    continue
+
+            gray = ImageOps.autocontrast(canvas.convert("L"))
+            hash_img = gray.resize((16, 16), resample)
+            signature = self._signature_from_grayscale(hash_img)
+            if signature and signature not in seen:
+                seen.add(signature)
+                signatures.append(signature)
+        return signatures
+
+    def _sprite_reference_signatures_for_species(self, game_name: str, species_id: int) -> List[str]:
+        try:
+            pid = int(species_id)
+        except (TypeError, ValueError):
+            return []
+        if pid <= 0:
+            return []
+
+        variant_key = _party_game_variant_from_name(game_name)
+        game_key = re.sub(r"[^a-z0-9]+", "_", str(game_name or "").lower()).strip("_")
+        cache_key = (f"{str(variant_key)}:{game_key}", int(pid))
+        cached = self._sprite_reference_signature_cache.get(cache_key)
+        if isinstance(cached, list):
+            return list(cached)
+        if cache_key in self._sprite_reference_missing:
+            return []
+
+        signatures: List[str] = []
+        paths = self._sprite_reference_paths(game_name, pid)
+        for sprite_path in paths[:4]:
+            try:
+                with Image.open(sprite_path) as raw_img:
+                    signatures.extend(self._sprite_reference_signatures_from_image(raw_img))
+            except Exception:
+                continue
+
+        deduped: List[str] = []
+        seen: Set[str] = set()
+        for signature in signatures:
+            key = str(signature).strip().lower()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            deduped.append(key)
+
+        if deduped:
+            self._sprite_reference_signature_cache[cache_key] = list(deduped)
+            self._sprite_reference_missing.discard(cache_key)
+            return list(deduped)
+
+        self._sprite_reference_missing.add(cache_key)
+        return []
+
+    def _sprite_template_from_image(self, image) -> Optional[Dict[str, object]]:
+        if image is None or not PIL_AVAILABLE:
+            return None
+        try:
+            rgba = image.convert("RGBA")
+        except Exception:
+            return None
+
+        try:
+            alpha = rgba.split()[-1]
+        except Exception:
+            alpha = None
+
+        mask = None
+        if alpha is not None:
+            try:
+                mask = alpha.point(lambda px: 255 if int(px) >= 20 else 0)
+            except Exception:
+                mask = None
+
+        if mask is None or mask.getbbox() is None:
+            # Fallback for opaque input: derive foreground from background-luma distance.
+            try:
+                gray = ImageOps.autocontrast(rgba.convert("L"))
+                pixels = self._image_pixels_flat(gray)
+                width = int(gray.width)
+                height = int(gray.height)
+                border_values: List[int] = []
+                if width > 0 and height > 0:
+                    top_row = 0
+                    bottom_row = max(0, (height - 1) * width)
+                    for x in range(width):
+                        border_values.append(int(pixels[top_row + x]))
+                        border_values.append(int(pixels[bottom_row + x]))
+                    for y in range(1, max(1, height - 1)):
+                        row = y * width
+                        border_values.append(int(pixels[row]))
+                        border_values.append(int(pixels[row + max(0, width - 1)]))
+                bg = 128
+                if border_values:
+                    border_values.sort()
+                    bg = int(border_values[len(border_values) // 2])
+                delta = max(8, min(96, self._cfg_int("video_sprite_fg_delta_threshold", 22)))
+                mask = gray.point(lambda px: 255 if abs(int(px) - int(bg)) >= int(delta) else 0)
+            except Exception:
+                return None
+
+        bbox = mask.getbbox() if mask is not None else None
+        if not bbox:
+            return None
+
+        try:
+            sprite = rgba.crop(bbox)
+            alpha_crop = mask.crop(bbox)
+            sprite.putalpha(alpha_crop)
+        except Exception:
+            return None
+
+        try:
+            if hasattr(Image, "Resampling"):
+                resample = Image.Resampling.BILINEAR
+            else:
+                resample = Image.BILINEAR
+        except Exception:
+            resample = Image.BILINEAR
+
+        canvas_size = max(32, min(192, self._cfg_int("video_structural_canvas_size", 64)))
+        target_size = max(20, min(canvas_size, self._cfg_int("video_structural_target_size", 48)))
+        sw = int(sprite.width)
+        sh = int(sprite.height)
+        if sw <= 0 or sh <= 0:
+            return None
+
+        scale = float(target_size) / float(max(sw, sh))
+        nw = max(1, int(round(sw * scale)))
+        nh = max(1, int(round(sh * scale)))
+        try:
+            resized = sprite.resize((nw, nh), resample)
+        except Exception:
+            return None
+
+        canvas = Image.new("RGBA", (canvas_size, canvas_size), (128, 128, 128, 0))
+        x = max(0, (canvas_size - nw) // 2)
+        y = max(0, (canvas_size - nh) // 2)
+        try:
+            canvas.alpha_composite(resized, (x, y))
+        except Exception:
+            try:
+                canvas.paste(resized, (x, y), resized)
+            except Exception:
+                return None
+
+        alpha_canvas = canvas.split()[-1]
+        gray_canvas = ImageOps.autocontrast(canvas.convert("L"))
+        a_pixels = self._image_pixels_flat(alpha_canvas)
+        g_pixels = self._image_pixels_flat(gray_canvas)
+        if not a_pixels or not g_pixels or len(a_pixels) != len(g_pixels):
+            return None
+
+        mask_bits: List[int] = [1 if int(px) >= 20 else 0 for px in a_pixels]
+        fg_count = int(sum(mask_bits))
+        if fg_count < max(24, int(0.004 * len(mask_bits))):
+            return None
+
+        size = int(canvas_size)
+        edge_bits: List[int] = [0] * len(mask_bits)
+        for yy in range(size):
+            row = yy * size
+            for xx in range(size):
+                idx = row + xx
+                if mask_bits[idx] <= 0:
+                    continue
+                left = mask_bits[idx - 1] if xx > 0 else 0
+                right = mask_bits[idx + 1] if xx < (size - 1) else 0
+                up = mask_bits[idx - size] if yy > 0 else 0
+                down = mask_bits[idx + size] if yy < (size - 1) else 0
+                if left == 0 or right == 0 or up == 0 or down == 0:
+                    edge_bits[idx] = 1
+
+        return {
+            "size": int(size),
+            "mask": mask_bits,
+            "edge": edge_bits,
+            "gray": [int(v) for v in g_pixels],
+            "fg_count": int(fg_count),
+            "edge_count": int(sum(edge_bits)),
+        }
+
+    @staticmethod
+    def _binary_iou(a: List[int], b: List[int]) -> float:
+        if not a or not b or len(a) != len(b):
+            return 0.0
+        inter = 0
+        union = 0
+        for x, y in zip(a, b):
+            xi = int(x) > 0
+            yi = int(y) > 0
+            if xi and yi:
+                inter += 1
+            if xi or yi:
+                union += 1
+        if union <= 0:
+            return 0.0
+        return float(inter) / float(union)
+
+    def _sprite_template_similarity(self, query_tpl: Dict[str, object], ref_tpl: Dict[str, object]) -> float:
+        try:
+            q_mask = list(query_tpl.get("mask") or [])
+            r_mask = list(ref_tpl.get("mask") or [])
+            q_edge = list(query_tpl.get("edge") or [])
+            r_edge = list(ref_tpl.get("edge") or [])
+            q_gray = list(query_tpl.get("gray") or [])
+            r_gray = list(ref_tpl.get("gray") or [])
+        except Exception:
+            return 0.0
+
+        if not q_mask or not r_mask or len(q_mask) != len(r_mask):
+            return 0.0
+        if len(q_edge) != len(q_mask) or len(r_edge) != len(r_mask):
+            return 0.0
+        if len(q_gray) != len(q_mask) or len(r_gray) != len(r_mask):
+            return 0.0
+
+        mask_iou = float(self._binary_iou(q_mask, r_mask))
+        edge_iou = float(self._binary_iou(q_edge, r_edge))
+
+        overlap = 0
+        mad_total = 0.0
+        for idx in range(len(q_mask)):
+            if int(q_mask[idx]) > 0 and int(r_mask[idx]) > 0:
+                overlap += 1
+                mad_total += abs(float(int(q_gray[idx])) - float(int(r_gray[idx])))
+        if overlap > 0:
+            mad = float(mad_total) / float(overlap)
+            intensity = max(0.0, min(1.0, 1.0 - (mad / 255.0)))
+        else:
+            intensity = 0.0
+
+        score = (mask_iou * 0.56) + (edge_iou * 0.30) + (intensity * 0.14)
+        return float(max(0.0, min(1.0, score)))
+
+    def _sprite_reference_templates_for_species(self, game_name: str, species_id: int) -> List[Dict[str, object]]:
+        try:
+            pid = int(species_id)
+        except (TypeError, ValueError):
+            return []
+        if pid <= 0:
+            return []
+
+        variant_key = _party_game_variant_from_name(game_name)
+        game_key = re.sub(r"[^a-z0-9]+", "_", str(game_name or "").lower()).strip("_")
+        cache_key = (f"{str(variant_key)}:{game_key}", int(pid))
+        cached = self._sprite_reference_template_cache.get(cache_key)
+        if isinstance(cached, list):
+            return list(cached)
+        if cache_key in self._sprite_reference_template_missing:
+            return []
+
+        templates: List[Dict[str, object]] = []
+        paths = self._sprite_reference_paths(game_name, pid)
+        for sprite_path in paths[:6]:
+            try:
+                with Image.open(sprite_path) as raw_img:
+                    tpl = self._sprite_template_from_image(raw_img)
+                    if isinstance(tpl, dict):
+                        templates.append(tpl)
+            except Exception:
+                continue
+
+        if templates:
+            self._sprite_reference_template_cache[cache_key] = list(templates)
+            self._sprite_reference_template_missing.discard(cache_key)
+            return list(templates)
+
+        self._sprite_reference_template_missing.add(cache_key)
+        return []
+
+    def _infer_species_from_structural_templates(
+        self,
+        game_name: str,
+        sprite_image,
+        candidate_ids: List[int],
+    ) -> Tuple[Optional[Tuple[int, str]], Dict[str, object]]:
+        debug: Dict[str, object] = {}
+        if sprite_image is None:
+            return None, debug
+        if not candidate_ids:
+            return None, debug
+
+        query_tpl = self._sprite_template_from_image(sprite_image)
+        if not isinstance(query_tpl, dict):
+            return None, debug
+
+        best_species = 0
+        best_score = 0.0
+        second_score = 0.0
+
+        for sid in candidate_ids:
+            refs = self._sprite_reference_templates_for_species(game_name, int(sid))
+            if not refs:
+                continue
+            species_best = 0.0
+            for ref_tpl in refs:
+                score = float(self._sprite_template_similarity(query_tpl, ref_tpl))
+                if score > species_best:
+                    species_best = float(score)
+            if species_best > best_score:
+                second_score = float(best_score)
+                best_score = float(species_best)
+                best_species = int(sid)
+            elif species_best > second_score:
+                second_score = float(species_best)
+
+        margin = float(best_score - second_score)
+        min_score = max(0.20, min(0.98, self._cfg_float("video_structural_min_score", 0.58)))
+        min_margin = max(0.0, min(0.60, self._cfg_float("video_structural_min_margin", 0.04)))
+        if len(candidate_ids) <= 2:
+            min_margin = min(float(min_margin), 0.01)
+
+        confidence_ok = bool(best_species > 0 and best_score >= min_score and margin >= min_margin)
+        debug = {
+            "structural_best_species_id": int(best_species),
+            "structural_best_score": float(best_score),
+            "structural_second_score": float(second_score),
+            "structural_score_margin": float(margin),
+            "structural_min_score": float(min_score),
+            "structural_min_margin": float(min_margin),
+            "structural_confidence_ok": bool(confidence_ok),
+        }
+
+        if not confidence_ok:
+            return None, debug
+        resolved_name = str(self._species_lookup.get(int(best_species), "")).strip() or f"Pokemon #{int(best_species)}"
+        return (int(best_species), str(resolved_name)), debug
+    def _infer_species_from_reference_candidates(self, game_name: str, sprite_signature: str) -> Optional[Tuple[int, str]]:
+        self._sprite_last_match_debug = {}
+        signature = str(sprite_signature or "").strip().lower()
+        query_signatures: List[str] = []
+        seen_query: Set[str] = set()
+        for candidate_signature in [signature] + list(getattr(self, "_sprite_last_signature_candidates", []) or []):
+            key = str(candidate_signature or "").strip().lower()
+            if not key or key in seen_query:
+                continue
+            seen_query.add(key)
+            query_signatures.append(key)
+        if not query_signatures:
+            return None
+
+        candidate_ids = self._candidate_species_ids()
+        if not candidate_ids:
+            return None
+
+        max_distance = max(6, min(128, self._cfg_int("video_sprite_reference_hamming_threshold", 24)))
+        strict_distance = max(4, min(int(max_distance), self._cfg_int("video_sprite_reference_hamming_strict_threshold", 16)))
+        min_margin = max(0, min(64, self._cfg_int("video_sprite_reference_min_margin", 12)))
+        strong_margin = max(0, min(64, self._cfg_int("video_sprite_reference_strong_margin", 20)))
+        # Single/duo-candidate hunts need stricter absolute matching; otherwise
+        # reference matching can collapse to false positives against the only target.
+        if len(candidate_ids) <= 2:
+            single_max_distance = max(4, min(64, self._cfg_int("video_sprite_reference_single_candidate_max_distance", 12)))
+            single_strict_distance = max(4, min(int(single_max_distance), self._cfg_int("video_sprite_reference_single_candidate_strict_distance", 9)))
+            single_min_margin = max(0, min(64, self._cfg_int("video_sprite_reference_single_candidate_min_margin", 8)))
+            single_strong_margin = max(int(single_min_margin), min(64, self._cfg_int("video_sprite_reference_single_candidate_strong_margin", 14)))
+            max_distance = min(int(max_distance), int(single_max_distance))
+            strict_distance = min(int(strict_distance), int(single_strict_distance))
+            min_margin = max(int(min_margin), int(single_min_margin))
+            strong_margin = max(int(strong_margin), int(single_strong_margin))
+
+        best_match: Optional[Tuple[int, int]] = None
+        second_distance = 999
+
+        for species_id in candidate_ids:
+            reference_signatures = self._sprite_reference_signatures_for_species(game_name, species_id)
+            if not reference_signatures:
+                continue
+
+            species_best = 999
+            for query_signature in query_signatures:
+                for reference_signature in reference_signatures:
+                    distance = self._sprite_hamming_distance(query_signature, reference_signature)
+                    if distance < species_best:
+                        species_best = int(distance)
+
+            if species_best >= 999:
+                continue
+            if best_match is None or species_best < best_match[1]:
+                if best_match is not None:
+                    second_distance = min(int(second_distance), int(best_match[1]))
+                best_match = (int(species_id), int(species_best))
+            else:
+                second_distance = min(int(second_distance), int(species_best))
+
+        best_distance = int(best_match[1]) if best_match is not None else 999
+        margin_value = int(second_distance - best_distance) if best_match is not None and second_distance < 999 else 999
+        confidence_ok = bool(
+            best_match is not None
+            and best_distance <= int(max_distance)
+            and (
+                best_distance <= int(strict_distance)
+                or (margin_value >= int(strong_margin) and best_distance <= int(max_distance))
+            )
+            and (second_distance >= 999 or margin_value >= int(min_margin))
+        )
+
+        self._sprite_last_match_debug = {
+            "candidate_count": int(len(candidate_ids)),
+            "query_signature_count": int(len(query_signatures)),
+            "best_species_id": int(best_match[0]) if best_match is not None else 0,
+            "best_hamming_distance": int(best_distance),
+            "second_hamming_distance": int(second_distance),
+            "distance_margin": int(margin_value),
+            "min_margin": int(min_margin),
+            "strong_margin": int(strong_margin),
+            "strict_distance": int(strict_distance),
+            "max_distance": int(max_distance),
+            "confidence_ok": bool(confidence_ok),
+        }
+
+        if best_match is None:
+            return None
+        strong_relaxed_ok = bool(
+            best_match is not None
+            and int(best_distance) <= int(max_distance)
+            and int(margin_value) >= int(max(8, min_margin))
+            and int(best_distance) <= int(strict_distance + 2)
+        )
+        if (not confidence_ok) and bool(strong_relaxed_ok):
+            confidence_ok = True
+            self._sprite_last_match_debug["confidence_relaxed_ok"] = True
+        if not confidence_ok:
+            return None
+
+        resolved_name = str(self._species_lookup.get(int(best_match[0]), "")).strip()
+        if not resolved_name:
+            resolved_name = f"Pokemon #{int(best_match[0])}"
+        return int(best_match[0]), resolved_name
+
+    def _roi_presence_metrics(self, image, roi_raw: str, default_raw: str) -> Dict[str, float]:
+        if image is None or not PIL_AVAILABLE:
+            return {
+                "score": 0.0,
+                "detail_ratio": 0.0,
+                "edge_ratio": 0.0,
+                "dark_ratio": 0.0,
+                "bright_ratio": 0.0,
+                "contrast_ratio": 0.0,
+            }
+
+        try:
+            x1, y1, x2, y2 = self._parse_roi_spec_raw(str(roi_raw or default_raw), str(default_raw), int(image.width), int(image.height))
+            crop = image.crop((x1, y1, x2, y2)).convert("L")
+            crop = ImageOps.autocontrast(crop)
+        except Exception:
+            return {
+                "score": 0.0,
+                "detail_ratio": 0.0,
+                "edge_ratio": 0.0,
+                "dark_ratio": 0.0,
+                "bright_ratio": 0.0,
+                "contrast_ratio": 0.0,
+            }
+
+        try:
+            if hasattr(Image, "Resampling"):
+                resample = Image.Resampling.BILINEAR
+            else:
+                resample = Image.BILINEAR
+        except Exception:
+            resample = Image.BILINEAR
+
+        metric_img = crop.resize((48, 18), resample)
+        pixels = self._image_pixels_flat(metric_img)
+        if not pixels:
+            return {
+                "score": 0.0,
+                "detail_ratio": 0.0,
+                "edge_ratio": 0.0,
+                "dark_ratio": 0.0,
+                "bright_ratio": 0.0,
+                "contrast_ratio": 0.0,
+            }
+
+        total = float(len(pixels))
+        mean = float(sum(int(px) for px in pixels)) / total
+        detail_count = sum(1 for px in pixels if abs(float(int(px)) - mean) >= 16.0)
+        dark_count = sum(1 for px in pixels if int(px) <= 86)
+        bright_count = sum(1 for px in pixels if int(px) >= 170)
+        detail_ratio = float(detail_count) / total
+        dark_ratio = float(dark_count) / total
+        bright_ratio = float(bright_count) / total
+
+        edge_total = 0.0
+        width = 48
+        height = 18
+        for y in range(height - 1):
+            row = y * width
+            next_row = (y + 1) * width
+            for x in range(width - 1):
+                idx = row + x
+                px = float(int(pixels[idx]))
+                edge_total += abs(px - float(int(pixels[idx + 1])))
+                edge_total += abs(px - float(int(pixels[next_row + x])))
+
+        max_edge = float((width - 1) * (height - 1) * 255 * 2)
+        edge_ratio = (edge_total / max_edge) if max_edge > 0 else 0.0
+        contrast_ratio = min(float(dark_ratio), float(bright_ratio))
+        score = int(max(0.0, min(1000.0, (detail_ratio * 0.47 + edge_ratio * 0.38 + contrast_ratio * 0.15) * 1000.0)))
+        return {
+            "score": float(score),
+            "detail_ratio": float(detail_ratio),
+            "edge_ratio": float(edge_ratio),
+            "dark_ratio": float(dark_ratio),
+            "bright_ratio": float(bright_ratio),
+            "contrast_ratio": float(contrast_ratio),
+        }
+
+    def _battle_context_present(self, image, game_name: str, ocr_roi_raw: str, nameplate_roi_raw: str) -> Tuple[bool, Dict[str, object]]:
+        textbox_metrics = self._roi_presence_metrics(image, ocr_roi_raw, "0.05,0.70,0.95,0.96")
+        default_nameplate = _default_video_nameplate_roi_for_game(game_name)
+        hud_metrics = self._roi_presence_metrics(image, nameplate_roi_raw, default_nameplate)
+
+        textbox_threshold = max(20, min(700, self._cfg_int("video_battle_textbox_score_threshold", 118)))
+        hud_threshold = max(10, min(700, self._cfg_int("video_battle_hud_score_threshold", 88)))
+        textbox_detail_min = max(0.0, min(0.60, self._cfg_float("video_battle_textbox_min_detail_ratio", 0.030)))
+        hud_detail_min = max(0.0, min(0.60, self._cfg_float("video_battle_hud_min_detail_ratio", 0.020)))
+        textbox_edge_min = max(0.0, min(0.60, self._cfg_float("video_battle_textbox_min_edge_ratio", 0.006)))
+        hud_edge_min = max(0.0, min(0.60, self._cfg_float("video_battle_hud_min_edge_ratio", 0.005)))
+        textbox_contrast_min = max(0.0, min(0.50, self._cfg_float("video_battle_textbox_min_contrast_ratio", 0.020)))
+        hud_contrast_min = max(0.0, min(0.50, self._cfg_float("video_battle_hud_min_contrast_ratio", 0.015)))
+
+        require_contrast = self._cfg_bool("video_battle_require_contrast", False)
+        textbox_ok = bool(
+            float(textbox_metrics.get("score", 0.0)) >= float(textbox_threshold)
+            and float(textbox_metrics.get("detail_ratio", 0.0)) >= float(textbox_detail_min)
+            and float(textbox_metrics.get("edge_ratio", 0.0)) >= float(textbox_edge_min)
+            and (
+                (not require_contrast)
+                or float(textbox_metrics.get("contrast_ratio", 0.0)) >= float(textbox_contrast_min)
+            )
+        )
+        hud_ok = bool(
+            float(hud_metrics.get("score", 0.0)) >= float(hud_threshold)
+            and float(hud_metrics.get("detail_ratio", 0.0)) >= float(hud_detail_min)
+            and float(hud_metrics.get("edge_ratio", 0.0)) >= float(hud_edge_min)
+            and (
+                (not require_contrast)
+                or float(hud_metrics.get("contrast_ratio", 0.0)) >= float(hud_contrast_min)
+            )
+        )
+
+        context_ok = bool(textbox_ok and hud_ok)
+        if not context_ok and self._cfg_bool("video_battle_context_allow_textbox_only", False):
+            context_ok = bool(textbox_ok)
+
+        details: Dict[str, object] = {
+            "battle_context": bool(context_ok),
+            "require_contrast": bool(require_contrast),
+            "textbox_ok": bool(textbox_ok),
+            "hud_ok": bool(hud_ok),
+            "textbox_score": int(textbox_metrics.get("score", 0.0) or 0.0),
+            "hud_score": int(hud_metrics.get("score", 0.0) or 0.0),
+            "textbox_detail_ratio": float(textbox_metrics.get("detail_ratio", 0.0) or 0.0),
+            "hud_detail_ratio": float(hud_metrics.get("detail_ratio", 0.0) or 0.0),
+            "textbox_edge_ratio": float(textbox_metrics.get("edge_ratio", 0.0) or 0.0),
+            "hud_edge_ratio": float(hud_metrics.get("edge_ratio", 0.0) or 0.0),
+            "textbox_contrast_ratio": float(textbox_metrics.get("contrast_ratio", 0.0) or 0.0),
+            "hud_contrast_ratio": float(hud_metrics.get("contrast_ratio", 0.0) or 0.0),
+        }
+        return bool(context_ok), details
+
+    def _extract_text(
+        self,
+        image,
+        ocr_roi_raw: Optional[str] = None,
+        threshold_override: Optional[int] = None,
+        ocr_config_override: Optional[str] = None,
+        invert: bool = False,
+        scale_multiplier: float = 2.0,
+    ) -> str:
         if image is None:
             return ""
         if not PYTESSERACT_AVAILABLE or pytesseract is None:
@@ -1967,13 +4060,27 @@ class OBSVideoEncounterReader:
         cropped = image.crop((x1, y1, x2, y2))
         gray = ImageOps.grayscale(cropped)
         gray = ImageOps.autocontrast(gray)
-        threshold = max(80, min(230, self._cfg_int("video_ocr_threshold", 145)))
+        if isinstance(threshold_override, (int, float)):
+            threshold_raw = int(threshold_override)
+        else:
+            threshold_raw = self._cfg_int("video_ocr_threshold", 145)
+        threshold = max(80, min(230, threshold_raw))
         bw = gray.point(lambda px: 255 if int(px) >= threshold else 0)
+        if invert:
+            try:
+                bw = ImageOps.invert(bw)
+            except Exception:
+                pass
         try:
             resample = Image.Resampling.BILINEAR
         except Exception:
             resample = Image.BILINEAR
-        scaled = bw.resize((max(1, int(bw.width * 2)), max(1, int(bw.height * 2))), resample)
+        try:
+            scale = float(scale_multiplier)
+        except (TypeError, ValueError):
+            scale = 2.0
+        scale = max(1.0, min(5.0, scale))
+        scaled = bw.resize((max(1, int(bw.width * scale)), max(1, int(bw.height * scale))), resample)
 
         tesseract_cmd = self._cfg_str("video_tesseract_cmd", "")
         if tesseract_cmd:
@@ -1982,10 +4089,13 @@ class OBSVideoEncounterReader:
             except Exception:
                 pass
 
-        ocr_config = self._cfg_str(
-            "video_ocr_config",
-            "--psm 6 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'.-!?: ",
-        )
+        if isinstance(ocr_config_override, str) and ocr_config_override.strip():
+            ocr_config = ocr_config_override.strip()
+        else:
+            ocr_config = self._cfg_str(
+                "video_ocr_config",
+                "--psm 6 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'.-!?: ",
+            )
         try:
             return str(pytesseract.image_to_string(scaled, config=ocr_config) or "")
         except Exception as exc:
@@ -2007,6 +4117,460 @@ class OBSVideoEncounterReader:
                 if resolved is not None:
                     return resolved
         return None
+
+    def _resolve_species_from_any_text(self, text: str, relaxed: bool = False) -> Optional[Tuple[int, str]]:
+        normalized = self._normalize_ocr_text(text)
+        if not normalized:
+            return None
+
+        cutoff = 0.60 if relaxed else 0.74
+
+        level_match = re.search(r"\b([A-Z][A-Z0-9'\.-]{2,20})\s+L[VW]\.??\s*[0-9]{1,3}\b", normalized)
+        if level_match:
+            candidate = str(level_match.group(1) or "").strip(" !?.:-")
+            resolved = self._resolve_species(candidate, cutoff=cutoff)
+            if resolved is not None:
+                return resolved
+
+        compact = re.sub(r"[^A-Z0-9]", "", normalized)
+        compact = compact.replace("WILD", "").replace("FOE", "")
+        compact_match = re.search(r"([A-Z]{3,20})LV[0-9]{1,3}", compact)
+        if compact_match:
+            compact_candidate = str(compact_match.group(1) or "").strip()
+            resolved = self._resolve_species(compact_candidate, cutoff=cutoff)
+            if resolved is not None:
+                return resolved
+
+        tokens = re.findall(r"[A-Z0-9'\.-]+", normalized)
+        if not tokens:
+            return None
+
+        stopwords = {
+            "WILD", "APPEARED", "APPEAR", "FOE", "ENEMY", "FIGHT", "BAG", "RUN",
+            "ITEM", "POKEMON", "LV", "HP", "PP", "USED", "GO", "THE", "FNT",
+            "PAR", "SLP", "BRN", "PSN",
+        }
+        words: List[str] = []
+        for raw_token in tokens:
+            token = str(raw_token or "").strip(" !?.:-")
+            if not token:
+                continue
+            if token.isdigit():
+                continue
+            if token in stopwords:
+                continue
+            words.append(token)
+
+        if not words:
+            return None
+
+        max_span = min(3, len(words))
+        for span in range(max_span, 0, -1):
+            for idx in range(0, len(words) - span + 1):
+                candidate = " ".join(words[idx: idx + span])
+                resolved = self._resolve_species(candidate, cutoff=cutoff)
+                if resolved is not None:
+                    return resolved
+        return None
+
+    def _remember_sprite_species(self, game_name: str, sprite_signature: str, species: Optional[Tuple[int, str]]):
+        if species is None:
+            return
+        signature = str(sprite_signature or "").strip().lower()
+        if not signature:
+            return
+        try:
+            species_id = int(species[0])
+        except (TypeError, ValueError, IndexError):
+            return
+        species_name = str(species[1] if len(species) > 1 else "").strip()
+        if species_id <= 0 or not species_name:
+            return
+
+        game_key = str(game_name or "").strip().lower()
+        if not game_key:
+            return
+        bucket = self._sprite_species_memory.setdefault(game_key, {})
+        bucket[signature] = (species_id, species_name, float(time.monotonic()))
+        limit = max(25, min(1000, int(self._sprite_memory_limit)))
+        while len(bucket) > limit:
+            oldest_key = min(bucket.items(), key=lambda item: float(item[1][2]))[0]
+            bucket.pop(oldest_key, None)
+
+    def _ai_species_confidence(self, best_distance: int, second_distance: int, margin_value: int, sprite_score: int, sprite_detail: float, sprite_edge: float) -> float:
+        soft_max = max(8, min(160, self._cfg_int("video_ai_species_soft_max_distance", 24)))
+        margin_norm = max(6, min(80, self._cfg_int("video_ai_species_margin_norm", 18)))
+        score_norm = max(120, min(900, self._cfg_int("video_ai_species_score_norm", 460)))
+
+        dist_component = max(0.0, min(1.0, 1.0 - (float(best_distance) / float(max(1, soft_max)))))
+        margin_component = max(0.0, min(1.0, float(max(0, margin_value)) / float(max(1, margin_norm))))
+        score_component = max(0.0, min(1.0, float(max(0, sprite_score)) / float(max(1, score_norm))))
+        detail_component = max(0.0, min(1.0, float(max(0.0, sprite_detail)) / 0.30))
+        edge_component = max(0.0, min(1.0, float(max(0.0, sprite_edge)) / 0.055))
+
+        second_bonus = 0.0
+        if int(second_distance) >= 999:
+            second_bonus = 0.10
+        else:
+            second_gap = max(0.0, float(int(second_distance) - int(best_distance)))
+            second_bonus = max(0.0, min(0.12, second_gap / 120.0))
+
+        confidence = (
+            dist_component * 0.42
+            + margin_component * 0.25
+            + score_component * 0.15
+            + detail_component * 0.10
+            + edge_component * 0.08
+            + second_bonus
+        )
+        if int(best_distance) > int(soft_max):
+            # Hard down-weight far matches so texture-only frames cannot pass as species.
+            confidence = min(float(confidence), 0.20)
+        return max(0.0, min(1.0, float(confidence)))
+
+    def _ai_species_temporal_accept(self, scene_key: str, species_id: int, confidence: float) -> Tuple[bool, int, int]:
+        key = str(scene_key or "").strip().lower()
+        if not key:
+            key = "global"
+
+        now_ts = float(time.monotonic())
+        window_sec = max(0.20, min(5.0, self._cfg_float("video_ai_species_window_sec", 1.20)))
+        min_conf = max(0.05, min(0.98, self._cfg_float("video_ai_species_min_confidence", 0.62)))
+        required = max(1, min(6, self._cfg_int("video_ai_species_required_consistency", 2)))
+
+        state = self._ai_species_scene_state.setdefault(key, {})
+        prev_id = int(state.get("species_id", 0) or 0)
+        prev_ts = float(state.get("ts", 0.0) or 0.0)
+        prev_hits = int(state.get("hits", 0) or 0)
+
+        if (now_ts - prev_ts) > float(window_sec) or int(prev_id) != int(species_id):
+            hits = 1
+        else:
+            hits = int(prev_hits) + 1
+
+        if float(confidence) < float(min_conf):
+            state["species_id"] = int(species_id)
+            state["ts"] = float(now_ts)
+            state["hits"] = int(hits)
+            state["confidence"] = float(confidence)
+            return False, int(hits), int(required)
+
+        state["species_id"] = int(species_id)
+        state["ts"] = float(now_ts)
+        state["hits"] = int(hits)
+        state["confidence"] = float(confidence)
+        return bool(int(hits) >= int(required)), int(hits), int(required)
+
+    def _infer_species_from_sprite(
+        self,
+        game_name: str,
+        sprite_signature: str,
+        scene_key: str = "",
+        sprite_score: int = 0,
+        sprite_detail: float = 0.0,
+        sprite_edge: float = 0.0,
+        sprite_crop = None,
+    ) -> Tuple[Optional[Tuple[int, str]], str]:
+        self._sprite_last_match_debug = {}
+        signature = str(sprite_signature or "").strip().lower()
+        if not signature:
+            return None, ""
+        game_key = str(game_name or "").strip().lower()
+        if not game_key:
+            return None, ""
+        engine = self._species_engine()
+        candidate_ids = self._candidate_species_ids()
+
+        reference_match = self._infer_species_from_reference_candidates(game_name, signature)
+        best_species_id = int(self._sprite_last_match_debug.get("best_species_id", 0) or 0)
+        best_distance = int(self._sprite_last_match_debug.get("best_hamming_distance", 999) or 999)
+        second_distance = int(self._sprite_last_match_debug.get("second_hamming_distance", 999) or 999)
+        margin_value = int(self._sprite_last_match_debug.get("distance_margin", 0) or 0)
+        ref_conf_ok = bool(self._sprite_last_match_debug.get("confidence_ok", False))
+
+        structural_match = None
+        structural_species_id = 0
+        structural_conf_ok = False
+        structural_best_score = 0.0
+        if self._cfg_bool("video_structural_enabled", True):
+            structural_query = sprite_crop
+            foreground_sprite = getattr(self, "_sprite_last_foreground_sprite", None)
+            if foreground_sprite is not None:
+                structural_query = foreground_sprite
+            structural_match, structural_debug = self._infer_species_from_structural_templates(
+                game_name,
+                structural_query,
+                candidate_ids,
+            )
+            if isinstance(structural_debug, dict) and structural_debug:
+                self._sprite_last_match_debug.update(structural_debug)
+                structural_species_id = int(structural_debug.get("structural_best_species_id", 0) or 0)
+                structural_conf_ok = bool(structural_debug.get("structural_confidence_ok", False))
+                structural_best_score = float(structural_debug.get("structural_best_score", 0.0) or 0.0)
+            if structural_match is not None:
+                try:
+                    structural_species_id = int(structural_match[0])
+                except Exception:
+                    pass
+
+        prefer_structural = self._cfg_bool("video_structural_prefer_over_reference", False)
+        allow_structural_fallback = self._cfg_bool("video_structural_allow_without_reference", True)
+        if reference_match is not None and bool(ref_conf_ok):
+            # When candidate list is tiny, require a second cue by default.
+            if len(candidate_ids) <= 2 and False:
+                require_structural_match = bool(
+                    bool(structural_conf_ok)
+                    and structural_match is not None
+                    and int(structural_species_id) == int(reference_match[0])
+                )
+                if not require_structural_match:
+                    self._sprite_last_match_debug["single_candidate_blocked"] = True
+                    self._sprite_last_match_debug["single_candidate_structural_required"] = True
+                    self._sprite_last_match_debug["single_candidate_candidate_count"] = int(len(candidate_ids))
+                    self._sprite_last_match_debug["single_candidate_reference_species_id"] = int(reference_match[0])
+                    self._sprite_last_match_debug["single_candidate_structural_species_id"] = int(structural_species_id)
+                    return None, ""
+            require_agreement = False
+            if bool(require_agreement) and bool(structural_conf_ok) and structural_match is not None and int(structural_species_id) > 0 and int(structural_species_id) != int(reference_match[0]):
+                self._sprite_last_match_debug["reference_structural_mismatch_blocked"] = True
+                self._sprite_last_match_debug["reference_species_id"] = int(reference_match[0])
+                self._sprite_last_match_debug["structural_species_id"] = int(structural_species_id)
+                return None, ""
+            if (
+                bool(prefer_structural)
+                and bool(structural_conf_ok)
+                and structural_match is not None
+                and int(structural_species_id) > 0
+                and int(structural_species_id) != int(reference_match[0])
+            ):
+                self._sprite_last_match_debug["source"] = "sprite_structural_override"
+                self._sprite_last_match_debug["structural_override_reference"] = True
+                return structural_match, "sprite_structural"
+            return reference_match, "sprite_reference"
+
+        if structural_match is not None and bool(structural_conf_ok) and bool(allow_structural_fallback):
+            self._sprite_last_match_debug["source"] = "sprite_structural"
+            return structural_match, "sprite_structural"
+
+        ai_enabled = self._cfg_bool("video_ai_species_enabled", True)
+        if ai_enabled and int(best_species_id) > 0:
+            ai_soft_max = max(8, min(160, self._cfg_int("video_ai_species_soft_max_distance", 24)))
+            ai_soft_min_margin = max(0, min(80, self._cfg_int("video_ai_species_soft_min_margin", 12)))
+            ai_conf = self._ai_species_confidence(best_distance, second_distance, margin_value, int(sprite_score), float(sprite_detail), float(sprite_edge))
+            temporal_ok, hits, required_hits = self._ai_species_temporal_accept(str(scene_key), int(best_species_id), float(ai_conf))
+            self._sprite_last_match_debug["ai_confidence"] = float(ai_conf)
+            self._sprite_last_match_debug["ai_hits"] = int(hits)
+            self._sprite_last_match_debug["ai_required_hits"] = int(required_hits)
+            self._sprite_last_match_debug["ai_temporal_ok"] = bool(temporal_ok)
+
+            ai_require_ref = False
+            ai_min_conf = max(0.20, min(0.98, self._cfg_float("video_ai_species_min_confidence", 0.62)))
+            ai_extra_margin = max(0, min(40, self._cfg_int("video_ai_species_extra_margin_without_ref", 8)))
+            ai_extra_hits = max(0, min(4, self._cfg_int("video_ai_species_extra_hits_without_ref", 1)))
+
+            ai_gate = bool(
+                int(best_distance) <= int(ai_soft_max)
+                and int(margin_value) >= int(ai_soft_min_margin)
+                and float(ai_conf) >= float(ai_min_conf)
+                and bool(temporal_ok)
+            )
+            if ai_gate and ai_require_ref and (not ref_conf_ok):
+                ai_gate = bool(
+                    int(margin_value) >= int(ai_soft_min_margin + ai_extra_margin)
+                    and int(hits) >= int(required_hits + ai_extra_hits)
+                )
+
+            if bool(structural_conf_ok) and int(structural_species_id) > 0:
+                structural_block_mismatch = False
+                structural_mismatch_min = max(0.20, min(0.98, self._cfg_float("video_structural_mismatch_min_score", 0.62)))
+                if int(structural_species_id) == int(best_species_id):
+                    ai_conf = max(float(ai_conf), min(0.99, float(structural_best_score) + 0.10))
+                    self._sprite_last_match_debug["ai_confidence"] = float(ai_conf)
+                elif bool(structural_block_mismatch) and float(structural_best_score) >= float(structural_mismatch_min):
+                    ai_gate = False
+                    self._sprite_last_match_debug["ai_blocked_by_structural"] = True
+                    self._sprite_last_match_debug["structural_mismatch_species_id"] = int(structural_species_id)
+
+            onnx_species_id = 0
+            onnx_conf = 0.0
+            if engine in {"onnx", "hybrid", "ai_v2"}:
+                onnx_species_id, onnx_conf = self._predict_species_from_onnx(sprite_crop, candidate_ids)
+                self._sprite_last_match_debug["onnx_species_id"] = int(onnx_species_id)
+                self._sprite_last_match_debug["onnx_confidence"] = float(onnx_conf)
+                onnx_min_conf = max(0.10, min(0.99, self._cfg_float("video_ai_species_onnx_min_confidence", 0.70)))
+                if int(onnx_species_id) > 0 and float(onnx_conf) >= float(onnx_min_conf):
+                    if int(onnx_species_id) != int(best_species_id):
+                        if (not ref_conf_ok) and float(ai_conf) < 0.82:
+                            ai_gate = False
+
+            if ai_gate:
+                resolved_name = str(self._species_lookup.get(int(best_species_id), "")).strip() or f"Pokemon #{int(best_species_id)}"
+                self._sprite_last_match_debug["source"] = "sprite_ai_reference"
+                return (int(best_species_id), str(resolved_name)), "sprite_ai_reference"
+
+            # Fallback consensus path: when candidate pool is small and the same
+            # species repeats with decent distance/margin, resolve even if strict
+            # confidence is not met.
+            if int(best_species_id) > 0:
+                candidate_count = int(len(candidate_ids))
+                loose_max_candidates = max(2, min(64, self._cfg_int("video_species_consensus_max_candidates", 12)))
+                loose_max_distance = max(8, min(96, self._cfg_int("video_species_consensus_max_distance", 30)))
+                loose_min_margin = max(0, min(64, self._cfg_int("video_species_consensus_min_margin", 10)))
+                if (
+                    int(candidate_count) <= int(loose_max_candidates)
+                    and int(best_distance) <= int(loose_max_distance)
+                    and int(margin_value) >= int(loose_min_margin)
+                ):
+                    consensus_conf = max(0.55, min(0.95, self._cfg_float("video_species_consensus_confidence", 0.72)))
+                    consensus_ok, consensus_hits, consensus_required = self._ai_species_temporal_accept(
+                        f"{str(scene_key)}:consensus",
+                        int(best_species_id),
+                        float(consensus_conf),
+                    )
+                    self._sprite_last_match_debug["consensus_hits"] = int(consensus_hits)
+                    self._sprite_last_match_debug["consensus_required_hits"] = int(consensus_required)
+                    self._sprite_last_match_debug["consensus_ok"] = bool(consensus_ok)
+                    if bool(consensus_ok):
+                        if (
+                            bool(structural_conf_ok)
+                            and int(structural_species_id) > 0
+                            and int(structural_species_id) != int(best_species_id)
+                            and self._cfg_bool("video_structural_block_mismatch", True)
+                        ):
+                            self._sprite_last_match_debug["consensus_blocked_by_structural"] = True
+                        else:
+                            resolved_name = str(self._species_lookup.get(int(best_species_id), "")).strip() or f"Pokemon #{int(best_species_id)}"
+                            self._sprite_last_match_debug["source"] = "sprite_consensus"
+                            return (int(best_species_id), str(resolved_name)), "sprite_consensus"
+
+        # Relaxed temporal fallback for stubborn near-matches: prefer waiting for
+        # stable agreement instead of returning unresolved forever.
+        if int(best_species_id) > 0:
+            relaxed_max_distance = max(10, min(96, self._cfg_int("video_species_relaxed_temporal_max_distance", 30)))
+            relaxed_min_margin = max(0, min(64, self._cfg_int("video_species_relaxed_temporal_min_margin", 10)))
+            relaxed_min_score = max(80, min(900, self._cfg_int("video_species_relaxed_temporal_min_score", 300)))
+            relaxed_min_conf = max(0.20, min(0.95, self._cfg_float("video_species_relaxed_temporal_min_confidence", 0.44)))
+            relaxed_required_hits = max(2, min(8, self._cfg_int("video_species_relaxed_temporal_required_hits", 3)))
+            relaxed_candidate_cap = max(2, min(64, self._cfg_int("video_species_relaxed_temporal_max_candidates", 12)))
+            if (
+                int(len(candidate_ids)) <= int(relaxed_candidate_cap)
+                and int(best_distance) <= int(relaxed_max_distance)
+                and int(margin_value) >= int(relaxed_min_margin)
+                and int(sprite_score) >= int(relaxed_min_score)
+            ):
+                relaxed_conf = self._ai_species_confidence(best_distance, second_distance, margin_value, int(sprite_score), float(sprite_detail), float(sprite_edge))
+                relaxed_ok, relaxed_hits, _relaxed_required = self._ai_species_temporal_accept(
+                    f"{str(scene_key)}:reference_relaxed",
+                    int(best_species_id),
+                    float(relaxed_conf),
+                )
+                self._sprite_last_match_debug["relaxed_temporal_confidence"] = float(relaxed_conf)
+                self._sprite_last_match_debug["relaxed_temporal_hits"] = int(relaxed_hits)
+                self._sprite_last_match_debug["relaxed_temporal_required_hits"] = int(relaxed_required_hits)
+                self._sprite_last_match_debug["relaxed_temporal_gate"] = bool(float(relaxed_conf) >= float(relaxed_min_conf) and int(relaxed_hits) >= int(relaxed_required_hits))
+                if float(relaxed_conf) >= float(relaxed_min_conf) and int(relaxed_hits) >= int(relaxed_required_hits):
+                    resolved_name = str(self._species_lookup.get(int(best_species_id), "")).strip() or f"Pokemon #{int(best_species_id)}"
+                    self._sprite_last_match_debug["source"] = "sprite_reference_temporal_relaxed"
+                    return (int(best_species_id), str(resolved_name)), "sprite_reference_temporal_relaxed"
+        if not self._cfg_bool("video_sprite_allow_memory_fallback", False):
+            return None, ""
+
+        bucket = self._sprite_species_memory.get(game_key) or {}
+        direct = bucket.get(signature)
+        if isinstance(direct, tuple) and len(direct) >= 2:
+            try:
+                direct_id = int(direct[0])
+            except (TypeError, ValueError):
+                direct_id = 0
+            direct_name = str(direct[1] or "").strip()
+            if direct_id > 0 and direct_name:
+                self._sprite_last_match_debug = {"source": "sprite_memory_exact", "best_species_id": int(direct_id), "best_hamming_distance": 0}
+                return (direct_id, direct_name), "sprite_memory_exact"
+
+        max_distance = max(4, min(72, self._cfg_int("video_sprite_species_hamming_threshold", 22)))
+        best_match: Optional[Tuple[int, str, int]] = None
+        for known_signature, payload in bucket.items():
+            if not isinstance(payload, tuple) or len(payload) < 2:
+                continue
+            try:
+                known_id = int(payload[0])
+            except (TypeError, ValueError):
+                continue
+            known_name = str(payload[1] or "").strip()
+            if known_id <= 0 or not known_name:
+                continue
+            distance = self._sprite_hamming_distance(signature, str(known_signature))
+            if distance > max_distance:
+                continue
+            if best_match is None or distance < best_match[2]:
+                best_match = (known_id, known_name, int(distance))
+
+        if best_match is not None:
+            self._sprite_last_match_debug = {"source": "sprite_memory", "best_species_id": int(best_match[0]), "best_hamming_distance": int(best_match[2])}
+            return (best_match[0], best_match[1]), "sprite_memory"
+
+        return None, ""
+    def _nameplate_roi_candidates(self, game_name: str, base_roi_raw: str) -> List[str]:
+        candidates: List[str] = []
+        seen: Set[str] = set()
+
+        def _add(raw_value: str):
+            text_value = str(raw_value or "").strip()
+            if not text_value or text_value in seen:
+                return
+            seen.add(text_value)
+            candidates.append(text_value)
+
+        default_nameplate = _default_video_nameplate_roi_for_game(game_name)
+        _add(base_roi_raw)
+        _add(default_nameplate)
+        _add("0.02,0.04,0.48,0.24")
+        _add("0.01,0.03,0.44,0.16")
+        _add("0.02,0.04,0.52,0.20")
+        return candidates
+
+    def _resolve_species_from_nameplate(
+        self,
+        image,
+        game_name: str,
+        nameplate_roi_raw: str,
+    ) -> Tuple[Optional[Tuple[int, str]], Optional[int], List[str]]:
+        if image is None or not PYTESSERACT_AVAILABLE or pytesseract is None:
+            return None, None, []
+
+        line_config = self._cfg_str(
+            "video_nameplate_ocr_config",
+            "--psm 7 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'.- ",
+        )
+        attempts = [
+            (145, False, 3.0, line_config),
+            (120, False, 3.0, line_config),
+            (175, False, 3.0, line_config),
+            (145, True, 3.0, line_config),
+            (145, False, 2.5, self._cfg_str("video_ocr_config", "--psm 6")),
+        ]
+
+        seen_texts: List[str] = []
+        for threshold, invert, scale, ocr_cfg in attempts:
+            raw_text = self._extract_text(
+                image,
+                ocr_roi_raw=nameplate_roi_raw,
+                threshold_override=threshold,
+                ocr_config_override=ocr_cfg,
+                invert=bool(invert),
+                scale_multiplier=float(scale),
+            )
+            normalized_text = self._normalize_ocr_text(raw_text)
+            if normalized_text and normalized_text not in seen_texts:
+                seen_texts.append(normalized_text)
+            if not normalized_text:
+                continue
+            resolved = self._resolve_species_from_any_text(normalized_text, relaxed=True)
+            if resolved is None:
+                continue
+            level = self._parse_level(normalized_text)
+            return resolved, level, seen_texts
+        return None, None, seen_texts
 
     def _parse_level(self, text: str) -> Optional[int]:
         normalized = self._normalize_ocr_text(text)
@@ -2031,7 +4595,7 @@ class OBSVideoEncounterReader:
             return False
         if self._cfg_bool("video_track_all_games", False):
             return True
-        return game_lower in {"pokemon firered", "pokemon leafgreen"}
+        return _is_supported_video_game_name(game_name)
 
     def capture_preview_frame(self, config_override: Optional[Dict[str, Any]] = None):
         previous_config = self.config
@@ -2052,12 +4616,24 @@ class OBSVideoEncounterReader:
             payload = self._capture_frame_payload(source_override=source_name)
             if payload is None:
                 return None
+            preview_image = payload.get("image")
+            game_name = self._cfg_str("active_game_name", "")
+            apply_norm = self._cfg_bool("video_preview_apply_normalization", False)
+            if apply_norm:
+                normalized_image, norm_meta = self._normalize_scene_frame(preview_image, game_name, source_name)
+                payload = dict(payload)
+                payload["image"] = normalized_image
+                payload["width"] = int(getattr(normalized_image, "width", 0) or 0)
+                payload["height"] = int(getattr(normalized_image, "height", 0) or 0)
+                payload["normalized"] = bool((norm_meta or {}).get("normalized", False))
+                payload["normalization_meta"] = dict(norm_meta or {})
             self._set_meta(
                 "preview_ok",
                 source=source_name,
                 width=int(payload.get("width") or 0),
                 height=int(payload.get("height") or 0),
                 pil_available=bool(PIL_AVAILABLE),
+                normalized=bool(payload.get("normalized", False)),
             )
             return payload
         finally:
@@ -2115,13 +4691,41 @@ class OBSVideoEncounterReader:
 
         peak = max(scores)
         base = min(scores)
-        threshold = max(1, min(1000, self._cfg_int("video_shiny_score_threshold", 38)))
-        burst_delta = max(0, min(1000, self._cfg_int("video_shiny_burst_delta", 12)))
+        sorted_scores = sorted(scores)
+        median = int(sorted_scores[len(sorted_scores) // 2]) if sorted_scores else 0
+        threshold = max(1, min(1000, self._cfg_int("video_shiny_score_threshold", 42)))
+        burst_delta = max(0, min(1000, self._cfg_int("video_shiny_burst_delta", 28)))
+        transient_delta = max(0, min(1000, self._cfg_int("video_shiny_transient_delta", 34)))
+        max_hit_streak_allowed = max(1, min(6, self._cfg_int("video_shiny_max_hit_streak", 3)))
+
+        if require_burst:
+            min_hits_default = 2
+        else:
+            min_hits_default = 1
+        min_hits = max(1, min(6, self._cfg_int("video_shiny_min_hit_frames", min_hits_default)))
+        hit_count = sum(1 for value in scores if int(value) >= int(threshold))
+        hit_streak = 0
+        max_hit_streak = 0
+        for value in scores:
+            if int(value) >= int(threshold):
+                hit_streak += 1
+                if hit_streak > max_hit_streak:
+                    max_hit_streak = hit_streak
+            else:
+                hit_streak = 0
 
         if require_burst and len(scores) >= 2:
-            is_shiny = bool(peak >= threshold and (peak - base) >= burst_delta)
+            required_streak = 2 if len(scores) >= 3 else 1
+            is_shiny = bool(
+                peak >= threshold
+                and (peak - base) >= burst_delta
+                and (peak - median) >= transient_delta
+                and hit_count >= min_hits
+                and max_hit_streak >= required_streak
+                and max_hit_streak <= max_hit_streak_allowed
+            )
         else:
-            is_shiny = bool(peak >= threshold)
+            is_shiny = bool(peak >= threshold and hit_count >= min_hits)
 
         confidence = float(max(0.0, min(1.0, (float(peak) - float(threshold) + 1.0) / max(1.0, float(threshold)))))
         return is_shiny, int(peak), scores, confidence
@@ -2184,29 +4788,60 @@ class OBSVideoEncounterReader:
 
         detection_mode = self._detection_mode()
         sprite_mode = detection_mode == "sprite"
-        required_text = max(1, min(6, self._cfg_int("video_ocr_confirmations", 2)))
-        required_sprite = max(1, min(8, self._cfg_int("video_sprite_confirmations", 3)))
-        required = required_sprite if sprite_mode else required_text
+        instant_detection = self._cfg_bool("video_instant_detection", True)
+        allow_unknown_species = self._cfg_bool("video_allow_unknown_species", True)
+        if instant_detection:
+            required_text = 1
+            required_sprite = 1
+        else:
+            required_text = max(1, min(6, self._cfg_int("video_ocr_confirmations", 2)))
+            required_sprite = max(1, min(8, self._cfg_int("video_sprite_confirmations", 3)))
+        required_default = required_sprite if sprite_mode else required_text
 
         last_pending: Optional[Dict[str, object]] = None
         candidate_found = False
 
         selected_scene_name = ""
         selected_scene_source = ""
+        last_scene_source_seen = ""
         selected_shiny_roi_raw = "0.58,0.16,0.92,0.52"
         selected_sprite_signature = ""
         selected_sprite_score = 0
         selected_sprite_detail = 0.0
         selected_sprite_edge = 0.0
+        selected_sprite_roi: List[int] = []
+        selected_detection_channel = "sprite" if sprite_mode else "ocr"
+        selected_battle_context = False
+        selected_textbox_score = 0
+        selected_hud_score = 0
+        selected_sprite_match_distance = 999
+        selected_sprite_second_distance = 999
+        selected_sprite_candidate_count = 0
+        selected_sprite_distance_margin = 0
+        selected_sprite_confidence_ok = False
+        selected_sprite_ai_confidence = 0.0
+        selected_sprite_ai_hits = 0
+        selected_sprite_ai_required_hits = 0
+        selected_species_lock_count = 0
+        selected_species_lock_required = 0
+        selected_roi_search_used = False
+        selected_global_scan_used = False
+        selected_global_scan_candidates = 0
         image = None
         level = None
         species_id = 0
         species_name = ""
+        selected_species_source = ""
+        selected_nameplate_texts: List[str] = []
+        context_blocked = False
+        context_meta_waiting: Optional[Dict[str, object]] = None
+        unknown_blocked = False
 
         for scene in profiles:
             scene_source = str(scene.get("source_name") or "").strip()
             if not scene_source:
                 continue
+            last_scene_source_seen = str(scene_source)
             payload = self._capture_frame_payload(source_override=scene_source)
             if payload is None:
                 continue
@@ -2214,41 +4849,723 @@ class OBSVideoEncounterReader:
             if scene_image is None:
                 continue
 
+            scene_key = f"{str(game_name or "")}:{scene_source}"
+            scene_image, norm_meta = self._normalize_scene_frame(scene_image, game_name, scene_source)
+
             scene_ocr_roi_raw = str(scene.get("ocr_roi") or "0.05,0.70,0.95,0.96")
-            scene_sprite_roi_raw = str(scene.get("sprite_roi") or "0.56,0.14,0.92,0.62")
+            scene_sprite_roi_configured_raw = str(scene.get("sprite_roi") or "").strip()
+            scene_sprite_roi_raw = str(scene_sprite_roi_configured_raw or "0.56,0.14,0.92,0.62")
             scene_shiny_roi_raw = str(scene.get("shiny_roi") or "0.58,0.16,0.92,0.52")
+            scene_nameplate_roi_raw = str(
+                scene.get("nameplate_roi")
+                or self._cfg_str("video_nameplate_roi", _default_video_nameplate_roi_for_game(game_name))
+            ).strip() or _default_video_nameplate_roi_for_game(game_name)
+
+            scene_roi_state = self._scene_sprite_roi_memory.setdefault(str(scene_key), {})
+            roi_memory_max_age = max(10.0, min(7200.0, self._cfg_float("video_sprite_roi_memory_max_age_sec", 900.0)))
+            roi_memory_use_on_edge = self._cfg_bool("video_sprite_roi_memory_use_on_edge", False)
+            roi_memory_margin_px = max(1, min(32, self._cfg_int("video_sprite_roi_memory_edge_margin_px", 2)))
+            if bool(roi_memory_use_on_edge):
+                cfg_roi_px = None
+                try:
+                    cfg_roi_px = self._parse_roi_spec_raw(str(scene_sprite_roi_raw), "0.56,0.14,0.92,0.62", int(scene_image.width), int(scene_image.height))
+                except Exception:
+                    cfg_roi_px = None
+                mem_raw = str(scene_roi_state.get("raw") or "").strip()
+                mem_updated_at = float(scene_roi_state.get("updated_at", 0.0) or 0.0)
+                mem_fresh = bool(mem_raw and mem_updated_at > 0.0 and (time.monotonic() - mem_updated_at) <= float(roi_memory_max_age))
+                if cfg_roi_px is not None and bool(mem_fresh):
+                    if self._roi_touches_edge_px(tuple(int(v) for v in cfg_roi_px), int(scene_image.width), int(scene_image.height), margin_px=int(roi_memory_margin_px)):
+                        scene_sprite_roi_raw = str(mem_raw)
+
+            manual_roi_set = bool(str(scene_sprite_roi_configured_raw or "").strip())
+            allow_localizer_with_manual = self._cfg_bool("video_sprite_localizer_allow_with_manual_roi", False)
+            localized_roi_raw = None
+            localizer_enabled = self._cfg_bool("video_sprite_localizer_enabled", False)
+            if bool(localizer_enabled) and ((not bool(manual_roi_set)) or bool(allow_localizer_with_manual)):
+                localized_roi_raw = self._localize_sprite_roi(scene_image, scene_sprite_roi_raw, game_name=game_name)
+                localizer_force = self._cfg_bool("video_sprite_localizer_force", False)
+                localizer_min_iou = max(0.0, min(1.0, self._cfg_float("video_sprite_localizer_min_iou", 0.10)))
+                localizer_min_area = max(0.005, min(0.80, self._cfg_float("video_sprite_localizer_min_area_fraction", 0.02)))
+                localizer_max_area = max(float(localizer_min_area), min(0.98, self._cfg_float("video_sprite_localizer_max_area_fraction", 0.45)))
+                parsed_base = self._parse_roi_raw_fractions(str(scene_sprite_roi_raw or ""))
+                parsed_local = self._parse_roi_raw_fractions(str(localized_roi_raw or ""))
+                use_localized = False
+                if parsed_local is not None:
+                    lx1, ly1, lx2, ly2 = [float(v) for v in parsed_local]
+                    local_area = max(0.0, float(lx2 - lx1)) * max(0.0, float(ly2 - ly1))
+                    local_iou = self._roi_iou_fractions(parsed_base, parsed_local)
+                    local_roi_px = None
+                    try:
+                        local_roi_px = self._parse_roi_spec_raw(str(localized_roi_raw), "0.56,0.14,0.92,0.62", int(scene_image.width), int(scene_image.height))
+                    except Exception:
+                        local_roi_px = None
+                    touches_edge = bool(
+                        isinstance(local_roi_px, tuple)
+                        and len(local_roi_px) == 4
+                        and self._roi_touches_edge_px(tuple(int(v) for v in local_roi_px), int(scene_image.width), int(scene_image.height), margin_px=2)
+                    )
+                    if bool(localizer_force):
+                        use_localized = True
+                    else:
+                        use_localized = bool(
+                            float(local_area) >= float(localizer_min_area)
+                            and float(local_area) <= float(localizer_max_area)
+                            and float(local_iou) >= float(localizer_min_iou)
+                            and (not bool(touches_edge))
+                        )
+                if use_localized:
+                    scene_sprite_roi_raw = str(localized_roi_raw)
 
             sprite_present, sprite_score, sprite_signature, sprite_detail_ratio, sprite_edge_ratio = self._sprite_present(
                 scene_image,
                 sprite_roi_raw=scene_sprite_roi_raw,
             )
+            scene_sprite_roi_px = [int(v) for v in tuple(getattr(self, "_sprite_last_roi", ()) or ())[:4]]
+            sprite_present = self._sprite_present_instant(
+                scene_key=scene_key,
+                raw_present=bool(sprite_present),
+                score=int(sprite_score),
+                signature=str(sprite_signature),
+                detail_ratio=float(sprite_detail_ratio),
+                edge_ratio=float(sprite_edge_ratio),
+                instant_detection=bool(instant_detection),
+            )
 
+            if (not sprite_present) and sprite_mode:
+                soft_score = max(120, min(900, self._cfg_int("video_sprite_soft_presence_threshold", 260)))
+                soft_detail = max(0.01, min(0.90, self._cfg_float("video_sprite_soft_min_detail_ratio", 0.08)))
+                soft_edge = max(0.001, min(0.90, self._cfg_float("video_sprite_soft_min_edge_ratio", 0.008)))
+                if (
+                    int(sprite_score) >= int(soft_score)
+                    and float(sprite_detail_ratio) >= float(soft_detail)
+                    and float(sprite_edge_ratio) >= float(soft_edge)
+                ):
+                    sprite_present = True
+                    if not str(sprite_signature or "").strip():
+                        sprite_signature = f"soft:{int(sprite_score)}:{int(float(sprite_detail_ratio) * 1000)}:{int(float(sprite_edge_ratio) * 1000)}"
+
+            prefetched_species = None
+            prefetched_species_source = ""
+            prefetched_match_debug: Dict[str, object] = {}
+            sprite_crop = None
+            if sprite_present:
+                sprite_crop = self._extract_sprite_crop(scene_image, scene_sprite_roi_raw)
+                scene_sprite_roi_px = [int(v) for v in tuple(getattr(self, "_sprite_last_roi", ()) or ())[:4]]
+            if sprite_present and sprite_signature:
+                prefetched_species, prefetched_species_source = self._infer_species_from_sprite(
+                    game_name,
+                    sprite_signature,
+                    scene_key=str(scene_key),
+                    sprite_score=int(sprite_score),
+                    sprite_detail=float(sprite_detail_ratio),
+                    sprite_edge=float(sprite_edge_ratio),
+                    sprite_crop=sprite_crop,
+                )
+                prefetched_match_debug = dict(getattr(self, "_sprite_last_match_debug", {}) or {})
+
+            if sprite_mode and sprite_present and sprite_signature and self._cfg_bool("video_sprite_roi_search_enabled", True):
+                base_best_distance = int(prefetched_match_debug.get("best_hamming_distance", 999) or 999)
+                base_distance_margin = int(prefetched_match_debug.get("distance_margin", 0) or 0)
+                base_conf_ok = bool(prefetched_match_debug.get("confidence_ok", False))
+                search_trigger_distance = max(24, min(192, self._cfg_int("video_sprite_roi_search_trigger_distance", 56)))
+                search_needed = bool(
+                    prefetched_species is None
+                    or (not bool(base_conf_ok))
+                    or int(base_best_distance) >= int(search_trigger_distance)
+                )
+                if search_needed:
+                    primary_roi_raw = str(scene_sprite_roi_raw)
+                    search_specs = self._sprite_roi_search_specs(primary_roi_raw, game_name)
+                    best_alt = None
+                    for alt_raw in search_specs:
+                        alt_raw = str(alt_raw or "").strip()
+                        if (not alt_raw) or alt_raw == str(primary_roi_raw).strip():
+                            continue
+                        alt_present, alt_score, alt_signature, alt_detail_ratio, alt_edge_ratio = self._sprite_present(
+                            scene_image,
+                            sprite_roi_raw=alt_raw,
+                        )
+                        alt_roi_px = [int(v) for v in tuple(getattr(self, "_sprite_last_roi", ()) or ())[:4]]
+                        if (not bool(alt_present)) or (not str(alt_signature or "").strip()):
+                            continue
+                        alt_crop = self._extract_sprite_crop(scene_image, alt_raw)
+                        alt_species, alt_species_source = self._infer_species_from_sprite(
+                            game_name,
+                            str(alt_signature),
+                            scene_key=str(scene_key),
+                            sprite_score=int(alt_score),
+                            sprite_detail=float(alt_detail_ratio),
+                            sprite_edge=float(alt_edge_ratio),
+                            sprite_crop=alt_crop,
+                        )
+                        if alt_species is None:
+                            continue
+                        alt_debug = dict(getattr(self, "_sprite_last_match_debug", {}) or {})
+                        alt_best_distance = int(alt_debug.get("best_hamming_distance", 999) or 999)
+                        alt_margin = int(alt_debug.get("distance_margin", 0) or 0)
+                        alt_conf_ok = bool(alt_debug.get("confidence_ok", False))
+                        rank = (
+                            1 if bool(alt_conf_ok) else 0,
+                            int(alt_margin),
+                            -int(alt_best_distance),
+                            int(alt_score),
+                        )
+                        candidate = {
+                            "rank": rank,
+                            "roi_raw": str(alt_raw),
+                            "roi_px": list(alt_roi_px[:4]),
+                            "species": alt_species,
+                            "species_source": str(alt_species_source or ""),
+                            "debug": dict(alt_debug),
+                            "signature": str(alt_signature),
+                            "score": int(alt_score),
+                            "detail_ratio": float(alt_detail_ratio),
+                            "edge_ratio": float(alt_edge_ratio),
+                            "best_distance": int(alt_best_distance),
+                            "margin": int(alt_margin),
+                            "conf_ok": bool(alt_conf_ok),
+                        }
+                        if best_alt is None or tuple(candidate.get("rank", ())) > tuple(best_alt.get("rank", ())):
+                            best_alt = candidate
+
+                    if isinstance(best_alt, dict):
+                        min_gain = max(2, min(64, self._cfg_int("video_sprite_roi_search_min_distance_gain", 8)))
+                        accept_distance = max(8, min(128, self._cfg_int("video_sprite_roi_search_accept_distance", 44)))
+                        accept_margin = max(0, min(64, self._cfg_int("video_sprite_roi_search_accept_margin", 8)))
+                        alt_best_distance = int(best_alt.get("best_distance", 999) or 999)
+                        alt_margin = int(best_alt.get("margin", 0) or 0)
+                        alt_conf_ok = bool(best_alt.get("conf_ok", False))
+
+                        adopt_alt = False
+                        if prefetched_species is None:
+                            if bool(alt_conf_ok) or (int(alt_best_distance) <= int(accept_distance) and int(alt_margin) >= int(accept_margin)):
+                                adopt_alt = True
+                        else:
+                            if bool(alt_conf_ok) and (not bool(base_conf_ok)):
+                                adopt_alt = True
+                            elif int(alt_best_distance) + int(min_gain) <= int(base_best_distance) and int(alt_margin) >= max(int(base_distance_margin), int(accept_margin)):
+                                adopt_alt = True
+
+                        if adopt_alt:
+                            prefetched_species = best_alt.get("species")
+                            prefetched_species_source = str(best_alt.get("species_source") or "")
+                            prefetched_match_debug = dict(best_alt.get("debug") or {})
+                            sprite_signature = str(best_alt.get("signature") or sprite_signature)
+                            sprite_score = int(best_alt.get("score", sprite_score) or sprite_score)
+                            sprite_detail_ratio = float(best_alt.get("detail_ratio", sprite_detail_ratio) or sprite_detail_ratio)
+                            sprite_edge_ratio = float(best_alt.get("edge_ratio", sprite_edge_ratio) or sprite_edge_ratio)
+                            scene_sprite_roi_raw = str(best_alt.get("roi_raw") or scene_sprite_roi_raw)
+                            scene_sprite_roi_px = list((best_alt.get("roi_px") or scene_sprite_roi_px)[:4])
+                            prefetched_match_debug["roi_search_used"] = True
+                            prefetched_match_debug["roi_search_primary_roi"] = str(primary_roi_raw)
+                            prefetched_match_debug["roi_search_selected_roi"] = str(scene_sprite_roi_raw)
+
+            if sprite_mode and self._cfg_bool("video_sprite_global_scan_enabled", False):
+                scan_cooldown_sec = max(0.0, min(10.0, self._cfg_float("video_sprite_global_scan_cooldown_sec", 0.75)))
+                scan_now = float(time.monotonic())
+                last_scan_at = float(scene_roi_state.get("global_scan_at", 0.0) or 0.0)
+                base_best_distance = int(prefetched_match_debug.get("best_hamming_distance", 999) or 999)
+                base_margin = int(prefetched_match_debug.get("distance_margin", 0) or 0)
+                base_conf_ok = bool(prefetched_match_debug.get("confidence_ok", False))
+                scan_trigger_distance = max(18, min(192, self._cfg_int("video_sprite_global_scan_trigger_distance", 52)))
+                force_scan_on_new = self._cfg_bool("video_sprite_global_scan_force_new_encounter", True)
+                scene_scan_state = self._scene_encounter_state.get(self._scene_encounter_key(game_name, scene_source)) or {}
+                new_encounter_scan = bool(force_scan_on_new and (not bool(scene_scan_state.get("active", False))))
+                global_scan_needed = bool(
+                    bool(new_encounter_scan)
+                    or (
+                        (not bool(sprite_present))
+                        or (not str(sprite_signature or "").strip())
+                        or prefetched_species is None
+                        or (not bool(base_conf_ok))
+                        or int(base_best_distance) >= int(scan_trigger_distance)
+                    )
+                )
+                if bool(global_scan_needed) and (float(scan_now - last_scan_at) >= float(scan_cooldown_sec)):
+                    scene_roi_state["global_scan_at"] = float(scan_now)
+                    primary_roi_raw = str(scene_sprite_roi_raw)
+                    scan_specs = self._sprite_global_scan_specs(scene_image, primary_roi_raw, game_name=game_name)
+                    if not scan_specs:
+                        scan_specs = [str(primary_roi_raw or "").strip(), "0.06,0.04,0.98,0.96", "0.00,0.00,1.00,1.00"]
+                    prefetched_match_debug["global_scan_attempted"] = True
+                    prefetched_match_debug["global_scan_candidates"] = int(len(scan_specs))
+                    best_scan = None
+                    for scan_raw in scan_specs:
+                        scan_raw = str(scan_raw or "").strip()
+                        if not scan_raw:
+                            continue
+                        scan_present, scan_score, scan_signature, scan_detail_ratio, scan_edge_ratio = self._sprite_present(
+                            scene_image,
+                            sprite_roi_raw=scan_raw,
+                        )
+                        scan_roi_px = [int(v) for v in tuple(getattr(self, "_sprite_last_roi", ()) or ())[:4]]
+                        if (not bool(scan_present)) and str(scan_signature or "").strip():
+                            scan_soft_score = max(80, min(900, self._cfg_int("video_sprite_global_scan_soft_presence_threshold", 220)))
+                            scan_soft_detail = max(0.005, min(0.90, self._cfg_float("video_sprite_global_scan_soft_min_detail_ratio", 0.060)))
+                            scan_soft_edge = max(0.001, min(0.90, self._cfg_float("video_sprite_global_scan_soft_min_edge_ratio", 0.006)))
+                            if (
+                                int(scan_score) >= int(scan_soft_score)
+                                and float(scan_detail_ratio) >= float(scan_soft_detail)
+                                and float(scan_edge_ratio) >= float(scan_soft_edge)
+                            ):
+                                scan_present = True
+                        if (not bool(scan_present)) or (not str(scan_signature or "").strip()):
+                            continue
+                        scan_crop = self._extract_sprite_crop(scene_image, scan_raw)
+                        scan_species, scan_species_source = self._infer_species_from_sprite(
+                            game_name,
+                            str(scan_signature),
+                            scene_key=str(scene_key),
+                            sprite_score=int(scan_score),
+                            sprite_detail=float(scan_detail_ratio),
+                            sprite_edge=float(scan_edge_ratio),
+                            sprite_crop=scan_crop,
+                        )
+                        scan_debug = dict(getattr(self, "_sprite_last_match_debug", {}) or {})
+                        scan_best_distance = int(scan_debug.get("best_hamming_distance", 999) or 999)
+                        scan_margin = int(scan_debug.get("distance_margin", 0) or 0)
+                        scan_conf_ok = bool(scan_debug.get("confidence_ok", False))
+                        rank = (
+                            1 if scan_species is not None else 0,
+                            1 if bool(scan_conf_ok) else 0,
+                            int(scan_margin),
+                            -int(scan_best_distance),
+                            int(scan_score),
+                        )
+                        candidate = {
+                            "rank": rank,
+                            "roi_raw": str(scan_raw),
+                            "roi_px": list(scan_roi_px[:4]),
+                            "species": scan_species,
+                            "species_source": str(scan_species_source or ""),
+                            "debug": dict(scan_debug),
+                            "signature": str(scan_signature),
+                            "score": int(scan_score),
+                            "detail_ratio": float(scan_detail_ratio),
+                            "edge_ratio": float(scan_edge_ratio),
+                            "best_distance": int(scan_best_distance),
+                            "margin": int(scan_margin),
+                            "conf_ok": bool(scan_conf_ok),
+                        }
+                        if best_scan is None or tuple(candidate.get("rank", ())) > tuple(best_scan.get("rank", ())):
+                            best_scan = candidate
+
+                    if isinstance(best_scan, dict):
+                        scan_accept_distance = max(8, min(128, self._cfg_int("video_sprite_global_scan_accept_distance", 42)))
+                        scan_accept_margin = max(0, min(64, self._cfg_int("video_sprite_global_scan_accept_margin", 8)))
+                        scan_min_score = max(80, min(900, self._cfg_int("video_sprite_global_scan_min_score", 260)))
+                        scan_min_gain = max(2, min(64, self._cfg_int("video_sprite_global_scan_min_distance_gain", 10)))
+                        scan_best_distance = int(best_scan.get("best_distance", 999) or 999)
+                        scan_margin = int(best_scan.get("margin", 0) or 0)
+                        scan_conf_ok = bool(best_scan.get("conf_ok", False))
+                        scan_species = best_scan.get("species")
+
+                        adopt_scan = False
+                        if not bool(sprite_present) or not str(sprite_signature or "").strip():
+                            adopt_scan = bool(
+                                bool(scan_conf_ok)
+                                or (int(scan_best_distance) <= int(scan_accept_distance) and int(scan_margin) >= int(scan_accept_margin))
+                                or (scan_species is not None and int(best_scan.get("score", 0) or 0) >= int(scan_min_score))
+                            )
+                        elif prefetched_species is None:
+                            adopt_scan = bool(
+                                scan_species is not None
+                                and (
+                                    bool(scan_conf_ok)
+                                    or (int(scan_best_distance) <= int(scan_accept_distance) and int(scan_margin) >= int(scan_accept_margin))
+                                    or int(best_scan.get("score", 0) or 0) >= int(scan_min_score)
+                                )
+                            )
+                        else:
+                            adopt_scan = bool(
+                                (bool(scan_conf_ok) and (not bool(base_conf_ok)))
+                                or (
+                                    int(scan_best_distance) + int(scan_min_gain) <= int(base_best_distance)
+                                    and int(scan_margin) >= max(int(base_margin), int(scan_accept_margin))
+                                )
+                            )
+
+                        if adopt_scan:
+                            sprite_present = True
+                            sprite_signature = str(best_scan.get("signature") or sprite_signature)
+                            sprite_score = int(best_scan.get("score", sprite_score) or sprite_score)
+                            sprite_detail_ratio = float(best_scan.get("detail_ratio", sprite_detail_ratio) or sprite_detail_ratio)
+                            sprite_edge_ratio = float(best_scan.get("edge_ratio", sprite_edge_ratio) or sprite_edge_ratio)
+                            scene_sprite_roi_raw = str(best_scan.get("roi_raw") or scene_sprite_roi_raw)
+                            scene_sprite_roi_px = list((best_scan.get("roi_px") or scene_sprite_roi_px)[:4])
+                            prefetched_species = scan_species if scan_species is not None else prefetched_species
+                            prefetched_species_source = str(best_scan.get("species_source") or prefetched_species_source)
+                            prefetched_match_debug = dict(best_scan.get("debug") or prefetched_match_debug)
+                            prefetched_match_debug["global_scan_used"] = True
+                            prefetched_match_debug["global_scan_primary_roi"] = str(primary_roi_raw)
+                            prefetched_match_debug["global_scan_selected_roi"] = str(scene_sprite_roi_raw)
+                            prefetched_match_debug["global_scan_candidates"] = int(len(scan_specs))
+
+            if sprite_mode and sprite_present and sprite_signature:
+                mem_conf_ok = bool(prefetched_match_debug.get("confidence_ok", False))
+                mem_best_distance = int(prefetched_match_debug.get("best_hamming_distance", 999) or 999)
+                mem_margin = int(prefetched_match_debug.get("distance_margin", 0) or 0)
+                mem_store_max_distance = max(4, min(128, self._cfg_int("video_sprite_roi_memory_store_max_distance", 24)))
+                mem_store_min_margin = max(0, min(64, self._cfg_int("video_sprite_roi_memory_store_min_margin", 10)))
+                mem_store_min_score = max(40, min(900, self._cfg_int("video_sprite_roi_memory_store_min_score", 280)))
+                roi_px_tuple = tuple(int(v) for v in list(scene_sprite_roi_px[:4])) if len(list(scene_sprite_roi_px[:4])) >= 4 else None
+                roi_not_edge = bool(
+                    isinstance(roi_px_tuple, tuple)
+                    and len(roi_px_tuple) == 4
+                    and not self._roi_touches_edge_px(roi_px_tuple, int(scene_image.width), int(scene_image.height), margin_px=2)
+                )
+                if (
+                    bool(mem_conf_ok)
+                    and int(mem_best_distance) <= int(mem_store_max_distance)
+                    and int(mem_margin) >= int(mem_store_min_margin)
+                    and int(sprite_score) >= int(mem_store_min_score)
+                    and bool(roi_not_edge)
+                ):
+                    scene_roi_state["raw"] = str(scene_sprite_roi_raw)
+                    scene_roi_state["roi_px"] = list(scene_sprite_roi_px[:4])
+                    scene_roi_state["updated_at"] = float(time.monotonic())
+                    scene_roi_state["best_distance"] = int(mem_best_distance)
+                    scene_roi_state["margin"] = int(mem_margin)
+
+            battle_context_ok = False
+            battle_context_details: Dict[str, object] = {}
+            battle_hint_ok = False
+            require_battle_context = self._cfg_bool("video_require_battle_context", False)
+            scene_state_ctx = self._scene_encounter_state.setdefault(str(scene_key), {})
+            scene_state_ctx.setdefault("wild_text_missing_since", 0.0)
+            scene_state_ctx.setdefault("wild_text_missing_count", 0)
+            if sprite_mode:
+                battle_context_ok, battle_context_details = self._battle_context_present(
+                    scene_image,
+                    game_name,
+                    scene_ocr_roi_raw,
+                    scene_nameplate_roi_raw,
+                )
+                hint_textbox_threshold = max(8, min(700, self._cfg_int("video_battle_hint_textbox_score_threshold", 42)))
+                hint_hud_threshold = max(8, min(700, self._cfg_int("video_battle_hint_hud_score_threshold", 52)))
+                battle_hint_ok = bool(
+                    bool(battle_context_details.get("textbox_ok", False))
+                    or bool(battle_context_details.get("hud_ok", False))
+                    or int(battle_context_details.get("textbox_score", 0) or 0) >= int(hint_textbox_threshold)
+                    or int(battle_context_details.get("hud_score", 0) or 0) >= int(hint_hud_threshold)
+                )
+                scene_state_ctx["battle_hint"] = bool(battle_hint_ok)
+                if battle_hint_ok:
+                    scene_state_ctx["last_battle_hint_at"] = float(time.monotonic())
+                self._register_context_loss(game_name, scene_source, bool(battle_context_ok))
+            if sprite_mode and sprite_present and require_battle_context:
+                if bool(battle_context_ok):
+                    scene_state_ctx["context_ok_streak"] = int(scene_state_ctx.get("context_ok_streak", 0) or 0) + 1
+                    self._register_context_loss(game_name, scene_source, True)
+                else:
+                    scene_state_ctx["context_ok_streak"] = 0
+                    self._register_context_loss(game_name, scene_source, False)
+                if not battle_context_ok:
+                    match_distance = int(prefetched_match_debug.get("best_hamming_distance", 999) or 999)
+                    match_margin = int(prefetched_match_debug.get("distance_margin", 0) or 0)
+                    confidence_ok = bool(prefetched_match_debug.get("confidence_ok", False))
+                    allow_hud_override = self._cfg_bool("video_context_allow_hud_override", True)
+                    hud_ok_now = bool(battle_context_details.get("hud_ok", False))
+                    context_streak = int(scene_state_ctx.get("context_ok_streak", 0) or 0)
+
+                    strict_max_distance = max(4, min(128, self._cfg_int("video_context_override_max_distance", 24)))
+                    strict_min_margin = max(0, min(64, self._cfg_int("video_context_override_min_margin", 10)))
+                    relaxed_max_distance = max(8, min(160, self._cfg_int("video_context_relaxed_max_distance", 42)))
+                    relaxed_min_margin = max(0, min(64, self._cfg_int("video_context_relaxed_min_margin", 8)))
+                    relaxed_min_score = max(80, min(900, self._cfg_int("video_context_relaxed_min_sprite_score", 320)))
+
+                    strong_sprite_ref = bool(
+                        prefetched_species is not None
+                        and confidence_ok
+                        and int(match_distance) <= int(strict_max_distance)
+                        and int(match_margin) >= int(strict_min_margin)
+                    )
+                    relaxed_sprite_ref = bool(
+                        prefetched_species is not None
+                        and confidence_ok
+                        and int(match_distance) <= int(relaxed_max_distance)
+                        and int(match_margin) >= int(relaxed_min_margin)
+                        and int(sprite_score) >= int(relaxed_min_score)
+                    )
+
+                    allow_context = bool(
+                        allow_hud_override
+                        and hud_ok_now
+                        and (
+                            strong_sprite_ref
+                            or (relaxed_sprite_ref and int(context_streak) >= 1)
+                        )
+                    )
+
+                    if allow_context:
+                        battle_context_ok = True
+                        battle_context_details["battle_context"] = True
+                        battle_context_details["battle_context_override"] = "hud_plus_sprite_confidence"
+                        scene_state_ctx["context_ok_streak"] = int(scene_state_ctx.get("context_ok_streak", 0) or 0) + 1
+                        self._register_context_loss(game_name, scene_source, True)
+                    else:
+                        context_blocked = True
+                        context_meta_waiting = {
+                            "game": game_name,
+                            "scene": str(scene.get("name") or scene_source),
+                            "source_name": scene_source,
+                            "detection_mode": detection_mode,
+                            "detection_channel": "sprite",
+                            "sprite_score": int(sprite_score),
+                            "sprite_signature": str(sprite_signature),
+                            "context_ok_streak": int(scene_state_ctx.get("context_ok_streak", 0) or 0),
+                            "prefetched_species_id": int(prefetched_species[0]) if prefetched_species else 0,
+                            "prefetched_match_distance": int(match_distance),
+                            "prefetched_distance_margin": int(match_margin),
+                            "prefetched_confidence_ok": bool(confidence_ok),
+                        }
+                        context_meta_waiting.update(dict(battle_context_details or {}))
+                        self._debug_dump_frame(
+                            scene_image,
+                            "battle_context_unconfirmed",
+                            game_name=game_name,
+                            scene_name=str(scene.get("name") or scene_source),
+                            source_name=scene_source,
+                            extra=context_meta_waiting,
+                        )
+                        continue
+            elif sprite_mode and (not require_battle_context):
+                battle_context_ok = bool(battle_hint_ok)
             text = ""
-            scene_species = None
+            scene_species = prefetched_species
             scene_level = None
+            scene_species_source = str(prefetched_species_source or "")
+            nameplate_debug_texts: List[str] = []
+            scene_match_debug: Dict[str, object] = dict(prefetched_match_debug or {})
+
+            if scene_species is not None and str(scene_species_source or "").startswith("sprite"):
+                source_tag = str(scene_species_source or "")
+                resolve_max_distance = max(6, min(128, self._cfg_int("video_species_resolve_max_distance", 16)))
+                resolve_min_margin = max(0, min(64, self._cfg_int("video_species_resolve_min_margin", 12)))
+                resolve_min_score = max(80, min(900, self._cfg_int("video_species_resolve_min_sprite_score", 340)))
+                resolve_conf_required = self._cfg_bool("video_species_resolve_require_confidence", True)
+                best_distance = int(scene_match_debug.get("best_hamming_distance", 999) or 999)
+                margin_distance = int(scene_match_debug.get("distance_margin", 0) or 0)
+                conf_ok = bool(scene_match_debug.get("confidence_ok", False))
+
+                if source_tag.startswith("sprite_ai") or source_tag.startswith("sprite_consensus"):
+                    ai_max_distance = max(8, min(160, self._cfg_int("video_species_resolve_ai_max_distance", 30)))
+                    ai_min_margin = max(0, min(64, self._cfg_int("video_species_resolve_ai_min_margin", 8)))
+                    resolve_max_distance = max(int(resolve_max_distance), int(ai_max_distance))
+                    resolve_min_margin = max(int(resolve_min_margin), int(ai_min_margin))
+                    resolve_conf_required = self._cfg_bool("video_species_resolve_ai_require_confidence", True)
+                    ai_conf = float(scene_match_debug.get("ai_confidence", 0.0) or 0.0)
+                    ai_min_conf = max(0.20, min(0.98, self._cfg_float("video_species_resolve_ai_min_confidence", 0.55)))
+                    ai_temporal_ok = bool(scene_match_debug.get("ai_temporal_ok", False))
+                    conf_ok = bool(ai_temporal_ok)
+                    if float(ai_conf) < float(ai_min_conf):
+                        conf_ok = False
+                elif source_tag.startswith("sprite_reference_temporal_relaxed"):
+                    resolve_max_distance = max(8, min(160, self._cfg_int("video_species_resolve_relaxed_max_distance", 32)))
+                    resolve_min_margin = max(0, min(64, self._cfg_int("video_species_resolve_relaxed_min_margin", 8)))
+                    resolve_min_score = max(60, min(900, self._cfg_int("video_species_resolve_relaxed_min_sprite_score", 260)))
+                    resolve_conf_required = self._cfg_bool("video_species_resolve_relaxed_require_confidence", False)
+                    relaxed_conf = float(scene_match_debug.get("relaxed_temporal_confidence", scene_match_debug.get("ai_confidence", 0.0)) or 0.0)
+                    relaxed_min_conf = max(0.20, min(0.98, self._cfg_float("video_species_resolve_relaxed_min_confidence", 0.40)))
+                    if float(relaxed_conf) < float(relaxed_min_conf):
+                        conf_ok = False
+                elif source_tag.startswith("sprite_structural"):
+                    resolve_conf_required = self._cfg_bool("video_species_resolve_structural_require_confidence", True)
+                    structural_best_score = float(scene_match_debug.get("structural_best_score", 0.0) or 0.0)
+                    structural_margin = float(scene_match_debug.get("structural_score_margin", 0.0) or 0.0)
+                    structural_min_score = max(0.20, min(0.99, self._cfg_float("video_species_resolve_structural_min_score", 0.60)))
+                    structural_min_margin = max(0.0, min(0.60, self._cfg_float("video_species_resolve_structural_min_margin", 0.03)))
+                    conf_ok = bool(scene_match_debug.get("structural_confidence_ok", False))
+                    if float(structural_best_score) < float(structural_min_score) or float(structural_margin) < float(structural_min_margin):
+                        conf_ok = False
+
+                if source_tag.startswith("sprite_consensus") and self._cfg_bool("video_species_resolve_consensus_require_ok", True):
+                    if not bool(scene_match_debug.get("consensus_ok", False)):
+                        conf_ok = False
+
+                if source_tag.startswith("sprite_structural"):
+                    reject_species = bool(
+                        int(sprite_score) < int(resolve_min_score)
+                        or (resolve_conf_required and (not conf_ok))
+                    )
+                else:
+                    reject_species = bool(
+                        int(best_distance) > int(resolve_max_distance)
+                        or int(margin_distance) < int(resolve_min_margin)
+                        or int(sprite_score) < int(resolve_min_score)
+                        or (resolve_conf_required and (not conf_ok))
+                    )
+
+                if reject_species:
+                    scene_match_debug["resolve_rejected"] = True
+                    scene_match_debug["resolve_reject_distance"] = int(best_distance)
+                    scene_match_debug["resolve_reject_margin"] = int(margin_distance)
+                    scene_match_debug["resolve_reject_score"] = int(sprite_score)
+                    scene_match_debug["resolve_reject_source"] = str(source_tag)
+                    if source_tag.startswith("sprite_structural"):
+                        scene_match_debug["resolve_reject_structural_score"] = float(scene_match_debug.get("structural_best_score", 0.0) or 0.0)
+                        scene_match_debug["resolve_reject_structural_margin"] = float(scene_match_debug.get("structural_score_margin", 0.0) or 0.0)
+                    scene_species = None
+                    scene_species_source = ""
             if PYTESSERACT_AVAILABLE:
                 text = self._extract_text(scene_image, ocr_roi_raw=scene_ocr_roi_raw)
                 if text:
-                    scene_species = self._parse_wild_species(text)
+                    if scene_species is None:
+                        scene_species = self._parse_wild_species(text)
+                        if scene_species is None:
+                            scene_species = self._resolve_species_from_any_text(text)
+                        if scene_species is not None and not scene_species_source:
+                            scene_species_source = "ocr"
                     scene_level = self._parse_level(text)
 
-            if sprite_mode:
-                if not sprite_present:
-                    continue
-                candidate_found = True
-                if scene_species is not None:
-                    scene_species_id, scene_species_name = scene_species
-                    candidate_signature = f"{game_name}:{scene_source}:species:{int(scene_species_id)}:{int(scene_level) if isinstance(scene_level, int) else 0}"
+                nameplate_species = None
+                nameplate_level = None
+                should_validate_nameplate = bool(
+                    sprite_mode
+                    and (
+                        scene_species is None
+                        or self._cfg_bool("video_nameplate_validate_sprite_species", True)
+                    )
+                    and (bool(sprite_present) or bool(battle_context_ok) or bool(battle_hint_ok))
+                )
+                if should_validate_nameplate:
+                    for nameplate_roi in self._nameplate_roi_candidates(game_name, scene_nameplate_roi_raw):
+                        resolved_species, resolved_level, seen_texts = self._resolve_species_from_nameplate(
+                            scene_image,
+                            game_name,
+                            nameplate_roi,
+                        )
+                        if seen_texts:
+                            for seen_text in seen_texts:
+                                if seen_text not in nameplate_debug_texts:
+                                    nameplate_debug_texts.append(seen_text)
+                        if resolved_species is None:
+                            continue
+                        nameplate_species = resolved_species
+                        if isinstance(resolved_level, int):
+                            nameplate_level = int(resolved_level)
+                        break
+
+                if nameplate_species is not None:
+                    if scene_species is None:
+                        scene_species = nameplate_species
+                        scene_species_source = "nameplate_ocr"
+                        if scene_level is None and isinstance(nameplate_level, int):
+                            scene_level = int(nameplate_level)
+                    else:
+                        try:
+                            sprite_sid = int(scene_species[0])
+                            name_sid = int(nameplate_species[0])
+                        except Exception:
+                            sprite_sid = 0
+                            name_sid = 0
+                        if sprite_sid > 0 and name_sid > 0 and name_sid != sprite_sid:
+                            scene_match_debug["nameplate_species_id"] = int(name_sid)
+                            scene_match_debug["nameplate_mismatch_species_id"] = int(sprite_sid)
+                            scene_match_debug["nameplate_species_mismatch"] = True
+                            if self._cfg_bool("video_nameplate_override_sprite_on_mismatch", True):
+                                scene_species = nameplate_species
+                                scene_species_source = "nameplate_ocr_override"
+                                if scene_level is None and isinstance(nameplate_level, int):
+                                    scene_level = int(nameplate_level)
+
+                if sprite_mode and scene_species is None and (bool(sprite_present) or bool(battle_context_ok)):
+                    full_text = self._extract_text(scene_image, ocr_roi_raw="0.00,0.00,1.00,1.00")
+                    if full_text:
+                        scene_species = self._resolve_species_from_any_text(full_text, relaxed=True)
+                        if scene_level is None:
+                            scene_level = self._parse_level(full_text)
+                        if scene_species is not None and not scene_species_source:
+                            scene_species_source = "full_ocr"
+
+            species_lock_count = 0
+            species_lock_required = 0
+            if sprite_mode and sprite_present and scene_species is not None:
+                locked_species, species_lock_count, species_lock_required = self._apply_scene_species_lock(
+                    game_name,
+                    scene_source,
+                    scene_species,
+                    str(scene_species_source or ""),
+                    bool(instant_detection),
+                    sprite_match_distance=int(scene_match_debug.get("best_hamming_distance", 999) or 999),
+                    sprite_distance_margin=int(scene_match_debug.get("distance_margin", 0) or 0),
+                    sprite_confidence_ok=bool(scene_match_debug.get("confidence_ok", False)),
+                    sprite_score=int(sprite_score),
+                )
+                if locked_species is not None:
+                    scene_species = locked_species
+                    if scene_species_source:
+                        scene_species_source = f"{scene_species_source}_locked"
                 else:
-                    if not sprite_signature:
-                        continue
-                    candidate_signature = f"{game_name}:{scene_source}:sprite:{sprite_signature}"
+                    scene_species = None
+
+            if sprite_present and sprite_signature and scene_species is not None:
+                self._remember_sprite_species(game_name, sprite_signature, scene_species)
+            candidate_required = int(required_default)
+            candidate_channel = "sprite" if sprite_mode else "ocr"
+            if sprite_mode:
+                if sprite_present:
+                    candidate_found = True
+                    if scene_species is not None:
+                        scene_species_id, _scene_species_name = scene_species
+                        candidate_signature = f"{game_name}:{scene_source}:species:{int(scene_species_id)}:{int(scene_level) if isinstance(scene_level, int) else 0}"
+                    else:
+                        if not allow_unknown_species:
+                            unknown_blocked = True
+                            continue
+                        if not sprite_signature:
+                            continue
+                        unknown_start_min_score = max(120, min(900, self._cfg_int("video_unknown_start_min_score", 360)))
+                        unknown_start_min_edge = max(0.001, min(0.60, self._cfg_float("video_unknown_start_min_edge_ratio", 0.030)))
+                        unknown_start_min_detail = max(0.005, min(0.95, self._cfg_float("video_unknown_start_min_detail_ratio", 0.16)))
+                        context_streak_required_cfg = max(0, min(10, self._cfg_int("video_unknown_context_streak_required", 3)))
+                        context_streak_required = int(context_streak_required_cfg) if bool(require_battle_context) else 0
+                        scene_state_ctx = self._scene_encounter_state.setdefault(str(scene_key), {})
+                        context_ok_streak = int(scene_state_ctx.get("context_ok_streak", 0) or 0)
+                        if (
+                            int(sprite_score) < int(unknown_start_min_score)
+                            or float(sprite_edge_ratio) < float(unknown_start_min_edge)
+                            or float(sprite_detail_ratio) < float(unknown_start_min_detail)
+                            or (int(context_streak_required) > 0 and int(context_ok_streak) < int(context_streak_required))
+                        ):
+                            continue
+                        candidate_signature = f"{game_name}:{scene_source}:sprite:{sprite_signature}"
+                    candidate_required = int(required_sprite)
+                    if scene_species is None:
+                        unknown_required_default = 1 if instant_detection else 2
+                        unknown_required = max(1, min(8, self._cfg_int("video_unknown_start_confirmations", unknown_required_default)))
+                        candidate_required = max(int(candidate_required), int(unknown_required))
+                    source_tag = str(scene_species_source or "")
+                    if source_tag in {"sprite_memory", "sprite_memory_exact"}:
+                        candidate_channel = "sprite_memory"
+                    elif source_tag.startswith("sprite_reference"):
+                        candidate_channel = "sprite_reference"
+                    elif source_tag.startswith("sprite_consensus"):
+                        candidate_channel = "sprite_consensus"
+                    else:
+                        candidate_channel = "sprite"
+                    if instant_detection and candidate_channel in {"sprite_reference", "sprite_memory", "sprite_consensus"}:
+                        resolved_required = max(1, min(4, self._cfg_int("video_resolved_sprite_confirmations", 1)))
+                        candidate_required = max(int(candidate_required), int(resolved_required))
+                    if int(species_lock_required) > 0:
+                        candidate_required = max(int(candidate_required), int(species_lock_required))
+                elif scene_species is not None:
+                    candidate_found = True
+                    scene_species_id, _scene_species_name = scene_species
+                    candidate_signature = f"{game_name}:{scene_source}:ocr_fallback:{int(scene_species_id)}:{int(scene_level) if isinstance(scene_level, int) else 0}"
+                    candidate_required = int(required_text)
+                    candidate_channel = "ocr_fallback"
+                else:
+                    continue
             else:
                 if scene_species is None:
                     continue
                 candidate_found = True
-                scene_species_id, scene_species_name = scene_species
+                scene_species_id, _scene_species_name = scene_species
                 candidate_signature = f"{game_name}:{scene_source}:species:{int(scene_species_id)}:{int(scene_level) if isinstance(scene_level, int) else 0}"
+                candidate_required = int(required_text)
+                candidate_channel = "ocr"
 
             if candidate_signature == self._pending_signature:
                 self._pending_count += 1
@@ -2256,7 +5573,7 @@ class OBSVideoEncounterReader:
                 self._pending_signature = candidate_signature
                 self._pending_count = 1
 
-            if self._pending_count < required:
+            if self._pending_count < int(candidate_required):
                 pending_species_id = int(scene_species[0]) if scene_species else 0
                 pending_species_name = str(scene_species[1]) if scene_species else ""
                 last_pending = {
@@ -2264,11 +5581,15 @@ class OBSVideoEncounterReader:
                     "species_id": pending_species_id,
                     "species": pending_species_name,
                     "confirmations": int(self._pending_count),
-                    "required": int(required),
+                    "required": int(candidate_required),
                     "scene": str(scene.get("name") or scene_source),
                     "source": scene_source,
-                    "sprite_mode": bool(sprite_mode),
+                    "sprite_mode": bool(str(candidate_channel).startswith("sprite")),
+                    "detection_channel": str(candidate_channel),
                     "sprite_score": int(sprite_score),
+                    "species_lock_count": int(species_lock_count),
+                    "species_lock_required": int(species_lock_required),
+                    "context_ok_streak": int((self._scene_encounter_state.get(str(scene_key), {}) or {}).get("context_ok_streak", 0) or 0),
                 }
                 continue
 
@@ -2279,6 +5600,26 @@ class OBSVideoEncounterReader:
             selected_sprite_score = int(sprite_score)
             selected_sprite_detail = float(sprite_detail_ratio)
             selected_sprite_edge = float(sprite_edge_ratio)
+            selected_sprite_roi = [int(v) for v in list(scene_sprite_roi_px[:4])]
+            selected_detection_channel = str(candidate_channel)
+            selected_species_source = str(scene_species_source or "")
+            selected_nameplate_texts = list(nameplate_debug_texts)
+            selected_battle_context = bool(battle_context_ok)
+            selected_textbox_score = int(battle_context_details.get("textbox_score", 0) or 0)
+            selected_hud_score = int(battle_context_details.get("hud_score", 0) or 0)
+            selected_sprite_match_distance = int(scene_match_debug.get("best_hamming_distance", 999) or 999)
+            selected_sprite_second_distance = int(scene_match_debug.get("second_hamming_distance", 999) or 999)
+            selected_sprite_candidate_count = int(scene_match_debug.get("candidate_count", 0) or 0)
+            selected_sprite_distance_margin = int(scene_match_debug.get("distance_margin", 0) or 0)
+            selected_sprite_confidence_ok = bool(scene_match_debug.get("confidence_ok", False))
+            selected_sprite_ai_confidence = float(scene_match_debug.get("ai_confidence", 0.0) or 0.0)
+            selected_sprite_ai_hits = int(scene_match_debug.get("ai_hits", 0) or 0)
+            selected_sprite_ai_required_hits = int(scene_match_debug.get("ai_required_hits", 0) or 0)
+            selected_species_lock_count = int(species_lock_count)
+            selected_species_lock_required = int(species_lock_required)
+            selected_roi_search_used = bool(scene_match_debug.get("roi_search_used", False))
+            selected_global_scan_used = bool(scene_match_debug.get("global_scan_used", False))
+            selected_global_scan_candidates = int(scene_match_debug.get("global_scan_candidates", 0) or 0)
             image = scene_image
             level = scene_level
             if scene_species is not None:
@@ -2290,23 +5631,232 @@ class OBSVideoEncounterReader:
             break
 
         if image is None:
+            if sprite_mode and unknown_blocked:
+                self._set_meta(
+                    "unknown_sprite_deferred",
+                    game=game_name,
+                    code="unknown_species_disabled",
+                    hint="Enable video_allow_unknown_species to count unknown sprite encounters.",
+                )
+                self._pending_signature = ""
+                self._pending_count = 0
+                return None
             if isinstance(last_pending, dict):
                 self._set_meta("pending_confirmations", **last_pending)
             elif candidate_found:
                 self._set_meta("wild_text_not_found", game=game_name)
                 self._pending_signature = ""
                 self._pending_count = 0
+                if sprite_mode:
+                    now_missing = float(time.monotonic())
+                    source_for_end = str(selected_scene_source or last_scene_source_seen or "").strip()
+                    if source_for_end:
+                        state_key = self._scene_encounter_key(game_name, source_for_end)
+                        scene_state_for_end = self._scene_encounter_state.get(state_key)
+                        if isinstance(scene_state_for_end, dict) and bool(scene_state_for_end.get("active", False)) and bool(scene_state_for_end.get("species_resolved", False)):
+                            hint_hold_sec = max(0.50, min(12.0, self._cfg_float("video_battle_hint_hold_sec", 2.20)))
+                            last_hint_at = float(scene_state_for_end.get("last_battle_hint_at", 0.0) or 0.0)
+                            hint_recent = bool(
+                                bool(scene_state_for_end.get("battle_hint", False))
+                                and last_hint_at > 0.0
+                                and (now_missing - last_hint_at) <= float(hint_hold_sec)
+                            )
+                            if hint_recent:
+                                scene_state_for_end["wild_text_missing_since"] = 0.0
+                                scene_state_for_end["wild_text_missing_count"] = 0
+                            else:
+                                missing_since = float(scene_state_for_end.get("wild_text_missing_since", 0.0) or 0.0)
+                                missing_count = int(scene_state_for_end.get("wild_text_missing_count", 0) or 0)
+                                if missing_since <= 0.0:
+                                    missing_since = float(now_missing)
+                                    missing_count = 1
+                                else:
+                                    missing_count = int(missing_count) + 1
+                                scene_state_for_end["wild_text_missing_since"] = float(missing_since)
+                                scene_state_for_end["wild_text_missing_count"] = int(missing_count)
+                                missing_for = float(now_missing - float(missing_since))
+                                release_wild_text_sec = max(0.6, min(12.0, self._cfg_float("video_wild_text_missing_release_sec", 2.0)))
+                                release_wild_text_count = max(1, min(12, self._cfg_int("video_wild_text_missing_release_count", 2)))
+                                if float(missing_for) >= float(release_wild_text_sec) and int(missing_count) >= int(release_wild_text_count):
+                                    self._end_scene_encounter_for_source(game_name, source_for_end)
+                                    self._last_emitted_signature = ""
+                                    self._last_emitted_at = 0.0
             else:
-                self._set_meta("sprite_not_present" if sprite_mode else "ocr_empty", game=game_name)
+                if sprite_mode and context_blocked:
+                    missing_reason = "battle_context_unconfirmed"
+                else:
+                    missing_reason = "sprite_not_present" if sprite_mode else "ocr_empty"
                 self._pending_signature = ""
                 self._pending_count = 0
-            return None
+                if missing_reason == "battle_context_unconfirmed":
+                    if isinstance(context_meta_waiting, dict):
+                        self._set_meta(missing_reason, **context_meta_waiting)
+                    else:
+                        self._set_meta(missing_reason, game=game_name)
+                    return None
+                if missing_reason == "sprite_not_present":
+                    now_absent = float(time.monotonic())
+                    if float(self._sprite_absent_since or 0.0) <= 0.0:
+                        self._sprite_absent_since = now_absent
+                    try:
+                        release_default = 6.00
+                        release_raw = float(self._cfg_float("video_sprite_release_delay_sec", release_default))
+                    except (TypeError, ValueError):
+                        release_raw = 2.20
+                    release_sec = max(0.30, min(10.0, float(release_raw)))
+                    absent_for = float(now_absent - float(self._sprite_absent_since or now_absent))
 
+                    source_for_end = str(selected_scene_source or last_scene_source_seen or "").strip()
+                    scene_state_for_end = None
+                    if source_for_end:
+                        scene_state_for_end = self._scene_encounter_state.get(self._scene_encounter_key(game_name, source_for_end))
+                    active_scene_encounter = isinstance(scene_state_for_end, dict) and bool(scene_state_for_end.get("active", False))
+
+                    waiting_meta = dict(context_meta_waiting or {}) if isinstance(context_meta_waiting, dict) else {}
+                    if active_scene_encounter:
+                        hint_hold_sec = max(0.50, min(12.0, self._cfg_float("video_battle_hint_hold_sec", 2.20)))
+                        resolved_active = bool(scene_state_for_end.get("species_resolved", False))
+                        hint_hold_resolved_default = max(float(hint_hold_sec), 3.0)
+                        hint_hold_resolved_sec = max(
+                            float(hint_hold_sec),
+                            min(30.0, self._cfg_float("video_battle_hint_hold_resolved_sec", hint_hold_resolved_default)),
+                        )
+                        last_hint_at = float(scene_state_for_end.get("last_battle_hint_at", 0.0) or 0.0)
+                        effective_hint_hold_sec = float(hint_hold_resolved_sec if resolved_active else hint_hold_sec)
+                        hint_recent = bool(
+                            bool(scene_state_for_end.get("battle_hint", False))
+                            and last_hint_at > 0.0
+                            and (now_absent - last_hint_at) <= float(effective_hint_hold_sec)
+                        )
+                        if hint_recent:
+                            self._set_meta(
+                                "duplicate_suppressed",
+                                game=game_name,
+                                scene=selected_scene_name,
+                                source_name=source_for_end,
+                                species_id=species_id,
+                                species=species_name,
+                                species_source=selected_species_source,
+                                nameplate_texts=list(selected_nameplate_texts[:3]),
+                                detection_mode=detection_mode,
+                                detection_channel=str(selected_detection_channel or "sprite"),
+                                battle_context=True,
+                                textbox_score=int(waiting_meta.get("textbox_score", 0) or 0),
+                                hud_score=int(waiting_meta.get("hud_score", 0) or 0),
+                                duplicate_scope="battle_hint_hold",
+                            )
+                            return None
+
+                        resolved_release_default = max(float(release_sec) + 0.8, 3.5)
+                        resolved_release_sec = max(
+                            float(release_sec),
+                            min(24.0, self._cfg_float("video_sprite_release_delay_resolved_sec", resolved_release_default)),
+                        )
+                        effective_release_sec = float(resolved_release_sec if resolved_active else release_sec)
+
+                        end_confirm_default = 2 if instant_detection else 3
+                        end_confirm = max(1, min(10, self._cfg_int("video_encounter_end_confirmations", end_confirm_default)))
+                        resolved_end_confirm_default = max(int(end_confirm), (2 if instant_detection else 3))
+                        end_confirm_resolved = max(
+                            int(end_confirm),
+                            min(14, self._cfg_int("video_encounter_end_confirmations_resolved", resolved_end_confirm_default)),
+                        )
+                        effective_end_confirm = int(end_confirm_resolved if resolved_active else end_confirm)
+                        end_missing_since = float(scene_state_for_end.get("end_missing_since", 0.0) or 0.0)
+                        end_missing_count = int(scene_state_for_end.get("end_missing_count", 0) or 0)
+                        if end_missing_since <= 0.0:
+                            end_missing_since = float(now_absent)
+                            end_missing_count = 1
+                        else:
+                            end_missing_count = int(end_missing_count) + 1
+                        scene_state_for_end["end_missing_since"] = float(end_missing_since)
+                        scene_state_for_end["end_missing_count"] = int(end_missing_count)
+                        scene_absent_for = float(now_absent - float(end_missing_since))
+
+                        if (scene_absent_for < float(effective_release_sec) or int(end_missing_count) < int(effective_end_confirm)) and bool(self._last_emitted_signature):
+                            self._set_meta(
+                                "duplicate_suppressed",
+                                game=game_name,
+                                scene=selected_scene_name,
+                                source_name=source_for_end,
+                                species_id=species_id,
+                                species=species_name,
+                                species_source=selected_species_source,
+                                nameplate_texts=list(selected_nameplate_texts[:3]),
+                                detection_mode=detection_mode,
+                                detection_channel=str(selected_detection_channel or "sprite"),
+                                battle_context=bool(waiting_meta.get("battle_context", False)),
+                                textbox_score=int(waiting_meta.get("textbox_score", 0) or 0),
+                                hud_score=int(waiting_meta.get("hud_score", 0) or 0),
+                                duplicate_scope="encounter_end_pending",
+                                absent_for=round(float(scene_absent_for), 3),
+                                release_sec=round(float(effective_release_sec), 3),
+                                end_missing_count=int(end_missing_count),
+                                end_missing_required=int(effective_end_confirm),
+                            )
+                            return None
+                    elif absent_for < release_sec and bool(self._last_emitted_signature):
+                        self._set_meta(
+                            "duplicate_suppressed",
+                            game=game_name,
+                            scene=selected_scene_name,
+                            source_name=selected_scene_source,
+                            species_id=species_id,
+                            species=species_name,
+                            species_source=selected_species_source,
+                            nameplate_texts=list(selected_nameplate_texts[:3]),
+                            detection_mode=detection_mode,
+                            detection_channel=str(selected_detection_channel or "sprite"),
+                            battle_context=bool(waiting_meta.get("battle_context", False)),
+                            textbox_score=int(waiting_meta.get("textbox_score", 0) or 0),
+                            hud_score=int(waiting_meta.get("hud_score", 0) or 0),
+                        )
+                        return None
+
+                    self._set_meta(missing_reason, game=game_name)
+                    self._last_emitted_signature = ""
+                    self._last_emitted_at = 0.0
+                    self._sprite_absent_since = 0.0
+                    self._unknown_sprite_key = ""
+                    self._unknown_sprite_since = 0.0
+                    if isinstance(scene_state_for_end, dict):
+                        scene_state_for_end["end_missing_since"] = 0.0
+                        scene_state_for_end["end_missing_count"] = 0
+                        scene_state_for_end["battle_hint"] = False
+                    if source_for_end:
+                        self._end_scene_encounter_for_source(game_name, source_for_end)
+                    else:
+                        self._end_scene_encounters_for_game(game_name)
+                else:
+                    self._set_meta(missing_reason, game=game_name)
+            return None
+        self._sprite_absent_since = 0.0
         shiny_enabled = self._cfg_bool("video_shiny_detection_enabled", True)
-        shiny_probe_frames = max(0, min(4, self._cfg_int("video_shiny_probe_frames", 2)))
+        shiny_probe_frames = max(0, min(6, self._cfg_int("video_shiny_probe_frames", 2)))
         shiny_probe_delay_ms = max(40, min(500, self._cfg_int("video_shiny_probe_delay_ms", 120)))
+        shiny_start_delay_ms = max(0, min(800, self._cfg_int("video_shiny_probe_start_delay_ms", 140)))
+
+        unknown_sprite_detection = species_id <= 0 and selected_detection_channel == "sprite"
+        species_lock_confirmed = bool(species_id > 0 and (not sprite_mode or "_locked" in str(selected_species_source or "")))
+        if unknown_sprite_detection:
+            shiny_probe_frames = 0
+            shiny_enabled = False
+        elif not species_lock_confirmed:
+            shiny_enabled = False
+            shiny_probe_frames = 0
+        else:
+            source_tag = str(selected_species_source or "")
+            allow_sprite_shiny = self._cfg_bool("video_allow_sprite_only_shiny", False)
+            if (not allow_sprite_shiny) and source_tag.startswith("sprite"):
+                shiny_enabled = False
+                shiny_probe_frames = 0
+            elif instant_detection:
+                shiny_probe_frames = max(2, int(shiny_probe_frames))
+
         shiny_frames: List[Any] = [image]
         if shiny_enabled and shiny_probe_frames > 0:
+            if int(shiny_start_delay_ms) > 0:
+                time.sleep(float(shiny_start_delay_ms) / 1000.0)
             for _ in range(shiny_probe_frames):
                 time.sleep(float(shiny_probe_delay_ms) / 1000.0)
                 extra_frame = self._capture_frame(source_override=selected_scene_source)
@@ -2324,12 +5874,265 @@ class OBSVideoEncounterReader:
                 shiny_roi_raw=selected_shiny_roi_raw,
             )
 
-        if species_id > 0:
-            emit_signature = f"{game_name}:{selected_scene_source}:species:{species_id}:{int(level) if isinstance(level, int) else 0}:{1 if bool(is_shiny) else 0}"
+        unknown_sprite_detection = species_id <= 0 and selected_detection_channel == "sprite"
+        if unknown_sprite_detection:
+            unknown_min_score = max(40, min(900, self._cfg_int("video_unknown_min_sprite_score", 160)))
+            unknown_min_detail = max(0.01, min(0.80, self._cfg_float("video_unknown_min_detail_ratio", 0.12)))
+            unknown_min_edge = max(0.001, min(0.80, self._cfg_float("video_unknown_min_edge_ratio", 0.020)))
+            if (
+                int(selected_sprite_score) < int(unknown_min_score)
+                or float(selected_sprite_detail) < float(unknown_min_detail)
+                or float(selected_sprite_edge) < float(unknown_min_edge)
+            ):
+                self._set_meta(
+                    "unknown_sprite_rejected",
+                    game=game_name,
+                    scene=selected_scene_name,
+                    source_name=selected_scene_source,
+                    sprite_score=int(selected_sprite_score),
+                    sprite_detail_ratio=float(selected_sprite_detail),
+                    sprite_edge_ratio=float(selected_sprite_edge),
+                    sprite_roi=list(selected_sprite_roi[:4]),
+                    roi_search_used=bool(selected_roi_search_used),
+                    global_scan_used=bool(selected_global_scan_used),
+                    global_scan_candidates=int(selected_global_scan_candidates),
+                    min_score=int(unknown_min_score),
+                    min_detail_ratio=float(unknown_min_detail),
+                    min_edge_ratio=float(unknown_min_edge),
+                )
+                self._debug_dump_frame(
+                    image,
+                    "unknown_sprite_rejected",
+                    game_name=game_name,
+                    scene_name=selected_scene_name,
+                    source_name=selected_scene_source,
+                    extra={
+                        "sprite_score": int(selected_sprite_score),
+                        "sprite_detail_ratio": float(selected_sprite_detail),
+                        "sprite_edge_ratio": float(selected_sprite_edge),
+                        "sprite_roi": list(selected_sprite_roi[:4]),
+                        "roi_search_used": bool(selected_roi_search_used),
+                        "global_scan_used": bool(selected_global_scan_used),
+                        "global_scan_candidates": int(selected_global_scan_candidates),
+                    },
+                )
+                return None
+
+        now = float(time.monotonic())
+        if int(species_id) <= 0:
+            scene_state_key_pre = self._scene_encounter_key(game_name, selected_scene_source)
+            pre_state_active = self._scene_encounter_state.get(scene_state_key_pre)
+            if isinstance(pre_state_active, dict) and bool(pre_state_active.get("active", False)) and bool(pre_state_active.get("species_resolved", False)) and int(pre_state_active.get("species_id", 0) or 0) > 0:
+                locked_id = int(pre_state_active.get("species_id", 0) or 0)
+                locked_name = str(pre_state_active.get("species_name") or self._species_lookup.get(int(locked_id), f"Pokemon #{int(locked_id)}"))
+                self._set_meta(
+                    "duplicate_suppressed",
+                    game=game_name,
+                    scene=selected_scene_name,
+                    source_name=selected_scene_source,
+                    species_id=int(locked_id),
+                    species=str(locked_name),
+                    species_source="scene_species_lock_active",
+                    detection_mode=detection_mode,
+                    detection_channel=str(selected_detection_channel or "sprite"),
+                    battle_context=bool(selected_battle_context),
+                    textbox_score=int(selected_textbox_score),
+                    hud_score=int(selected_hud_score),
+                    duplicate_scope="active_encounter_locked",
+                )
+                return None
+        emit_unknown_start = False
+        if int(species_id) <= 0:
+            unknown_gate_reason = ""
+            unknown_gate_code = ""
+            if not emit_unknown_start:
+                unknown_gate_reason = "unknown_sprite_pending_species_lock"
+                unknown_gate_code = "unknown_start_disabled"
+            else:
+                unknown_require_conf = self._cfg_bool("video_unknown_require_confidence", False)
+                unknown_max_distance = max(6, min(160, self._cfg_int("video_unknown_max_match_distance", 56)))
+                unknown_min_margin = max(0, min(64, self._cfg_int("video_unknown_min_distance_margin", 8)))
+                if (
+                    (unknown_require_conf and (not bool(selected_sprite_confidence_ok)) and int(selected_sprite_distance_margin) < int(max(12, unknown_min_margin)))
+                    or int(selected_sprite_match_distance) > int(unknown_max_distance)
+                    or int(selected_sprite_distance_margin) < int(unknown_min_margin)
+                ):
+                    unknown_gate_reason = "unknown_sprite_pending_species_lock"
+                    unknown_gate_code = "unknown_start_low_confidence"
+
+            if unknown_gate_reason:
+                self._set_meta(
+                    unknown_gate_reason,
+                    game=game_name,
+                    scene=selected_scene_name,
+                    source_name=selected_scene_source,
+                    sprite_score=int(selected_sprite_score),
+                    sprite_match_distance=int(selected_sprite_match_distance),
+                    sprite_second_distance=int(selected_sprite_second_distance),
+                    sprite_distance_margin=int(selected_sprite_distance_margin),
+                    sprite_confidence_ok=bool(selected_sprite_confidence_ok),
+                    sprite_ai_confidence=float(selected_sprite_ai_confidence),
+                    sprite_ai_hits=int(selected_sprite_ai_hits),
+                    sprite_ai_required_hits=int(selected_sprite_ai_required_hits),
+                    species_lock_count=int(selected_species_lock_count),
+                    species_lock_required=int(selected_species_lock_required),
+                    battle_context=bool(selected_battle_context),
+                    textbox_score=int(selected_textbox_score),
+                    hud_score=int(selected_hud_score),
+                    code=str(unknown_gate_code),
+                    sprite_roi=list(selected_sprite_roi[:4]),
+                    roi_search_used=bool(selected_roi_search_used),
+                    global_scan_used=bool(selected_global_scan_used),
+                    global_scan_candidates=int(selected_global_scan_candidates),
+                )
+                self._debug_dump_frame(
+                    image,
+                    str(unknown_gate_reason),
+                    game_name=game_name,
+                    scene_name=selected_scene_name,
+                    source_name=selected_scene_source,
+                    extra={
+                        "code": str(unknown_gate_code),
+                        "sprite_score": int(selected_sprite_score),
+                        "sprite_match_distance": int(selected_sprite_match_distance),
+                        "sprite_second_distance": int(selected_sprite_second_distance),
+                        "sprite_distance_margin": int(selected_sprite_distance_margin),
+                        "sprite_confidence_ok": bool(selected_sprite_confidence_ok),
+                        "sprite_ai_confidence": float(selected_sprite_ai_confidence),
+                        "sprite_ai_hits": int(selected_sprite_ai_hits),
+                        "sprite_ai_required_hits": int(selected_sprite_ai_required_hits),
+                        "sprite_roi": list(selected_sprite_roi[:4]),
+                        "roi_search_used": bool(selected_roi_search_used),
+                        "global_scan_used": bool(selected_global_scan_used),
+                        "global_scan_candidates": int(selected_global_scan_candidates),
+                    },
+                )
+                return None
+
+        if not str(selected_scene_source or "").strip() and str(last_scene_source_seen or "").strip():
+            selected_scene_source = str(last_scene_source_seen).strip()
+            if not str(selected_scene_name or "").strip():
+                selected_scene_name = str(last_scene_source_seen).strip()
+        scene_state_key = self._scene_encounter_key(game_name, selected_scene_source)
+        stale_timeout_sec = max(6.0, min(120.0, self._cfg_float("video_encounter_stale_timeout_sec", 20.0)))
+        pre_state = self._scene_encounter_state.get(scene_state_key)
+        if isinstance(pre_state, dict) and bool(pre_state.get("active", False)):
+            last_seen_at = float(pre_state.get("last_seen_at", pre_state.get("started_at", 0.0)) or 0.0)
+            if last_seen_at > 0.0 and (now - last_seen_at) >= float(stale_timeout_sec):
+                self._end_scene_encounter_for_source(game_name, selected_scene_source)
+
+        scene_token = int(self._start_or_get_scene_encounter_token(game_name, selected_scene_source))
+        scene_state = self._scene_encounter_state.setdefault(scene_state_key, {"active": True, "token": int(scene_token)})
+        previous_seen_at = float(scene_state.get("last_seen_at", scene_state.get("started_at", now)) or now)
+        scene_state["active"] = True
+        scene_state["token"] = int(scene_token)
+
+        signal_min_score = max(60, min(900, self._cfg_int("video_sprite_active_signal_min_score", 380)))
+        signal_min_detail = max(0.010, min(0.90, self._cfg_float("video_sprite_active_signal_min_detail_ratio", 0.090)))
+        signal_min_edge = max(0.002, min(0.90, self._cfg_float("video_sprite_active_signal_min_edge_ratio", 0.012)))
+        sprite_active_signal = bool(
+            str(selected_sprite_signature or "").strip()
+            and int(selected_sprite_score) >= int(signal_min_score)
+            and float(selected_sprite_detail) >= float(signal_min_detail)
+            and float(selected_sprite_edge) >= float(signal_min_edge)
+        )
+        active_signal = bool(sprite_active_signal)
+        if active_signal:
+            scene_state["last_seen_at"] = float(now)
+            scene_state["end_missing_since"] = 0.0
+            scene_state["end_missing_count"] = 0
+            scene_state["wild_text_missing_since"] = 0.0
+            scene_state["wild_text_missing_count"] = 0
+        scene_state["battle_hint"] = bool(selected_battle_context)
+        if bool(selected_battle_context):
+            scene_state["last_battle_hint_at"] = float(now)
+
+        locked_species_id = int(scene_state.get("species_id", 0) or 0)
+        if bool(scene_state.get("species_resolved", False)) and int(locked_species_id) > 0:
+            locked_species_name = str(scene_state.get("species_name") or self._species_lookup.get(int(locked_species_id), f"Pokemon #{int(locked_species_id)}"))
+            lock_grace_sec = max(0.10, min(4.0, self._cfg_float("video_scene_lock_grace_sec", 1.00)))
+            lock_age = now - float(previous_seen_at)
+            lock_persist_until_end = self._cfg_bool("video_scene_lock_persist_until_end", False)
+            lock_fallback_max_distance = max(6, min(128, self._cfg_int("video_scene_lock_fallback_max_distance", 24)))
+            lock_fallback_min_margin = max(0, min(64, self._cfg_int("video_scene_lock_fallback_min_margin", 12)))
+            lock_fallback_min_score = max(60, min(900, self._cfg_int("video_scene_lock_fallback_min_score", 300)))
+            allow_weak_lock_fallback = self._cfg_bool("video_scene_lock_allow_weak_fallback", False)
+            roi_lock_ok = False
+            if len(list(selected_sprite_roi[:4])) >= 4:
+                try:
+                    roi_tuple = tuple(int(v) for v in list(selected_sprite_roi[:4]))
+                    roi_lock_ok = not self._roi_touches_edge_px(roi_tuple, int(image.width), int(image.height), margin_px=2)
+                except Exception:
+                    roi_lock_ok = False
+            lock_fallback_allowed = bool(
+                bool(roi_lock_ok)
+                and str(selected_sprite_signature or "").strip()
+                and (
+                    bool(selected_sprite_confidence_ok)
+                    or (
+                        bool(allow_weak_lock_fallback)
+                        and int(selected_sprite_match_distance) <= int(lock_fallback_max_distance)
+                        and int(selected_sprite_distance_margin) >= int(lock_fallback_min_margin)
+                        and int(selected_sprite_score) >= int(lock_fallback_min_score)
+                    )
+                )
+            )
+            if int(species_id) <= 0:
+                if bool(lock_persist_until_end):
+                    species_id = int(locked_species_id)
+                    species_name = str(locked_species_name)
+                    selected_species_source = str(selected_species_source or "scene_species_lock_persist")
+                elif lock_age <= lock_grace_sec and bool(lock_fallback_allowed):
+                    species_id = int(locked_species_id)
+                    species_name = str(locked_species_name)
+                    selected_species_source = str(selected_species_source or "scene_species_lock")
+            elif int(species_id) != int(locked_species_id):
+                allow_override_setting = self._cfg_bool("video_scene_lock_allow_species_override", False)
+                require_nameplate_override = self._cfg_bool("video_scene_lock_override_require_nameplate", True)
+                override_min_lock_count = max(1, min(8, self._cfg_int("video_scene_lock_override_min_lock_count", 2)))
+                source_is_nameplate = str(selected_species_source or "").startswith("nameplate_ocr")
+                override_max_distance = max(4, min(96, self._cfg_int("video_species_lock_override_max_distance", 14)))
+                override_min_margin = max(0, min(64, self._cfg_int("video_species_lock_override_min_margin", 18)))
+                allow_override = bool(
+                    bool(allow_override_setting)
+                    and int(selected_species_lock_count) >= int(override_min_lock_count)
+                    and int(selected_sprite_match_distance) <= int(override_max_distance)
+                    and int(selected_sprite_distance_margin) >= int(override_min_margin)
+                    and ((not bool(require_nameplate_override)) or bool(source_is_nameplate))
+                )
+                if not allow_override:
+                    species_id = int(locked_species_id)
+                    species_name = str(locked_species_name)
+                    selected_species_source = "scene_species_lock"
+        if int(species_id) > 0:
+            scene_state["species_resolved"] = True
+            scene_state["species_id"] = int(species_id)
+            scene_state["species_name"] = str(species_name)
+            emit_signature = f"{game_name}:{selected_scene_source}:encounter:{int(scene_token)}:species:{int(species_id)}"
         else:
-            emit_signature = f"{game_name}:{selected_scene_source}:sprite:{selected_sprite_signature}:{1 if bool(is_shiny) else 0}"
-        now = time.monotonic()
-        duplicate_window = max(0.5, min(10.0, self._cfg_float("video_duplicate_window_sec", 2.8)))
+            emit_signature = f"{game_name}:{selected_scene_source}:encounter:{int(scene_token)}:start"
+
+        duplicate_default = 0.8 if instant_detection else 2.8
+        duplicate_window = max(0.2, min(8.0, self._cfg_float("video_duplicate_window_sec", duplicate_default)))
+        if emit_signature == self._last_emitted_signature and float(self._sprite_absent_since or 0.0) <= 0.0:
+            self._set_meta(
+                "duplicate_suppressed",
+                game=game_name,
+                scene=selected_scene_name,
+                source_name=selected_scene_source,
+                species_id=species_id,
+                species=species_name,
+                species_source=selected_species_source,
+                nameplate_texts=list(selected_nameplate_texts[:3]),
+                shiny=bool(is_shiny),
+                detection_mode=detection_mode,
+                detection_channel=str(selected_detection_channel),
+                battle_context=bool(selected_battle_context),
+                textbox_score=int(selected_textbox_score),
+                hud_score=int(selected_hud_score),
+                duplicate_scope="active_encounter",
+            )
+            return None
         if emit_signature == self._last_emitted_signature and (now - float(self._last_emitted_at or 0.0)) < duplicate_window:
             self._set_meta(
                 "duplicate_suppressed",
@@ -2338,15 +6141,41 @@ class OBSVideoEncounterReader:
                 source_name=selected_scene_source,
                 species_id=species_id,
                 species=species_name,
+                species_source=selected_species_source,
+                nameplate_texts=list(selected_nameplate_texts[:3]),
                 shiny=bool(is_shiny),
                 detection_mode=detection_mode,
+                detection_channel=str(selected_detection_channel),
+                battle_context=bool(selected_battle_context),
+                textbox_score=int(selected_textbox_score),
+                hud_score=int(selected_hud_score),
+                duplicate_scope="time_window",
             )
             return None
+
+        if bool(is_shiny):
+            self._debug_dump_frame(
+                image,
+                "shiny_detected",
+                game_name=game_name,
+                scene_name=selected_scene_name,
+                source_name=selected_scene_source,
+                extra={
+                    "shiny_score": int(shiny_score),
+                    "shiny_scores": list(shiny_scores),
+                    "species_id": int(species_id),
+                },
+            )
 
         self._last_emitted_signature = emit_signature
         self._last_emitted_at = now
 
-        source_kind = "obs_video_sprite" if sprite_mode else "obs_video_ocr"
+        if selected_detection_channel in {"sprite", "sprite_memory", "sprite_reference", "sprite_consensus"}:
+            source_kind = "obs_video_sprite"
+        elif selected_detection_channel == "ocr_fallback":
+            source_kind = "obs_video_ocr_fallback"
+        else:
+            source_kind = "obs_video_ocr"
         self._set_meta(
             "ok",
             game=game_name,
@@ -2354,6 +6183,8 @@ class OBSVideoEncounterReader:
             source_name=selected_scene_source,
             species_id=species_id,
             species=species_name,
+            species_source=selected_species_source,
+            nameplate_texts=list(selected_nameplate_texts[:3]),
             level=level,
             shiny=bool(is_shiny),
             shiny_score=int(shiny_score),
@@ -2361,10 +6192,46 @@ class OBSVideoEncounterReader:
             shiny_confidence=float(shiny_confidence),
             source=source_kind,
             detection_mode=detection_mode,
+            detection_channel=str(selected_detection_channel),
             sprite_score=int(selected_sprite_score),
             sprite_signature=str(selected_sprite_signature),
             sprite_detail_ratio=float(selected_sprite_detail),
             sprite_edge_ratio=float(selected_sprite_edge),
+            sprite_roi=list(selected_sprite_roi[:4]),
+            roi_search_used=bool(selected_roi_search_used),
+            global_scan_used=bool(selected_global_scan_used),
+            global_scan_candidates=int(selected_global_scan_candidates),
+            battle_context=bool(selected_battle_context),
+            textbox_score=int(selected_textbox_score),
+            hud_score=int(selected_hud_score),
+            sprite_match_distance=int(selected_sprite_match_distance),
+            sprite_second_distance=int(selected_sprite_second_distance),
+            sprite_distance_margin=int(selected_sprite_distance_margin),
+            sprite_confidence_ok=bool(selected_sprite_confidence_ok),
+            sprite_ai_confidence=float(selected_sprite_ai_confidence),
+            sprite_ai_hits=int(selected_sprite_ai_hits),
+            sprite_ai_required_hits=int(selected_sprite_ai_required_hits),
+            sprite_candidate_count=int(selected_sprite_candidate_count),
+            species_lock_count=int(selected_species_lock_count),
+            species_lock_required=int(selected_species_lock_required),
+            species_resolved=bool(species_id > 0),
+            encounter_phase="species_resolved" if species_id > 0 else "encounter_started",
+        )
+
+        self._capture_ai_dataset_sample(
+            image=image,
+            game_name=game_name,
+            source_name=selected_scene_source,
+            scene_key=scene_state_key,
+            encounter_token=int(scene_token),
+            sprite_signature=str(selected_sprite_signature),
+            species_id=int(species_id),
+            species_source=str(selected_species_source),
+            stage="species_resolved" if int(species_id) > 0 else "encounter_started",
+            sprite_score=int(selected_sprite_score),
+            sprite_distance=int(selected_sprite_match_distance),
+            sprite_margin=int(selected_sprite_distance_margin),
+            ai_confidence=float(selected_sprite_ai_confidence),
         )
 
         signature = f"video:{emit_signature}"
@@ -2387,8 +6254,29 @@ class OBSVideoEncounterReader:
             "sprite_signature": str(selected_sprite_signature),
             "sprite_detail_ratio": float(selected_sprite_detail),
             "sprite_edge_ratio": float(selected_sprite_edge),
+            "sprite_roi": list(selected_sprite_roi[:4]),
             "video_sprite_present": bool(selected_sprite_signature),
             "detection_mode": detection_mode,
+            "detection_channel": str(selected_detection_channel),
+            "species_source": str(selected_species_source),
+            "nameplate_texts": list(selected_nameplate_texts[:3]),
+            "battle_context": bool(selected_battle_context),
+            "textbox_score": int(selected_textbox_score),
+            "hud_score": int(selected_hud_score),
+            "sprite_match_distance": int(selected_sprite_match_distance),
+            "sprite_second_distance": int(selected_sprite_second_distance),
+            "sprite_distance_margin": int(selected_sprite_distance_margin),
+            "sprite_confidence_ok": bool(selected_sprite_confidence_ok),
+            "sprite_ai_confidence": float(selected_sprite_ai_confidence),
+            "sprite_ai_hits": int(selected_sprite_ai_hits),
+            "sprite_ai_required_hits": int(selected_sprite_ai_required_hits),
+            "sprite_candidate_count": int(selected_sprite_candidate_count),
+            "species_lock_count": int(selected_species_lock_count),
+            "species_lock_required": int(selected_species_lock_required),
+            "species_resolved": bool(species_id > 0),
+            "encounter_started": True,
+            "encounter_phase": "species_resolved" if species_id > 0 else "encounter_started",
+            "encounter_token": int(scene_token),
         }
 
 
@@ -8514,7 +12402,8 @@ class PokeAchieveGUI:
         )
         self._video_reader_last_reason = ""
         self._video_reader_last_log_at = 0.0
-        
+        self._video_gate_last_reason = ""
+        self._video_gate_last_log_at = 0.0
         # State
         self.is_running = False
         self.status_check_interval = 3000
@@ -8596,6 +12485,7 @@ class PokeAchieveGUI:
         self._hunt_counter = 0
         self._hunt_phase_count = 0
         self._hunt_last_enemy_signature: Optional[str] = None
+        self._hunt_last_encounter_token: Optional[int] = None
         self._hunt_last_target_signature: Optional[str] = None
         self._hunt_enemy_present = False
         self._hunt_last_enemy_seen_at = 0.0
@@ -8610,6 +12500,12 @@ class PokeAchieveGUI:
         self._hunt_initialized = False
         self._hunt_species_counts: Dict[int, int] = {}
         self._hunt_species_count_labels: Dict[int, ttk.Label] = {}
+        self._hunt_seen_encounter_tokens: Set[int] = set()
+        self._hunt_unknown_token_counts: Set[int] = set()
+        self._hunt_species_resolved_tokens: Set[int] = set()
+        self._hunt_last_counted_at = 0.0
+        self._hunt_last_counted_species_id = 0
+        self._hunt_last_counted_signature: Optional[str] = None
         self._hunt_last_raw_log_key: Optional[str] = None
         self._hunt_last_raw_none_log_at = 0.0
         self._hunt_last_raw_none_reason: Optional[str] = None
@@ -10066,7 +13962,7 @@ class PokeAchieveGUI:
             rod_name=self.hunt_rod_var.get().strip(),
         )
         self._refresh_hunt_targets()
-        self._load_saved_hunt_for_current_selection(auto_start=keep_active)
+        self._save_current_hunt_profile(active_override=self._hunt_active, set_last_profile_key=True)
         if keep_active and not self._hunt_active:
             self._start_hunt(silent=True, emit_log=False, persist=True)
 
@@ -10077,17 +13973,41 @@ class PokeAchieveGUI:
             rod_name=self.hunt_rod_var.get().strip(),
         )
         self._refresh_hunt_targets()
-        self._save_current_hunt_profile(active_override=self._hunt_active, set_last_profile_key=False)
+        self._save_current_hunt_profile(active_override=self._hunt_active, set_last_profile_key=True)
 
     def _on_hunt_auto_route_toggled(self):
+        game_name = self.hunt_game_var.get().strip()
+        enabled = bool(self.hunt_auto_route_var.get())
+        game_store = self._get_hunt_profile_store_for_game(game_name, create=False) if game_name else None
+        profiles = game_store.get("profiles") if isinstance(game_store, dict) else None
+        profiles_updated = 0
+        if isinstance(profiles, dict):
+            now_ts = int(time.time())
+            for profile in profiles.values():
+                if not isinstance(profile, dict):
+                    continue
+                mode_value = str(profile.get("mode") or "").strip()
+                if mode_value not in {"Wild Encounter Hunt", "Fishing Encounter Hunt", "Soft Reset Hunt"}:
+                    continue
+                existing = profile.get("auto_route", True)
+                existing_enabled = bool(existing) if isinstance(existing, (bool, int)) else True
+                if existing_enabled == enabled:
+                    continue
+                profile["auto_route"] = bool(enabled)
+                profile["updated_at"] = now_ts
+                profiles_updated += 1
+        if profiles_updated > 0:
+            self._save_hunt_profiles()
+
         self._reset_hunt_auto_route_candidates()
         self._save_current_hunt_profile(active_override=self._hunt_active, set_last_profile_key=False)
         log_event(
             logging.INFO,
             "hunt_auto_route_toggled",
-            enabled=bool(self.hunt_auto_route_var.get()),
-            game=self.hunt_game_var.get().strip(),
+            enabled=enabled,
+            game=game_name,
             mode=self.hunt_mode_var.get().strip(),
+            updated_profiles=int(profiles_updated),
         )
 
     def _hunt_auto_route_state_key(self, game_name: str, mode: str, rod_name: str = "") -> str:
@@ -10428,7 +14348,7 @@ class PokeAchieveGUI:
     def _on_hunt_target_selected(self, _event=None):
         keep_active = bool(self._hunt_active)
         self._update_hunt_target_display()
-        self._load_saved_hunt_for_current_selection(auto_start=keep_active)
+        self._save_current_hunt_profile(active_override=self._hunt_active, set_last_profile_key=True)
         if keep_active and not self._hunt_active:
             self._start_hunt(silent=True, emit_log=False, persist=True)
 
@@ -10650,25 +14570,13 @@ class PokeAchieveGUI:
                     "expected_route": profile_route,
                     "rod": profile_rod,
                 }
-                # Do not keep stale prior-route selection while waiting for live location signal.
-                if profile_mode == "Fishing Encounter Hunt":
-                    neutral_route = "Any Fishing Spot"
-                else:
-                    neutral_route = "Any Route / Area"
-                route_values = self._get_hunt_route_values(game_name, profile_mode)
-                if neutral_route not in route_values and route_values:
-                    neutral_route = route_values[0]
-                if neutral_route and self.hunt_route_var.get().strip() != neutral_route:
-                    self.hunt_route_var.set(neutral_route)
-                    self._refresh_hunt_targets()
-
                 log_event(
                     logging.INFO,
                     "hunt_route_reconcile_pending_set",
                     game=game_name,
                     mode=profile_mode,
                     expected_route=profile_route,
-                    neutral_route=neutral_route,
+                    neutral_route=self.hunt_route_var.get().strip(),
                     rod=profile_rod,
                     auto_start=bool(auto_start),
                 )
@@ -10681,6 +14589,12 @@ class PokeAchieveGUI:
         self._hunt_profile_applying = True
         try:
             self._hunt_species_counts = {}
+            self._hunt_seen_encounter_tokens.clear()
+            self._hunt_unknown_token_counts.clear()
+            self._hunt_species_resolved_tokens.clear()
+            self._hunt_last_counted_at = 0.0
+            self._hunt_last_counted_species_id = 0
+            self._hunt_last_counted_signature = None
             self._set_hunt_counter(0)
             self._set_hunt_phase_count(0)
         finally:
@@ -10700,6 +14614,12 @@ class PokeAchieveGUI:
             self._hunt_profile_applying = True
             try:
                 self._hunt_species_counts = {}
+                self._hunt_seen_encounter_tokens.clear()
+                self._hunt_unknown_token_counts.clear()
+                self._hunt_species_resolved_tokens.clear()
+                self._hunt_last_counted_at = 0.0
+                self._hunt_last_counted_species_id = 0
+                self._hunt_last_counted_signature = None
                 self._set_hunt_counter(0)
                 self._set_hunt_phase_count(0)
             finally:
@@ -10759,25 +14679,13 @@ class PokeAchieveGUI:
                     "expected_route": profile_route,
                     "rod": profile_rod,
                 }
-                # Do not keep stale prior-route selection while waiting for live location signal.
-                if profile_mode == "Fishing Encounter Hunt":
-                    neutral_route = "Any Fishing Spot"
-                else:
-                    neutral_route = "Any Route / Area"
-                route_values = self._get_hunt_route_values(game_key, profile_mode)
-                if neutral_route not in route_values and route_values:
-                    neutral_route = route_values[0]
-                if neutral_route and self.hunt_route_var.get().strip() != neutral_route:
-                    self.hunt_route_var.set(neutral_route)
-                    self._refresh_hunt_targets()
-
                 log_event(
                     logging.INFO,
                     "hunt_route_reconcile_pending_set",
                     game=game_key,
                     mode=profile_mode,
                     expected_route=profile_route,
-                    neutral_route=neutral_route,
+                    neutral_route=self.hunt_route_var.get().strip(),
                     rod=profile_rod,
                     auto_start=bool(auto_start),
                 )
@@ -10791,6 +14699,12 @@ class PokeAchieveGUI:
         self._hunt_profile_applying = True
         try:
             self._hunt_species_counts = {}
+            self._hunt_seen_encounter_tokens.clear()
+            self._hunt_unknown_token_counts.clear()
+            self._hunt_species_resolved_tokens.clear()
+            self._hunt_last_counted_at = 0.0
+            self._hunt_last_counted_species_id = 0
+            self._hunt_last_counted_signature = None
             self._set_hunt_counter(0)
             self._set_hunt_phase_count(0)
         finally:
@@ -11205,6 +15119,7 @@ class PokeAchieveGUI:
         game_for_hunt = self.hunt_game_var.get().strip() or (self.tracker.game_name if self.tracker else "") or ""
         self._hunt_last_party_snapshot = self._snapshot_party_for_hunt(self.tracker._last_party if self.tracker else [])
         self._hunt_last_enemy_signature = None
+        self._hunt_last_encounter_token = None
         self._hunt_last_enemy_seen_at = 0.0
         self._hunt_last_raw_log_key = None
         self._hunt_last_raw_none_log_at = 0.0
@@ -11212,6 +15127,12 @@ class PokeAchieveGUI:
         self._hunt_last_target_signature = None
         self._hunt_enemy_present = False
         self._hunt_target_present = False
+        self._hunt_seen_encounter_tokens.clear()
+        self._hunt_unknown_token_counts.clear()
+        self._hunt_species_resolved_tokens.clear()
+        self._hunt_last_counted_at = 0.0
+        self._hunt_last_counted_species_id = 0
+        self._hunt_last_counted_signature = None
         self._hunt_soft_reset_reset_pending = False
         self._hunt_soft_reset_seen_in_pokedex = False
         self._hunt_soft_reset_target_id = 0
@@ -11230,6 +15151,11 @@ class PokeAchieveGUI:
             signature = str(encounter.get("signature", "")).strip()
             if signature:
                 self._hunt_last_enemy_signature = signature
+            try:
+                _baseline_token = int(encounter.get("encounter_token") or 0)
+            except (TypeError, ValueError):
+                _baseline_token = 0
+            self._hunt_last_encounter_token = int(_baseline_token) if int(_baseline_token) > 0 else None
             self._hunt_enemy_present = bool(encounter.get("is_wild", True))
             self._hunt_last_enemy_seen_at = time.monotonic()
 
@@ -11253,6 +15179,12 @@ class PokeAchieveGUI:
             if not silent:
                 messagebox.showwarning("No Target", "Select a hunt target before starting.")
             return False
+
+        # Auto-start global tracking so hunt detection actually runs.
+        if not self.is_running:
+            self._start_tracking()
+            if not self.is_running:
+                return False
 
         self._hunt_active = True
         self._hunt_alerted_signatures = set()
@@ -11355,6 +15287,7 @@ class PokeAchieveGUI:
 
         encounter_source = str(encounter.get("source") or "")
         reader_meta: Dict[str, object] = {}
+        enemy_start = None
         if encounter_source.startswith("obs_video_sprite"):
             read_reason = "video_sprite"
             enemy_count_source = encounter_source or "obs_video_sprite"
@@ -11675,8 +15608,6 @@ class PokeAchieveGUI:
             species_id = int(encounter.get("species_id", 0))
         except (TypeError, ValueError):
             species_id = 0
-        if species_id <= 0:
-            return
 
         try:
             level_val = int(encounter.get("level", 0) or 0)
@@ -11688,21 +15619,94 @@ class PokeAchieveGUI:
         if not signature:
             signature = f"{species_id}:{level_val}:{personality}:{ot_id}"
 
+        try:
+            encounter_token = int(encounter.get("encounter_token") or 0)
+        except (TypeError, ValueError):
+            encounter_token = 0
+
         now_ts = time.monotonic()
+        encounter_source = str(encounter.get("source") or "")
+        was_enemy_present = bool(self._hunt_enemy_present)
+        prev_enemy_seen_at = float(self._hunt_last_enemy_seen_at or 0.0)
         if not self._hunt_initialized:
             self._hunt_last_enemy_signature = signature
+            self._hunt_last_encounter_token = int(encounter_token) if int(encounter_token) > 0 else None
             self._hunt_enemy_present = True
             self._hunt_last_enemy_seen_at = now_ts
             self._hunt_initialized = True
             return
 
-        same_signature = bool(signature) and signature == self._hunt_last_enemy_signature
-        is_new_encounter = (not self._hunt_enemy_present) or (not same_signature)
+        same_encounter = False
+        if int(encounter_token) > 0 and isinstance(self._hunt_last_encounter_token, int):
+            same_encounter = int(encounter_token) == int(self._hunt_last_encounter_token)
+        if not same_encounter:
+            same_encounter = bool(signature) and signature == self._hunt_last_enemy_signature
+        is_new_encounter = (not self._hunt_enemy_present) or (not same_encounter)
+        same_battle_guard_sec = max(0.5, min(15.0, float(self.config.get("video_same_battle_duplicate_guard_sec", 3.0) or 3.0)))
+        recent_gap = float(now_ts - prev_enemy_seen_at) if float(prev_enemy_seen_at) > 0.0 else 999.0
+        if bool(is_new_encounter) and bool(was_enemy_present) and int(species_id) > 0 and encounter_source.startswith("obs_video") and int(self._hunt_last_counted_species_id or 0) == int(species_id) and float(recent_gap) < float(same_battle_guard_sec):
+            log_event(
+                logging.INFO,
+                "hunt_encounter_duplicate_guard",
+                game=game_name,
+                mode=mode,
+                route=self.hunt_route_var.get().strip(),
+                species_id=species_id,
+                encounter_token=int(encounter_token) if int(encounter_token) > 0 else None,
+                signature=signature,
+                gap_sec=round(float(recent_gap), 3),
+                guard_sec=float(same_battle_guard_sec),
+            )
+            return
 
         self._hunt_enemy_present = True
         self._hunt_last_enemy_signature = signature
+        if int(encounter_token) > 0:
+            self._hunt_last_encounter_token = int(encounter_token)
         self._hunt_last_enemy_seen_at = now_ts
         if not is_new_encounter:
+            if int(encounter_token) > 0 and int(species_id) > 0 and int(encounter_token) in self._hunt_unknown_token_counts and int(encounter_token) not in self._hunt_species_resolved_tokens:
+                self._record_hunt_species_encounter(species_id)
+                self._hunt_species_resolved_tokens.add(int(encounter_token))
+                log_event(
+                    logging.INFO,
+                    "hunt_encounter_species_resolved",
+                    game=game_name,
+                    mode=mode,
+                    route=self.hunt_route_var.get().strip(),
+                    encounter_token=int(encounter_token),
+                    species_id=species_id,
+                    signature=signature,
+                    from_unknown=True,
+                )
+            return
+
+        if species_id <= 0:
+            encounter_source = str(encounter.get("source") or "")
+            detection_channel = str(encounter.get("detection_channel") or "")
+            if encounter_source.startswith("obs_video") and detection_channel.startswith("sprite"):
+                token_known = bool(int(encounter_token) > 0 and int(encounter_token) in self._hunt_seen_encounter_tokens)
+                if int(encounter_token) > 0:
+                    self._hunt_unknown_token_counts.add(int(encounter_token))
+                count_unknown_encounters = False
+                if not token_known and bool(count_unknown_encounters):
+                    self._set_hunt_counter(self._hunt_counter + 1)
+                    if int(encounter_token) > 0:
+                        self._hunt_seen_encounter_tokens.add(int(encounter_token))
+                log_event(
+                    logging.INFO,
+                    "hunt_encounter_counted_unknown" if (not token_known and bool(count_unknown_encounters)) else "hunt_encounter_unknown_pending",
+                    game=game_name,
+                    mode=mode,
+                    route=self.hunt_route_var.get().strip(),
+                    encounter_token=int(encounter_token) if int(encounter_token) > 0 else None,
+                    counter=int(self._hunt_counter),
+                    source=encounter_source,
+                    detection_channel=detection_channel,
+                    signature=signature,
+                    reason="pending_species_resolution",
+                    counted=bool((not token_known) and bool(count_unknown_encounters)),
+                )
             return
 
         self._auto_detect_and_apply_hunt_route(encounter, game_name, mode)
@@ -11726,36 +15730,55 @@ class PokeAchieveGUI:
             )
             return
 
+        token_known = bool(int(encounter_token) > 0 and int(encounter_token) in self._hunt_seen_encounter_tokens)
+        if int(encounter_token) > 0 and int(encounter_token) in self._hunt_unknown_token_counts:
+            self._hunt_unknown_token_counts.discard(int(encounter_token))
+            self._hunt_species_resolved_tokens.add(int(encounter_token))
+
         self._record_hunt_species_encounter(species_id)
         species_counter = self._get_hunt_species_count(species_id)
         target_id = self._get_hunt_target_pokemon_id()
         target_match = target_id <= 0 or species_id == target_id
-        if target_match:
+
+        if not token_known:
             self._set_hunt_counter(self._hunt_counter + 1)
+            if int(encounter_token) > 0:
+                self._hunt_seen_encounter_tokens.add(int(encounter_token))
+        encounter_count = int(self._hunt_counter)
+
+        encounter_counted = not token_known
+        if bool(encounter_counted):
+            self._hunt_last_counted_at = float(now_ts)
+            self._hunt_last_counted_species_id = int(species_id)
+            self._hunt_last_counted_signature = str(signature)
+
+        if target_match:
             log_event(
                 logging.INFO,
-                "hunt_encounter_counted",
+                "hunt_encounter_counted" if encounter_counted else "hunt_encounter_species_resolved",
                 game=game_name,
                 mode=mode,
                 route=self.hunt_route_var.get().strip(),
                 species_id=species_id,
-                counter=self._hunt_counter,
+                counter=encounter_count,
                 species_counter=species_counter,
                 signature=signature,
                 target_id=target_id,
+                target_match=True,
             )
         else:
             log_event(
                 logging.INFO,
-                "hunt_encounter_non_target",
+                "hunt_encounter_non_target" if encounter_counted else "hunt_encounter_non_target_resolved",
                 game=game_name,
                 mode=mode,
                 route=self.hunt_route_var.get().strip(),
                 species_id=species_id,
                 species_counter=species_counter,
-                counter=self._hunt_counter,
+                counter=encounter_count,
                 signature=signature,
                 target_id=target_id,
+                target_match=False,
             )
 
         species_name = str(encounter.get("species_name") or self.tracker.pokemon_reader.get_pokemon_name(species_id))
@@ -11770,7 +15793,7 @@ class PokeAchieveGUI:
         else:
             target_name = self.tracker.pokemon_reader.get_pokemon_name(target_id) if target_id > 0 else "Any"
             self._log(
-                f"{encounter_label} ENCOUNTER (non-target): {species_name} (#{species_id}) [{game_name}] / {form_text} / Species Count: {species_counter:,} / Target: {target_name} (#{target_id})",
+                f"{encounter_label} ENCOUNTER #{self._hunt_counter} (non-target): {species_name} (#{species_id}) [{game_name}] / {form_text} / Species Count: {species_counter:,} / Target: {target_name} (#{target_id})",
                 "hunt",
             )
 
@@ -11853,26 +15876,89 @@ class PokeAchieveGUI:
             return False
         if bool(self.config.get("video_track_all_games", False)):
             return True
-        return game_lower in {"pokemon firered", "pokemon leafgreen"}
+        return _is_supported_video_game_name(game_name)
+
+    def _video_encounter_gate_reason(self, game_name: str, mode: str) -> str:
+        if mode not in {"Wild Encounter Hunt", "Fishing Encounter Hunt", "Soft Reset Hunt"}:
+            return "mode_unsupported"
+        if not self._video_encounter_mode_enabled():
+            return "video_mode_disabled"
+        if not self._video_encounter_game_supported(game_name):
+            return "game_not_supported"
+
+        prefer_video = bool(self.config.get("video_encounter_prefer_video", True))
+        if self.retroarch.connected and not prefer_video:
+            return "prefer_memory_reader"
+        return "ok"
 
     def _should_use_video_encounter_reader(self, game_name: str, mode: str) -> bool:
-        if mode not in {"Wild Encounter Hunt", "Fishing Encounter Hunt", "Soft Reset Hunt"}:
-            return False
-        if not self._video_encounter_mode_enabled():
-            return False
-        if not self._video_encounter_game_supported(game_name):
-            return False
-
-        prefer_video = bool(self.config.get("video_encounter_prefer_video", False))
-        if self.retroarch.connected and not prefer_video:
-            return False
-        return True
-
+        return self._video_encounter_gate_reason(game_name, mode) == "ok"
     def _read_video_hunt_encounter(self, game_name: str, mode: str) -> Optional[Dict[str, object]]:
         if not self._should_use_video_encounter_reader(game_name, mode):
             return None
 
-        self.video_encounter_reader.update_config(self.config)
+        video_config = dict(self.config) if isinstance(self.config, dict) else {}
+
+        candidate_species_ids: List[int] = []
+        include_route_species = _coerce_bool(video_config.get("video_candidate_include_route_species", False), False)
+        if include_route_species and mode in {"Wild Encounter Hunt", "Fishing Encounter Hunt"}:
+            route_name = self.hunt_route_var.get().strip()
+            route_species = self._get_hunt_species_ids_for_selection(
+                game_name,
+                mode=mode,
+                route_name=route_name,
+            )
+            if isinstance(route_species, (list, tuple, set)):
+                for item in route_species:
+                    try:
+                        pid = int(item)
+                    except (TypeError, ValueError):
+                        continue
+                    if pid > 0:
+                        candidate_species_ids.append(pid)
+
+        try:
+            target_id = int(self._get_hunt_target_pokemon_id() or 0)
+        except (TypeError, ValueError):
+            target_id = 0
+        if target_id > 0:
+            candidate_species_ids.append(target_id)
+
+        deduped_candidates: List[int] = []
+        seen_candidates: Set[int] = set()
+        for pid in candidate_species_ids:
+            if pid in seen_candidates:
+                continue
+            seen_candidates.add(pid)
+            deduped_candidates.append(int(pid))
+
+        if deduped_candidates:
+            video_config["video_candidate_species_ids"] = list(deduped_candidates[:256])
+        else:
+            video_config.pop("video_candidate_species_ids", None)
+
+        if target_id > 0:
+            video_config["video_target_species_id"] = int(target_id)
+        else:
+            video_config.pop("video_target_species_id", None)
+
+        sprite_cache_dir = getattr(self, "_party_sprite_cache_dir", None)
+        if isinstance(sprite_cache_dir, Path):
+            game_variant = re.sub(r"[^a-z0-9]+", "_", str(_party_game_variant_from_name(game_name) or "default").lower()).strip("_") or "default"
+            per_game_sprite_dir = sprite_cache_dir / game_variant
+            try:
+                per_game_sprite_dir.mkdir(parents=True, exist_ok=True)
+            except Exception:
+                per_game_sprite_dir = sprite_cache_dir
+            video_config["video_sprite_library_dir"] = str(sprite_cache_dir)
+            video_config["video_sprite_library_game_dir"] = str(per_game_sprite_dir)
+        else:
+            video_config["video_sprite_library_dir"] = str(self.data_dir / "sprites")
+            video_config.pop("video_sprite_library_game_dir", None)
+
+        self.video_encounter_reader.update_config(video_config)
+        if deduped_candidates:
+            self.video_encounter_reader.warm_sprite_reference_cache(game_name, deduped_candidates)
         encounter = self.video_encounter_reader.read_wild_encounter(game_name)
         meta = self.video_encounter_reader.get_last_meta() if self.video_encounter_reader else {}
         reason = str(meta.get("reason") or "")
@@ -11890,6 +15976,20 @@ class PokeAchieveGUI:
                 source=str(encounter.get("source") or "obs_video_ocr"),
                 shiny=bool(encounter.get("shiny", False)),
                 shiny_score=encounter.get("shiny_score"),
+                detection_channel=str(encounter.get("detection_channel") or ""),
+                species_source=str(encounter.get("species_source") or ""),
+                nameplate_texts=encounter.get("nameplate_texts"),
+                sprite_match_distance=encounter.get("sprite_match_distance"),
+                sprite_second_distance=encounter.get("sprite_second_distance"),
+                sprite_distance_margin=encounter.get("sprite_distance_margin"),
+                sprite_confidence_ok=encounter.get("sprite_confidence_ok"),
+                sprite_candidate_count=encounter.get("sprite_candidate_count"),
+                sprite_roi=encounter.get("sprite_roi"),
+                species_lock_count=encounter.get("species_lock_count"),
+                species_lock_required=encounter.get("species_lock_required"),
+                species_resolved=encounter.get("species_resolved"),
+                encounter_phase=encounter.get("encounter_phase"),
+                encounter_token=encounter.get("encounter_token"),
             )
             self._video_reader_last_reason = "ok"
             return encounter
@@ -11920,6 +16020,17 @@ class PokeAchieveGUI:
                 reason=reason,
                 details=meta,
             )
+            detail_text = str(meta.get("detail") or "").strip()
+            source_name = str(meta.get("source") or self.config.get("video_obs_source_name") or "").strip()
+            hint_text = str(meta.get("hint") or "").strip()
+            parts = [f"reason={reason or 'unknown'}"]
+            if source_name:
+                parts.append(f"source={source_name}")
+            if detail_text:
+                parts.append(f"detail={detail_text}")
+            if hint_text:
+                parts.append(f"hint={hint_text}")
+            self._log(f"VIDEO WAITING: {' / '.join(parts)}", "hunt")
 
         return None
 
@@ -11943,6 +16054,7 @@ class PokeAchieveGUI:
                 if mode == "Soft Reset Hunt":
                     if waiting_now and not self._hunt_last_waiting_state:
                         self._hunt_last_enemy_signature = None
+                        self._hunt_last_encounter_token = None
                         self._hunt_last_enemy_seen_at = 0.0
                         self._hunt_last_target_signature = None
                         self._hunt_enemy_present = False
@@ -11951,6 +16063,7 @@ class PokeAchieveGUI:
                         self._hunt_soft_reset_reset_pending = False
                     elif (not waiting_now) and self._hunt_last_waiting_state:
                         self._hunt_last_enemy_signature = None
+                        self._hunt_last_encounter_token = None
                         self._hunt_last_enemy_seen_at = 0.0
                         self._hunt_last_target_signature = None
                         self._hunt_enemy_present = False
@@ -11970,11 +16083,42 @@ class PokeAchieveGUI:
                 else:
                     hunt_unstable = bool(getattr(self.retroarch, "is_unstable_io", lambda: False)())
                     encounter = None
-                    use_video_reader = self._should_use_video_encounter_reader(game_for_hunt, mode)
+                    gate_reason = self._video_encounter_gate_reason(game_for_hunt, mode)
+                    use_video_reader = gate_reason == "ok"
                     if use_video_reader:
                         encounter = self._read_video_hunt_encounter(game_for_hunt, mode)
-                    elif not (hunt_unstable and mode in {"Wild Encounter Hunt", "Fishing Encounter Hunt"}):
-                        encounter = self.tracker.pokemon_reader.read_wild_encounter(game_for_hunt) if self.tracker and self.tracker.pokemon_reader else None
+                    else:
+                        if mode in {"Wild Encounter Hunt", "Fishing Encounter Hunt"}:
+                            now_gate_log = time.monotonic()
+                            should_gate_log = (
+                                gate_reason != str(self._video_gate_last_reason or "")
+                                or (now_gate_log - float(self._video_gate_last_log_at or 0.0)) >= 10.0
+                            )
+                            if should_gate_log:
+                                self._video_gate_last_reason = str(gate_reason)
+                                self._video_gate_last_log_at = now_gate_log
+                                gate_details = {
+                                    "video_enabled": bool(self._video_encounter_mode_enabled()),
+                                    "game_supported": bool(self._video_encounter_game_supported(game_for_hunt)),
+                                    "prefer_video": bool(self.config.get("video_encounter_prefer_video", True)),
+                                    "retroarch_connected": bool(getattr(self.retroarch, "connected", False)),
+                                    "selected_game": str(game_for_hunt or ""),
+                                    "selected_mode": str(mode or ""),
+                                }
+                                log_event(
+                                    logging.INFO,
+                                    "video_encounter_waiting",
+                                    game=game_for_hunt,
+                                    mode=mode,
+                                    reason=str(gate_reason),
+                                    details=gate_details,
+                                )
+                                self._log(
+                                    f"VIDEO WAITING: reason={gate_reason} / game={game_for_hunt or '-'} / mode={mode}",
+                                    "hunt",
+                                )
+                        if not (hunt_unstable and mode in {"Wild Encounter Hunt", "Fishing Encounter Hunt"}):
+                            encounter = self.tracker.pokemon_reader.read_wild_encounter(game_for_hunt) if self.tracker and self.tracker.pokemon_reader else None
                     if mode == "Soft Reset Hunt":
                         self._handle_hunt_soft_reset_progress(encounter, game_for_hunt)
                     elif mode in {"Wild Encounter Hunt", "Fishing Encounter Hunt"}:
@@ -11982,31 +16126,55 @@ class PokeAchieveGUI:
                             self._log_hunt_raw_encounter(encounter, game_for_hunt, mode)
                             self._handle_hunt_enemy_encounter(encounter, game_for_hunt)
                         else:
+                            keep_enemy_state = False
+                            if use_video_reader and self.video_encounter_reader:
+                                try:
+                                    _video_meta = self.video_encounter_reader.get_last_meta()
+                                except Exception:
+                                    _video_meta = {}
+                                _video_reason = str(_video_meta.get("reason") or "")
+                                if _video_reason in {"duplicate_suppressed", "pending_confirmations", "unknown_sprite_pending_species_lock", "unknown_sprite_deferred"}:
+                                    keep_enemy_state = True
+                                    self._hunt_last_enemy_seen_at = time.monotonic()
+                                elif _video_reason in {"sprite_not_present", "battle_context_unconfirmed"}:
+                                    try:
+                                        hold_sec_raw = float(self.config.get("video_sprite_release_delay_sec", 2.20) or 2.20)
+                                    except (TypeError, ValueError):
+                                        hold_sec_raw = 2.20
+                                    hold_sec = max(0.30, min(6.0, float(hold_sec_raw)))
+                                    if (time.monotonic() - float(self._hunt_last_enemy_seen_at or 0.0)) < hold_sec:
+                                        keep_enemy_state = True
+
                             if waiting_now or not bool(getattr(self.retroarch, "connected", False)):
                                 self._hunt_last_raw_log_key = None
                                 self._hunt_last_raw_none_reason = None
                             else:
-                                self._log_hunt_raw_no_encounter(game_for_hunt, mode)
-                                if self.tracker and self.tracker.pokemon_reader:
-                                    try:
-                                        _meta = self.tracker.pokemon_reader.get_last_wild_read_meta()
-                                    except Exception:
-                                        _meta = {}
-                                    _reason = str(_meta.get("reason", ""))
-                                    if _reason in {"enemy_decode_failed", "enemy_decode_backoff"}:
-                                        hunt_decode_cycle_active = True
-                            self._hunt_enemy_present = False
-                            self._hunt_last_enemy_seen_at = 0.0
+                                if not keep_enemy_state:
+                                    self._log_hunt_raw_no_encounter(game_for_hunt, mode)
+                                    if self.tracker and self.tracker.pokemon_reader:
+                                        try:
+                                            _meta = self.tracker.pokemon_reader.get_last_wild_read_meta()
+                                        except Exception:
+                                            _meta = {}
+                                        _reason = str(_meta.get("reason", ""))
+                                        if _reason in {"enemy_decode_failed", "enemy_decode_backoff"}:
+                                            hunt_decode_cycle_active = True
+                            if not keep_enemy_state:
+                                self._hunt_enemy_present = False
+                                self._hunt_last_encounter_token = None
+                                self._hunt_last_enemy_seen_at = 0.0
                     elif isinstance(encounter, dict):
                         self._handle_hunt_enemy_encounter(encounter, game_for_hunt)
                     else:
                         self._hunt_enemy_present = False
+                        self._hunt_last_encounter_token = None
                         self._hunt_last_enemy_seen_at = 0.0
 
                 if isinstance(self.hunt_status_label, ttk.Label):
                     self.hunt_status_label.configure(text=f"Hunt active ({mode})")
             else:
                 self._hunt_enemy_present = False
+                self._hunt_last_encounter_token = None
                 self._hunt_last_enemy_seen_at = 0.0
 
                 pending = self._hunt_route_reconcile_pending if isinstance(self._hunt_route_reconcile_pending, dict) else None
@@ -12074,15 +16242,24 @@ class PokeAchieveGUI:
             log_event(logging.WARNING, "hunt_poll_exception", error=str(exc), error_type=type(exc).__name__)
 
         next_delay_ms = 1000
+        video_fast_poll = False
         if self._hunt_active:
             active_mode = self.hunt_mode_var.get().strip()
             if active_mode in {"Wild Encounter Hunt", "Fishing Encounter Hunt"}:
-                next_delay_ms = 250
-                if hunt_decode_cycle_active:
+                poll_game = (self.tracker.game_name or "").strip()
+                fallback_game = self.hunt_game_var.get().strip()
+                game_for_poll = poll_game if poll_game in self._hunt_game_options else fallback_game
+                video_fast_poll = bool(self._should_use_video_encounter_reader(game_for_poll, active_mode))
+                if video_fast_poll:
+                    fast_poll_ms = max(40, min(250, int(self.config.get("video_fast_poll_ms", 60) or 60)))
+                    next_delay_ms = int(fast_poll_ms)
+                else:
+                    next_delay_ms = 250
+                if hunt_decode_cycle_active and not video_fast_poll:
                     next_delay_ms = max(int(next_delay_ms), 1200)
             elif active_mode == "Soft Reset Hunt":
                 next_delay_ms = 400
-        if bool(getattr(self.retroarch, "is_unstable_io", lambda: False)()):
+        if bool(getattr(self.retroarch, "is_unstable_io", lambda: False)()) and not video_fast_poll:
             next_delay_ms = max(int(next_delay_ms), 1200)
         self.root.after(next_delay_ms, self._process_hunt_updates)
 
@@ -13913,10 +18090,17 @@ class PokeAchieveGUI:
                 self._set_hunt_phase_count(0)
                 self._hunt_profile_applying = False
                 self._hunt_species_counts = {}
+                self._hunt_seen_encounter_tokens.clear()
+                self._hunt_unknown_token_counts.clear()
+                self._hunt_species_resolved_tokens.clear()
+                self._hunt_last_counted_at = 0.0
+                self._hunt_last_counted_species_id = 0
+                self._hunt_last_counted_signature = None
                 self._hunt_species_count_labels = {}
                 self._hunt_recent_other_species.clear()
                 self._hunt_alerted_signatures.clear()
                 self._hunt_last_enemy_signature = None
+                self._hunt_last_encounter_token = None
                 self._hunt_last_enemy_seen_at = 0.0
                 self._hunt_last_target_signature = None
                 self._hunt_last_raw_log_key = None
@@ -14753,8 +18937,12 @@ Troubleshooting
             mode = "text" if mode_raw in {"text", "ocr", "text_ocr"} else "sprite"
             sprite_score = int(payload.get("sprite_score") or 0)
             threshold = max(40, min(500, int(cfg.get("video_sprite_presence_threshold", 125) or 125)))
-            required = int(cfg.get("video_sprite_confirmations", 3) if mode == "sprite" else cfg.get("video_ocr_confirmations", 2))
-            required = max(1, min(8 if mode == "sprite" else 6, required))
+            instant_detection = _coerce_bool(cfg.get("video_instant_detection", True), True)
+            if instant_detection:
+                required = 1
+            else:
+                required = int(cfg.get("video_sprite_confirmations", 3) if mode == "sprite" else cfg.get("video_ocr_confirmations", 2))
+                required = max(1, min(8 if mode == "sprite" else 6, required))
 
             species_id = int(payload.get("species_id") or 0)
             species_name = str(payload.get("species_name") or "").strip()
@@ -15485,6 +19673,7 @@ Troubleshooting
                     status_text += f" {hint}."
                 status_text += " Verify OBS host/port/password/source and restart the tracker after installing dependencies."
                 preview_status_var.set(status_text)
+                self._log(status_text, "warning")
                 mode_raw = str(test_config.get("video_encounter_detection_mode", "sprite") or "sprite").strip().lower()
                 mode_name = "text" if mode_raw in {"text", "ocr", "text_ocr"} else "sprite"
                 preview_debug_var.set(f"Detection Debug | mode={mode_name} | state=ERROR | reason={reason}")
@@ -15511,6 +19700,7 @@ Troubleshooting
                     reason=reason,
                     detail=detail,
                     hint=hint,
+                    status_text=status_text,
                     obs_host=str(test_config.get("video_obs_host") or ""),
                     obs_port=int(test_config.get("video_obs_port") or 0),
                     obs_source=str(test_config.get("video_obs_source_name") or ""),
@@ -15569,6 +19759,22 @@ Troubleshooting
             )
             _refresh_fullscreen_preview()
 
+            species_engine = ""
+            ai_species_enabled = False
+            ai_model_path = ""
+            ai_model_ready = False
+            onnx_runtime_available = bool(onnxruntime is not None and np is not None)
+            try:
+                _reader = getattr(self, "video_encounter_reader", None)
+                if _reader is not None:
+                    species_engine = str(_reader._species_engine())
+                    ai_species_enabled = bool(_reader._cfg_bool("video_ai_species_enabled", True))
+                    ai_model_path = str(_reader._cfg_str("video_ai_species_model_path", ""))
+                    if str(species_engine) in {"onnx", "hybrid", "ai_v2"}:
+                        ai_model_ready = bool(_reader._load_ai_species_model())
+            except Exception:
+                pass
+
             log_event(
                 logging.INFO,
                 "video_preview_ok",
@@ -15580,7 +19786,40 @@ Troubleshooting
                 obs_host=str(test_config.get("video_obs_host") or ""),
                 obs_port=int(test_config.get("video_obs_port") or 0),
                 obs_source=str(test_config.get("video_obs_source_name") or ""),
+                species_engine=str(species_engine),
+                ai_species_enabled=bool(ai_species_enabled),
+                onnxruntime_available=bool(onnx_runtime_available),
+                ai_model_path_set=bool(str(ai_model_path).strip()),
+                ai_model_ready=bool(ai_model_ready),
             )
+            if str(species_engine) in {"onnx", "hybrid", "ai_v2"} and (not bool(ai_model_ready)):
+                log_event(
+                    logging.WARNING,
+                    "video_ai_model_unavailable",
+                    species_engine=str(species_engine),
+                    onnxruntime_available=bool(onnx_runtime_available),
+                    ai_model_path=str(ai_model_path),
+                )
+            if not PIL_AVAILABLE or not PYTESSERACT_AVAILABLE:
+                missing_deps: List[str] = []
+                if not PIL_AVAILABLE:
+                    missing_deps.append("pillow")
+                if not PYTESSERACT_AVAILABLE:
+                    missing_deps.append("pytesseract")
+                dep_hint = f"Install missing dependency(s): {' '.join(missing_deps)}"
+                log_event(
+                    logging.WARNING,
+                    "video_preview_dependencies_missing",
+                    missing=missing_deps,
+                    detail=dep_hint,
+                    pil_available=bool(PIL_AVAILABLE),
+                    pytesseract_available=bool(PYTESSERACT_AVAILABLE),
+                    obs_host=str(test_config.get("video_obs_host") or ""),
+                    obs_port=int(test_config.get("video_obs_port") or 0),
+                    obs_source=str(test_config.get("video_obs_source_name") or ""),
+                )
+                self._log(dep_hint, "warning")
+
 
         def test_api():
             test_api = PokeAchieveAPI(url_entry.get(), key_entry.get())
@@ -15666,6 +19905,83 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
