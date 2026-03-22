@@ -1,0 +1,15 @@
+numpy>=1.26
+opencv-python>=4.9
+PyYAML>=6.0
+torch>=2.2
+torchvision>=0.17
+faiss-cpu>=1.8.0
+scipy>=1.11
+tqdm>=4.66
+pillow>=10.0
+obsws-python>=1.8.0
+pygrabber>=0.2
+# Optional detector training/runtime in detector mode:
+ultralytics>=8.2
+# Dev / tests:
+pytest>=8.1

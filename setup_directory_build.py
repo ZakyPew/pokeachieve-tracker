@@ -1,4 +1,4 @@
-"""
+﻿"""
 Build script for PokeAchieve Tracker - DIRECTORY MODE
 """
 
@@ -10,7 +10,7 @@ build_exe_options = {
     "packages": [
         "tkinter", "socket", "json", "time", "threading", 
         "queue", "os", "pathlib", "typing", 
-        "datetime", "dataclasses", "requests", "psutil",
+        "datetime", "dataclasses", "requests", "psutil", "obsws_python", "obswebsocket", "pytesseract", "PIL",
         "ssl", "urllib", "http", "email", "encodings", "certifi"
     ],
     "excludes": ["numpy", "pandas", "matplotlib", "test", "pydoc"],
@@ -46,3 +46,5 @@ setup(
 
 print("\nBuild Complete!")
 print("Output: build/PokeAchieveTracker/")
+
+

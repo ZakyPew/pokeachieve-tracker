@@ -1,4 +1,4 @@
-@echo off
+﻿@echo off
 REM Build PokeAchieve Tracker v1.9 - DIRECTORY MODE
 
 echo ==========================================
@@ -32,7 +32,7 @@ echo.
 
 REM Install dependencies
 echo Installing dependencies...
-%PYTHON_CMD% -m pip install cx_Freeze requests psutil pywin32 pillow tkinter-tooltip -q
+%PYTHON_CMD% -m pip install cx_Freeze requests psutil pywin32 pillow tkinter-tooltip obsws-python obs-websocket-py pytesseract -q
 
 REM Clean previous builds
 echo Cleaning previous builds...
@@ -69,3 +69,5 @@ echo ==========================================
 echo Output: dist\PokeAchieveTracker\
 echo.
 pause
+
+
