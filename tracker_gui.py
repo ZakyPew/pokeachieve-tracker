@@ -8533,6 +8533,33 @@ class OBSVideoEncounterReader:
             if source_tag_for_emit.endswith("_pending_lock") or "_pending_lock_" in source_tag_for_emit:
                 species_id = 0
                 species_name = ""
+            # Never emit/counter a provisional reference lock when confidence is false.
+            # This prevents recurring false Nincada counts on non-target sprites.
+            provisional_low_conf_block = bool(
+                source_tag_for_emit.startswith("sprite_reference_provisional")
+                and (not bool(selected_sprite_confidence_ok))
+            )
+            if bool(provisional_low_conf_block):
+                species_id = 0
+                species_name = ""
+                self._set_meta(
+                    "sprite_species_not_resolved",
+                    game=game_name,
+                    scene=selected_scene_name,
+                    source_name=selected_scene_source,
+                    detection_mode=detection_mode,
+                    detection_channel=str(selected_detection_channel or "sprite"),
+                    reason_code="provisional_low_confidence_blocked",
+                    species_source=str(source_tag_for_emit),
+                    sprite_score=int(selected_sprite_score),
+                    sprite_match_distance=int(selected_sprite_match_distance),
+                    sprite_best_adjusted_distance=int(selected_sprite_best_adjusted_distance),
+                    sprite_distance_margin=int(selected_sprite_distance_margin),
+                    sprite_confidence_ok=bool(selected_sprite_confidence_ok),
+                    sprite_posterior_ready=bool(selected_sprite_posterior_ready),
+                    sprite_posterior_top_species_id=int(selected_sprite_posterior_top_species_id),
+                    sprite_posterior_top_probability=float(selected_sprite_posterior_top_probability),
+                )
 
         if int(species_id) <= 0:
             scene_state_key_pre = self._scene_encounter_key(game_name, selected_scene_source)
