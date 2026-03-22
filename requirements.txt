@@ -7,6 +7,7 @@ cx_Freeze
 obsws-python
 obs-websocket-py
 pytesseract
+anthropic
 opencv-python
 ultralytics
 transformers

@@ -91,6 +91,16 @@ except Exception as exc:
     PYTESSERACT_AVAILABLE = False
     PYTESSERACT_IMPORT_ERROR = str(exc)
 
+ANTHROPIC_IMPORT_ERROR = ""
+_anthropic_client_cls = None
+try:
+    import anthropic as _anthropic_mod
+    _anthropic_client_cls = _anthropic_mod.Anthropic
+    ANTHROPIC_AVAILABLE = True
+except Exception as exc:
+    ANTHROPIC_AVAILABLE = False
+    ANTHROPIC_IMPORT_ERROR = str(exc)
+
 ONNXRUNTIME_IMPORT_ERROR = ""
 onnxruntime = None
 np = None
@@ -5769,6 +5779,189 @@ class OBSVideoEncounterReader:
                 break
         return best_text
 
+    # ------------------------------------------------------------------
+    # Vision LLM integration (primary reader, with OCR as fallback)
+    # ------------------------------------------------------------------
+
+    _vision_llm_client: Any = None
+    _vision_llm_client_key: str = ""
+
+    def _get_vision_llm_client(self) -> Any:
+        """Return a cached Anthropic client, creating one if the key changed."""
+        if not ANTHROPIC_AVAILABLE or _anthropic_client_cls is None:
+            return None
+        api_key = self._cfg_str("vision_llm_api_key", "").strip()
+        if not api_key:
+            api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+        if not api_key:
+            return None
+        if self._vision_llm_client is not None and self._vision_llm_client_key == api_key:
+            return self._vision_llm_client
+        try:
+            self._vision_llm_client = _anthropic_client_cls(api_key=api_key)
+            self._vision_llm_client_key = api_key
+        except Exception as exc:
+            self._last_error = f"vision_llm_client_init: {exc}"
+            self._vision_llm_client = None
+            self._vision_llm_client_key = ""
+        return self._vision_llm_client
+
+    def _image_to_base64_png(self, image) -> str:
+        """Encode a PIL Image as a base64 PNG string for the vision API."""
+        buf = io.BytesIO()
+        image.save(buf, format="PNG")
+        return base64.b64encode(buf.getvalue()).decode("ascii")
+
+    def _vision_llm_extract_text(
+        self,
+        image,
+        ocr_roi_raw: Optional[str] = None,
+    ) -> str:
+        """Send the OCR region to a vision LLM and ask it to read the text.
+
+        Returns the extracted text, or empty string on any failure so the
+        caller can fall back to pytesseract.
+        """
+        if image is None:
+            return ""
+        client = self._get_vision_llm_client()
+        if client is None:
+            return ""
+
+        model = self._cfg_str("vision_llm_model", "claude-sonnet-4-20250514")
+        max_tokens = max(32, min(256, self._cfg_int("vision_llm_max_tokens", 64)))
+
+        # Crop to the same OCR ROI used by pytesseract so the model sees
+        # only the text region, not the full game screen.
+        if ocr_roi_raw:
+            x1, y1, x2, y2 = self._parse_roi_spec_raw(
+                str(ocr_roi_raw), "0.05,0.70,0.95,0.96",
+                int(image.width), int(image.height),
+            )
+        else:
+            x1, y1, x2, y2 = self._parse_roi(int(image.width), int(image.height))
+        cropped = image.crop((x1, y1, x2, y2)).convert("RGB")
+        b64 = self._image_to_base64_png(cropped)
+
+        try:
+            response = client.messages.create(
+                model=model,
+                max_tokens=max_tokens,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": "image/png",
+                                    "data": b64,
+                                },
+                            },
+                            {
+                                "type": "text",
+                                "text": (
+                                    "Read the text shown in this Pokemon game screenshot. "
+                                    "Return ONLY the exact text visible on screen, nothing else. "
+                                    "If the text says something like 'Wild PIKACHU appeared!' "
+                                    "return exactly that. Preserve capitalization."
+                                ),
+                            },
+                        ],
+                    }
+                ],
+            )
+            result = ""
+            for block in response.content:
+                if getattr(block, "type", "") == "text":
+                    result += getattr(block, "text", "")
+            return result.strip()
+        except Exception as exc:
+            self._last_error = f"vision_llm_text: {exc}"
+            return ""
+
+    def _vision_llm_detect_shiny(
+        self,
+        image,
+        shiny_roi_raw: Optional[str] = None,
+    ) -> Optional[Tuple[bool, float]]:
+        """Ask a vision LLM whether the Pokemon sprite looks shiny.
+
+        Returns (is_shiny, confidence) or None on failure so the caller
+        can fall back to the pixel-based sparkle heuristic.
+        """
+        if image is None:
+            return None
+        client = self._get_vision_llm_client()
+        if client is None:
+            return None
+
+        model = self._cfg_str("vision_llm_model", "claude-sonnet-4-20250514")
+        max_tokens = max(32, min(256, self._cfg_int("vision_llm_max_tokens", 64)))
+
+        # Crop to the shiny/sprite ROI.
+        if shiny_roi_raw:
+            roi = self._parse_roi_spec_raw(
+                str(shiny_roi_raw), "0.58,0.16,0.92,0.52",
+                int(image.width), int(image.height),
+            )
+        else:
+            roi = self._parse_roi_spec(
+                "video_shiny_roi", "0.58,0.16,0.92,0.52",
+                int(image.width), int(image.height),
+            )
+        cropped = image.crop(roi).convert("RGB")
+        b64 = self._image_to_base64_png(cropped)
+
+        try:
+            response = client.messages.create(
+                model=model,
+                max_tokens=max_tokens,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": "image/png",
+                                    "data": b64,
+                                },
+                            },
+                            {
+                                "type": "text",
+                                "text": (
+                                    "Look at this Pokemon battle sprite. Is the Pokemon shiny? "
+                                    "Shiny Pokemon have sparkle/star animations around them and "
+                                    "may have unusual colors compared to their normal form. "
+                                    "Reply with ONLY one line in this exact format:\n"
+                                    "SHINY: YES 0.95\n"
+                                    "or\n"
+                                    "SHINY: NO 0.90\n"
+                                    "The number is your confidence from 0.0 to 1.0."
+                                ),
+                            },
+                        ],
+                    }
+                ],
+            )
+            result = ""
+            for block in response.content:
+                if getattr(block, "type", "") == "text":
+                    result += getattr(block, "text", "")
+            result = result.strip().upper()
+            match = re.search(r"SHINY:\s*(YES|NO)\s+([\d.]+)", result)
+            if match:
+                is_shiny = match.group(1) == "YES"
+                confidence = max(0.0, min(1.0, float(match.group(2))))
+                return is_shiny, confidence
+            return None
+        except Exception as exc:
+            self._last_error = f"vision_llm_shiny: {exc}"
+            return None
+
     def _parse_wild_species(self, text: str) -> Optional[Tuple[int, str]]:
         normalized = self._normalize_ocr_text(text)
         if not normalized:
@@ -6743,11 +6936,48 @@ class OBSVideoEncounterReader:
                 "sprite_edge_ratio": 0.0,
             }
 
-        text = self._extract_text(image)
+        # --- Text extraction: vision LLM primary, OCR fallback ---
+        text = ""
+        text_source = "none"
+        use_vision_llm = self._cfg_bool("vision_llm_enabled", False)
+        if use_vision_llm:
+            text = self._vision_llm_extract_text(image)
+            if text:
+                text_source = "vision_llm"
+        if not text:
+            text = self._extract_text(image)
+            if text:
+                text_source = "ocr" if text_source == "none" else text_source
+
         species = self._parse_wild_species(text) if text else None
         level = self._parse_level(text) if text else None
         sprite_present, sprite_score, sprite_signature, sprite_detail_ratio, sprite_edge_ratio = self._sprite_present(image)
+
+        # --- Shiny detection: pixel heuristic + optional vision LLM ---
         is_shiny, shiny_score, shiny_scores, shiny_confidence = self._estimate_shiny_from_frames([image], require_burst=False)
+
+        llm_shiny_result = None
+        if use_vision_llm and self._cfg_bool("vision_llm_shiny_enabled", True):
+            llm_shiny_result = self._vision_llm_detect_shiny(image)
+
+        # If the vision LLM returned a shiny verdict, blend it with the
+        # pixel-based result.  The LLM is authoritative when confident.
+        if llm_shiny_result is not None:
+            llm_is_shiny, llm_confidence = llm_shiny_result
+            llm_weight = self._cfg_float("vision_llm_shiny_weight", 0.7)
+            pixel_weight = 1.0 - llm_weight
+            blended_conf = llm_confidence * llm_weight + shiny_confidence * pixel_weight
+            # If the LLM is very confident (>=0.85) it overrides; otherwise
+            # agree-to-agree with the pixel heuristic.
+            if llm_confidence >= 0.85:
+                is_shiny = llm_is_shiny
+                shiny_confidence = blended_conf
+            elif llm_is_shiny and is_shiny:
+                shiny_confidence = max(shiny_confidence, blended_conf)
+            elif llm_is_shiny != is_shiny:
+                # Disagreement at moderate confidence — trust pixel heuristic
+                # but lower confidence to flag for review.
+                shiny_confidence = min(shiny_confidence, blended_conf)
 
         species_id = int(species[0]) if species else 0
         species_name = str(species[1]) if species else ""
@@ -6759,10 +6989,12 @@ class OBSVideoEncounterReader:
             "species_name": species_name,
             "level": int(level) if isinstance(level, int) and level > 0 else None,
             "ocr_text": str(text or ""),
+            "text_source": str(text_source),
             "shiny": bool(is_shiny),
             "shiny_score": int(shiny_score),
             "shiny_scores": list(shiny_scores),
             "shiny_confidence": float(shiny_confidence),
+            "llm_shiny": llm_shiny_result,
             "sprite_present": bool(sprite_present),
             "sprite_score": int(sprite_score),
             "sprite_signature": str(sprite_signature),
@@ -15898,6 +16130,13 @@ class PokeAchieveGUI:
             "video_species_lock_simple_posterior_agreement_min_prob": 0.34,
             "video_sprite_require_foreground_segmentation": False,
             "video_strict_battle_mode": False,
+            # Vision LLM settings (uses Claude API for text reading + shiny detection)
+            "vision_llm_enabled": False,
+            "vision_llm_api_key": "",
+            "vision_llm_model": "claude-sonnet-4-20250514",
+            "vision_llm_max_tokens": 64,
+            "vision_llm_shiny_enabled": True,
+            "vision_llm_shiny_weight": 0.7,
         }
         for key, value in defaults.items():
             if key not in self.config:
