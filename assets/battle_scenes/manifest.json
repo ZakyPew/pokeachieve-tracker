@@ -1,0 +1,119 @@
+{
+  "output_root": "C:\\Users\\thefo\\Documents\\Codex\\pokeachieve-tracker\\assets\\battle_scenes",
+  "total": 10,
+  "downloaded": 0,
+  "skipped_exists": 11,
+  "failed": 0,
+  "games": [
+    {
+      "game": "Pokemon Red",
+      "slug": "pokemon_red",
+      "status": "skipped_exists",
+      "path": "C:\\Users\\thefo\\Documents\\Codex\\pokeachieve-tracker\\assets\\battle_scenes\\pokemon_red\\base_scene.png",
+      "bytes": 27740,
+      "sha256": "1360fe3a3f43d90cde6b3c602fb55bfdc3bb468f9c043d584bef965fad7b750a",
+      "image_url": "https://cdn.mobygames.com/screenshots/15654856-pokemon-red-version-game-boy-pokemon-appear-in-the-wild-when-you.png",
+      "source_page": "https://www.mobygames.com/game/5129/pokemon-red-version/screenshots/gameboy/356897/"
+    },
+    {
+      "game": "Pokemon Red",
+      "slug": "pokemon_red",
+      "status": "skipped_exists",
+      "path": "C:\\Users\\thefo\\Documents\\Codex\\pokeachieve-tracker\\assets\\battle_scenes\\pokemon_red\\scene_001.png",
+      "bytes": 1734,
+      "sha256": "2e6bb1d0529c42cdfc791e7ae7237c713f71b029bf0a68f8f9a5ea87f40363f4",
+      "image_url": "https://cdn.mobygames.com/screenshots/15965995-pokemon-red-version-game-boy-a-wild-battle.png",
+      "source_page": "https://www.mobygames.com/game/5129/pokemon-red-version/screenshots/gameboy/356897/"
+    },
+    {
+      "game": "Pokemon Blue",
+      "slug": "pokemon_blue",
+      "status": "skipped_exists",
+      "path": "C:\\Users\\thefo\\Documents\\Codex\\pokeachieve-tracker\\assets\\battle_scenes\\pokemon_blue\\base_scene.png",
+      "bytes": 6020,
+      "sha256": "2a4004a1e1215fc58b447cb09633a8f2eea5459c1854440d9a86a9ca4f422ab7",
+      "image_url": "https://cdn.mobygames.com/screenshots/15654876-pokemon-blue-version-game-boy-pokemon-appear-in-the-wild-when-yo.png",
+      "source_page": "https://www.mobygames.com/game/4397/pokemon-blue-version/screenshots/gameboy/177456/"
+    },
+    {
+      "game": "Pokemon Gold",
+      "slug": "pokemon_gold",
+      "status": "skipped_exists",
+      "path": "C:\\Users\\thefo\\Documents\\Codex\\pokeachieve-tracker\\assets\\battle_scenes\\pokemon_gold\\base_scene.png",
+      "bytes": 63454,
+      "sha256": "928d127b56b98440c33b0da8e082a43cda97f2ed2267689ce4f9928a787096c4",
+      "image_url": "https://cdn.mobygames.com/screenshots/16870458-pokemon-gold-version-game-boy-color-fighting-pokemon.png",
+      "source_page": "https://www.mobygames.com/game/5427/pokemon-gold-version/screenshots/gameboy-color/59848/"
+    },
+    {
+      "game": "Pokemon Silver",
+      "slug": "pokemon_silver",
+      "status": "skipped_exists",
+      "path": "C:\\Users\\thefo\\Documents\\Codex\\pokeachieve-tracker\\assets\\battle_scenes\\pokemon_silver\\base_scene.png",
+      "bytes": 8270,
+      "sha256": "2ca176b6680cc825016dd41b997da5a51bd4ea5ffebe039709f27f8a6ab9207d",
+      "image_url": "https://cdn.mobygames.com/screenshots/16870513-pokemon-silver-version-game-boy-color-i-dont-want-to-die.png",
+      "source_page": "https://www.mobygames.com/game/5429/pokemon-silver-version/screenshots/gameboy-color/59871/"
+    },
+    {
+      "game": "Pokemon Crystal",
+      "slug": "pokemon_crystal",
+      "status": "skipped_exists",
+      "path": "C:\\Users\\thefo\\Documents\\Codex\\pokeachieve-tracker\\assets\\battle_scenes\\pokemon_crystal\\base_scene.png",
+      "bytes": 30363,
+      "sha256": "fa0b8083f8e3c0ad73806af2a0069f16c65ad9701ceaa6e5c33839a85e4e1b99",
+      "image_url": "https://cdn.mobygames.com/screenshots/564730-pokemon-crystal-version-game-boy-color-your-usual-battle-screen.png",
+      "source_page": "https://www.mobygames.com/game/5428/pokemon-crystal-version/screenshots/gameboy-color/268800/"
+    },
+    {
+      "game": "Pokemon Ruby",
+      "slug": "pokemon_ruby",
+      "status": "skipped_exists",
+      "path": "C:\\Users\\thefo\\Documents\\Codex\\pokeachieve-tracker\\assets\\battle_scenes\\pokemon_ruby\\base_scene.png",
+      "bytes": 4502,
+      "sha256": "2dedf05021d398132cfda235a598889256b964b048028a66387cc74aecd31c21",
+      "image_url": "https://cdn.mobygames.com/screenshots/18320995-pokemon-ruby-version-game-boy-advance-giving-my-rival-a-beatdown.png",
+      "source_page": "https://www.mobygames.com/game/13769/pokemon-ruby-version/screenshots/gameboy-advance/616527/"
+    },
+    {
+      "game": "Pokemon Sapphire",
+      "slug": "pokemon_sapphire",
+      "status": "skipped_exists",
+      "path": "C:\\Users\\thefo\\Documents\\Codex\\pokeachieve-tracker\\assets\\battle_scenes\\pokemon_sapphire\\base_scene.png",
+      "bytes": 9766,
+      "sha256": "3aaec42407510916784a0469d375b7aae4ddba2295ac01142bd50f7acb0d1cea",
+      "image_url": "https://cdn.mobygames.com/screenshots/16976016-pokemon-sapphire-version-game-boy-advance-lets-fight-it.png",
+      "source_page": "https://www.mobygames.com/game/13770/pokemon-sapphire-version/screenshots/gameboy-advance/60023/"
+    },
+    {
+      "game": "Pokemon Emerald",
+      "slug": "pokemon_emerald",
+      "status": "skipped_exists",
+      "path": "C:\\Users\\thefo\\Documents\\Codex\\pokeachieve-tracker\\assets\\battle_scenes\\pokemon_emerald\\base_scene.png",
+      "bytes": 101080,
+      "sha256": "9d0b628199d102b62ff6b60de2a7c92beed048aed87ea787a175b308ded84239",
+      "image_url": "https://cdn.mobygames.com/screenshots/2366139-pokemon-emerald-version-game-boy-advance-pokemon-battle.png",
+      "source_page": "https://www.mobygames.com/game/19958/pokemon-emerald-version/screenshots/gameboy-advance/109703/"
+    },
+    {
+      "game": "Pokemon FireRed",
+      "slug": "pokemon_firered",
+      "status": "skipped_exists",
+      "path": "C:\\Users\\thefo\\Documents\\Codex\\pokeachieve-tracker\\assets\\battle_scenes\\pokemon_firered\\base_scene.png",
+      "bytes": 99138,
+      "sha256": "1121873755012d276532aabb0f55327eae66ea930862c5376f83d47e7758035f",
+      "image_url": "https://cdn.mobygames.com/screenshots/559400-pokemon-firered-version-game-boy-advance-battling.png",
+      "source_page": "https://www.mobygames.com/game/14083/pokemon-firered-version/screenshots/gameboy-advance/267500/"
+    },
+    {
+      "game": "Pokemon LeafGreen",
+      "slug": "pokemon_leafgreen",
+      "status": "skipped_exists",
+      "path": "C:\\Users\\thefo\\Documents\\Codex\\pokeachieve-tracker\\assets\\battle_scenes\\pokemon_leafgreen\\base_scene.png",
+      "bytes": 28998,
+      "sha256": "cf725279abe4162015991209b4b203e6ffa93d6366dbbdd6e667a722ed500862",
+      "image_url": "https://cdn.mobygames.com/screenshots/559403-pokemon-leafgreen-version-game-boy-advance-your-rival.png",
+      "source_page": "https://www.mobygames.com/game/14084/pokemon-leafgreen-version/screenshots/gameboy-advance/267502/"
+    }
+  ]
+}

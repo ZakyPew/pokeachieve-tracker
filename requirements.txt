@@ -1,1 +1,13 @@
-requests psutil pywin32 pillow tkinter-tooltip cx_Freeze obsws-python pytesseract
+requests
+psutil
+pywin32
+pillow
+tkinter-tooltip
+cx_Freeze
+obsws-python
+obs-websocket-py
+pytesseract
+opencv-python
+ultralytics
+transformers
+torch
