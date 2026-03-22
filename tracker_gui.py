@@ -1544,8 +1544,10 @@ class OBSVideoEncounterReader:
     """Video-based encounter reader using OBS screenshots and OCR."""
 
     _WILD_APPEARED_PATTERNS = [
-        re.compile(r"\bW[I1!L]LD\s+([A-Z0-9'\.\-\s]{2,24}?)\s+APPEAR(?:ED|EO|E0)\b", re.IGNORECASE),
-        re.compile(r"\b([A-Z0-9'\.\-\s]{2,24}?)\s+APPEAR(?:ED|EO|E0)\b", re.IGNORECASE),
+        re.compile(r"\bW[I1!L]LD\s+([A-Z0-9'\.\-\s]{2,24}?)\s+APPEAR(?:ED|EO|E0|FD|EI|D)\b", re.IGNORECASE),
+        re.compile(r"\b([A-Z0-9'\.\-\s]{2,24}?)\s+APPEAR(?:ED|EO|E0|FD|EI|D)\b", re.IGNORECASE),
+        re.compile(r"\bW[I1!L]LD\s+([A-Z0-9'\.\-\s]{2,24}?)\s+APP?EAR", re.IGNORECASE),
+        re.compile(r"\bFOE\s+([A-Z0-9'\.\-\s]{2,24}?)\s+(?:WANTS|WOULD|SENT)", re.IGNORECASE),
     ]
 
     def __init__(self, config: Optional[Dict[str, Any]] = None, species_lookup: Optional[Dict[int, str]] = None):
@@ -2490,17 +2492,75 @@ class OBSVideoEncounterReader:
         text = re.sub(r"[^A-Z0-9]", "", text)
         return text.strip()
 
+    _OCR_REPLACEMENTS = [
+        ("VVILD", "WILD"), ("WIID", "WILD"), ("W1LD", "WILD"),
+        ("WLLD", "WILD"), ("VV1LD", "WILD"), ("VVIID", "WILD"),
+        ("WlLD", "WILD"), ("WIILD", "WILD"),
+        ("APPEAREO", "APPEARED"), ("APPEARE0", "APPEARED"),
+        ("APPEAREI", "APPEARED"), ("APPEAREL", "APPEARED"),
+        ("APPEARFD", "APPEARED"), ("APPEAREQ", "APPEARED"),
+        ("APPEARD", "APPEARED"), ("APPPEARED", "APPEARED"),
+        ("APEARED", "APPEARED"), ("APPARED", "APPEARED"),
+        # Common digit/letter OCR confusions in Pokemon names
+        ("0", "O"), ("1", "I"), ("5", "S"), ("8", "B"),
+    ]
+
+    _OCR_SPECIES_CORRECTIONS = {
+        "CHARIZAR0": "CHARIZARD", "CHARIZAN0": "CHARIZARD",
+        "BULBASAUR": "BULBASAUR", "8ULBASAUR": "BULBASAUR",
+        "BIIBASAUR": "BULBASAUR", "BUIBASAUR": "BULBASAUR",
+        "IVYSAIJR": "IVYSAUR", "1VYSAUR": "IVYSAUR",
+        "P1KACHU": "PIKACHU", "PIKACIIU": "PIKACHU",
+        "RAICLIU": "RAICHU", "RA1CHU": "RAICHU",
+        "GEODIIDE": "GEODUDE", "GE0DUDE": "GEODUDE",
+        "MACHOKE": "MACHOKE", "MACIOKE": "MACHOKE",
+        "MACIIAMP": "MACHAMP", "MACHIAMP": "MACHAMP",
+        "GYARAD0S": "GYARADOS", "GYARA00S": "GYARADOS",
+        "NIOOR AN": "NIDORAN", "NI0ORAN": "NIDORAN",
+        "NIDORAII": "NIDORAN", "N1DORAN": "NIDORAN",
+        "MAGIKARP": "MAGIKARP", "MAG1KARP": "MAGIKARP",
+        "TENT ACOOL": "TENTACOOL", "TENTAC00L": "TENTACOOL",
+        "TENTACRUEL": "TENTACRUEL", "TENTACRIIEL": "TENTACRUEL",
+        "ZUBAI": "ZUBAT", "ZU8AT": "ZUBAT",
+        "G0LBAT": "GOLBAT", "GOI BAT": "GOLBAT",
+        "ODDISII": "ODDISH", "0DDISH": "ODDISH",
+        "GL0OM": "GLOOM", "GLO0M": "GLOOM",
+        "VILEPLIIME": "VILEPLUME", "VILEP1UME": "VILEPLUME",
+        "ABRA": "ABRA", "A8RA": "ABRA",
+        "KADAERA": "KADABRA", "KADAI3RA": "KADABRA",
+        "ALAKAZAM": "ALAKAZAM", "AIAKA2AM": "ALAKAZAM",
+        "POLIWAG": "POLIWAG", "POI IWAG": "POLIWAG",
+        "GASTIY": "GASTLY", "GASTIY": "GASTLY",
+        "IIAIJNTER": "HAUNTER", "HAIINTER": "HAUNTER",
+        "GENGAR": "GENGAR", "6ENGAR": "GENGAR",
+        "DRATI NI": "DRATINI", "DRAT1N1": "DRATINI",
+        "DRAGON1TE": "DRAGONITE", "DRAGON1 TE": "DRAGONITE",
+        "DRAGONAIR": "DRAGONAIR", "DRAG0NAIR": "DRAGONAIR",
+        "SNORL AX": "SNORLAX", "SNORLAK": "SNORLAX",
+        "LAPRAS": "LAPRAS", "IAPRAS": "LAPRAS",
+        "EEVEE": "EEVEE", "EEVFE": "EEVEE",
+        "RAIKOU": "RAIKOU", "RA1KOU": "RAIKOU",
+        "SUICIINE": "SUICUNE", "SU1CUNE": "SUICUNE",
+        "ENTE1": "ENTEI", "EIITEI": "ENTEI",
+        "IUGIA": "LUGIA", "LUG1A": "LUGIA",
+        "II0-0H": "HO-OH", "HO0H": "HO-OH",
+        "RAIQUAZA": "RAYQUAZA", "RAYQUA2A": "RAYQUAZA",
+        "KYOGRE": "KYOGRE", "KY0GRE": "KYOGRE",
+        "GR0UDON": "GROUDON", "GROUD0N": "GROUDON",
+        "TREECK0": "TREECKO", "TREECKO": "TREECKO",
+        "MUDKIP": "MUDKIP", "MUDK1P": "MUDKIP",
+        "TORCIIC": "TORCHIC", "T0RCHIC": "TORCHIC",
+        "RALT5": "RALTS", "RA1TS": "RALTS",
+    }
+
     @staticmethod
     def _normalize_ocr_text(text: str) -> str:
         if not isinstance(text, str):
             return ""
         cleaned = text.upper()
         cleaned = cleaned.replace("\n", " ").replace("\r", " ")
-        cleaned = cleaned.replace("VVILD", "WILD")
-        cleaned = cleaned.replace("WIID", "WILD")
-        cleaned = cleaned.replace("W1LD", "WILD")
-        cleaned = cleaned.replace("APPEAREO", "APPEARED")
-        cleaned = cleaned.replace("APPEARE0", "APPEARED")
+        for old, new in OBSVideoEncounterReader._OCR_REPLACEMENTS:
+            cleaned = cleaned.replace(old, new)
         cleaned = re.sub(r"[^A-Z0-9'\.\-!?: ]", " ", cleaned)
         cleaned = re.sub(r"\s+", " ", cleaned).strip()
         return cleaned
@@ -2513,6 +2573,14 @@ class OBSVideoEncounterReader:
         if direct:
             return direct
 
+        # Check OCR-specific species corrections before fuzzy matching
+        corrected = self._OCR_SPECIES_CORRECTIONS.get(candidate.upper().strip())
+        if corrected:
+            corrected_key = self._normalize_species_key(corrected)
+            corrected_result = self._species_key_lookup.get(corrected_key)
+            if corrected_result:
+                return corrected_result
+
         try:
             cutoff_value = float(cutoff)
         except (TypeError, ValueError):
@@ -2520,15 +2588,29 @@ class OBSVideoEncounterReader:
         cutoff_value = max(0.35, min(0.98, cutoff_value))
 
         choices = list(self._species_key_lookup.keys())
-        matches = difflib.get_close_matches(key, choices, n=1, cutoff=cutoff_value)
+
+        # Try difflib first with n=3 and pick best
+        matches = difflib.get_close_matches(key, choices, n=3, cutoff=cutoff_value)
         if matches:
             return self._species_key_lookup.get(matches[0])
+
+        # Fallback: try with a slightly relaxed cutoff for OCR-garbled text
+        if cutoff_value > 0.55 and len(key) >= 4:
+            relaxed_matches = difflib.get_close_matches(key, choices, n=1, cutoff=max(0.55, cutoff_value - 0.12))
+            if relaxed_matches:
+                return self._species_key_lookup.get(relaxed_matches[0])
 
         if len(key) >= 4:
             prefix = key[: max(3, len(key) // 2)]
             prefix_hits = [candidate_key for candidate_key in choices if candidate_key.startswith(prefix)]
             if len(prefix_hits) == 1:
                 return self._species_key_lookup.get(prefix_hits[0])
+
+        # Last resort: try substring matching for longer keys
+        if len(key) >= 5:
+            for choice in choices:
+                if len(choice) >= 5 and (key in choice or choice in key):
+                    return self._species_key_lookup.get(choice)
         return None
 
     def _parse_roi_spec_raw(self, raw: str, default_raw: str, width: int, height: int) -> Tuple[int, int, int, int]:
@@ -5618,17 +5700,7 @@ class OBSVideoEncounterReader:
         cropped = image.crop((x1, y1, x2, y2))
         gray = ImageOps.grayscale(cropped)
         gray = ImageOps.autocontrast(gray)
-        if isinstance(threshold_override, (int, float)):
-            threshold_raw = int(threshold_override)
-        else:
-            threshold_raw = self._cfg_int("video_ocr_threshold", 145)
-        threshold = max(80, min(230, threshold_raw))
-        bw = gray.point(lambda px: 255 if int(px) >= threshold else 0)
-        if invert:
-            try:
-                bw = ImageOps.invert(bw)
-            except Exception:
-                pass
+
         try:
             resample = Image.Resampling.BILINEAR
         except Exception:
@@ -5638,7 +5710,6 @@ class OBSVideoEncounterReader:
         except (TypeError, ValueError):
             scale = 2.0
         scale = max(1.0, min(5.0, scale))
-        scaled = bw.resize((max(1, int(bw.width * scale)), max(1, int(bw.height * scale))), resample)
 
         tesseract_cmd = self._cfg_str("video_tesseract_cmd", "")
         if tesseract_cmd:
@@ -5654,12 +5725,45 @@ class OBSVideoEncounterReader:
                 "video_ocr_config",
                 "--psm 6 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'.-!?: ",
             )
-        try:
-            return str(pytesseract.image_to_string(scaled, config=ocr_config) or "")
-        except Exception as exc:
-            self._last_error = str(exc)
-            self._set_meta("ocr_failed", error=str(exc))
-            return ""
+
+        if isinstance(threshold_override, (int, float)):
+            thresholds_to_try = [max(80, min(230, int(threshold_override)))]
+        elif self._cfg_bool("video_ocr_multipass", True):
+            base = max(80, min(230, self._cfg_int("video_ocr_threshold", 145)))
+            thresholds_to_try = [base, max(80, base - 30), min(230, base + 30)]
+        else:
+            thresholds_to_try = [max(80, min(230, self._cfg_int("video_ocr_threshold", 145)))]
+
+        best_text = ""
+        best_conf = -1.0
+        for thresh in thresholds_to_try:
+            bw = gray.point(lambda px, t=thresh: 255 if int(px) >= t else 0)
+            if invert:
+                try:
+                    bw = ImageOps.invert(bw)
+                except Exception:
+                    pass
+            scaled = bw.resize((max(1, int(bw.width * scale)), max(1, int(bw.height * scale))), resample)
+            try:
+                text = str(pytesseract.image_to_string(scaled, config=ocr_config) or "").strip()
+            except Exception as exc:
+                self._last_error = str(exc)
+                self._set_meta("ocr_failed", error=str(exc))
+                continue
+            if not text:
+                continue
+            try:
+                osd = pytesseract.image_to_data(scaled, config=ocr_config, output_type=pytesseract.Output.DICT)
+                confs = [float(c) for c in osd.get("conf", []) if int(c) >= 0]
+                avg_conf = sum(confs) / max(1, len(confs)) if confs else 0.0
+            except Exception:
+                avg_conf = 0.0
+            if avg_conf > best_conf or (best_conf < 0 and text):
+                best_conf = avg_conf
+                best_text = text
+            if avg_conf >= 80.0:
+                break
+        return best_text
 
     def _parse_wild_species(self, text: str) -> Optional[Tuple[int, str]]:
         normalized = self._normalize_ocr_text(text)
@@ -6513,25 +6617,47 @@ class OBSVideoEncounterReader:
         height = int(crop.height)
         if width <= 0 or height <= 0:
             return 0
-        pixels = crop.load()
-        total = 0
-        sparkle = 0
-        for y in range(0, height, sample_step):
-            for x in range(0, width, sample_step):
-                r, g, b = pixels[x, y]
-                total += 1
-                max_c = max(int(r), int(g), int(b))
-                min_c = min(int(r), int(g), int(b))
-                if max_c < 200:
-                    continue
-                near_white = max_c >= 225 and (max_c - min_c) <= 24
-                warm_spark = int(r) >= 220 and int(g) >= 170 and int(b) <= 165 and (int(r) - int(g)) <= 75
-                cool_spark = int(b) >= 205 and int(g) >= 185 and int(r) <= 180
-                if near_white or warm_spark or cool_spark:
-                    sparkle += 1
+
+        try:
+            import numpy as np
+            arr = np.array(crop)
+            sampled = arr[::sample_step, ::sample_step]
+            r = sampled[:, :, 0].astype(np.int16)
+            g = sampled[:, :, 1].astype(np.int16)
+            b = sampled[:, :, 2].astype(np.int16)
+            max_c = np.maximum(np.maximum(r, g), b)
+            min_c = np.minimum(np.minimum(r, g), b)
+            total = int(sampled.shape[0] * sampled.shape[1])
+            bright = max_c >= 190
+            near_white = (max_c >= 220) & ((max_c - min_c) <= 30)
+            warm_spark = (r >= 210) & (g >= 160) & (b <= 175) & ((r - g) <= 80)
+            cool_spark = (b >= 195) & (g >= 175) & (r <= 190)
+            pink_spark = (r >= 200) & (b >= 180) & (g <= 170)
+            green_spark = (g >= 210) & (r <= 180) & (b <= 190)
+            sparkle = bright & (near_white | warm_spark | cool_spark | pink_spark | green_spark)
+            sparkle_count = int(np.count_nonzero(sparkle))
+        except (ImportError, Exception):
+            pixels = crop.load()
+            total = 0
+            sparkle_count = 0
+            for y in range(0, height, sample_step):
+                for x in range(0, width, sample_step):
+                    r, g, b = pixels[x, y]
+                    total += 1
+                    max_c = max(int(r), int(g), int(b))
+                    min_c = min(int(r), int(g), int(b))
+                    if max_c < 190:
+                        continue
+                    near_white = max_c >= 220 and (max_c - min_c) <= 30
+                    warm_spark = int(r) >= 210 and int(g) >= 160 and int(b) <= 175 and (int(r) - int(g)) <= 80
+                    cool_spark = int(b) >= 195 and int(g) >= 175 and int(r) <= 190
+                    pink_spark = int(r) >= 200 and int(b) >= 180 and int(g) <= 170
+                    green_spark = int(g) >= 210 and int(r) <= 180 and int(b) <= 190
+                    if near_white or warm_spark or cool_spark or pink_spark or green_spark:
+                        sparkle_count += 1
         if total <= 0:
             return 0
-        return int((int(sparkle) * 10000) / int(total))
+        return int((sparkle_count * 10000) / total)
 
     def _estimate_shiny_from_frames(self, frames: List[Any], require_burst: bool = True, shiny_roi_raw: Optional[str] = None) -> Tuple[bool, int, List[int], float]:
         scores: List[int] = []
@@ -6551,7 +6677,7 @@ class OBSVideoEncounterReader:
         threshold = max(1, min(1000, self._cfg_int("video_shiny_score_threshold", 42)))
         burst_delta = max(0, min(1000, self._cfg_int("video_shiny_burst_delta", 28)))
         transient_delta = max(0, min(1000, self._cfg_int("video_shiny_transient_delta", 34)))
-        max_hit_streak_allowed = max(1, min(6, self._cfg_int("video_shiny_max_hit_streak", 3)))
+        max_hit_streak_allowed = max(1, min(8, self._cfg_int("video_shiny_max_hit_streak", 5)))
 
         if require_burst:
             min_hits_default = 2
@@ -6569,12 +6695,20 @@ class OBSVideoEncounterReader:
             else:
                 hit_streak = 0
 
+        # Compute score variance to detect sparkle animation bursts
+        if len(scores) >= 2:
+            mean_score = sum(scores) / len(scores)
+            variance = sum((s - mean_score) ** 2 for s in scores) / len(scores)
+        else:
+            variance = 0.0
+
         if require_burst and len(scores) >= 2:
             required_streak = 2 if len(scores) >= 3 else 1
+            has_burst_shape = (peak - base) >= burst_delta and (peak - median) >= transient_delta
+            has_variance = variance >= (burst_delta * burst_delta * 0.25)
             is_shiny = bool(
                 peak >= threshold
-                and (peak - base) >= burst_delta
-                and (peak - median) >= transient_delta
+                and (has_burst_shape or has_variance)
                 and hit_count >= min_hits
                 and max_hit_streak >= required_streak
                 and max_hit_streak <= max_hit_streak_allowed
@@ -6582,7 +6716,10 @@ class OBSVideoEncounterReader:
         else:
             is_shiny = bool(peak >= threshold and hit_count >= min_hits)
 
-        confidence = float(max(0.0, min(1.0, (float(peak) - float(threshold) + 1.0) / max(1.0, float(threshold)))))
+        # Better confidence: incorporate how far peak exceeds threshold + hit ratio
+        peak_factor = (float(peak) - float(threshold) + 1.0) / max(1.0, float(threshold))
+        hit_factor = float(hit_count) / max(1.0, float(len(scores)))
+        confidence = float(max(0.0, min(1.0, peak_factor * 0.7 + hit_factor * 0.3)))
         return is_shiny, int(peak), scores, confidence
 
     def analyze_frame(self, image, game_name: str = "") -> Dict[str, object]:
