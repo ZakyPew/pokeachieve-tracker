@@ -4812,7 +4812,7 @@ class OBSVideoEncounterReader:
 
         # Histogram carries most of the signal; mean RGB/chroma stabilize edge cases.
         distance = (
-            float(hist_distance) * 0.72
+            float(hist_distance) * 0.67
             + float(rgb_distance) * 0.18
             + float(neutral_distance) * 0.10
             + float(chroma_term) * 0.05
