@@ -2501,9 +2501,11 @@ class OBSVideoEncounterReader:
         ("APPEARFD", "APPEARED"), ("APPEAREQ", "APPEARED"),
         ("APPEARD", "APPEARED"), ("APPPEARED", "APPEARED"),
         ("APEARED", "APPEARED"), ("APPARED", "APPEARED"),
-        # Common digit/letter OCR confusions in Pokemon names
-        ("0", "O"), ("1", "I"), ("5", "S"), ("8", "B"),
     ]
+
+    # Per-character OCR confusions applied only to species name candidates,
+    # NOT to the full text (which would destroy level digits).
+    _OCR_CHAR_FIXES = str.maketrans("015836", "OISB3G")
 
     _OCR_SPECIES_CORRECTIONS = {
         "CHARIZAR0": "CHARIZARD", "CHARIZAN0": "CHARIZARD",
@@ -2573,6 +2575,13 @@ class OBSVideoEncounterReader:
         if direct:
             return direct
 
+        # Apply digit→letter OCR fixes to the species key only (not full text)
+        digit_fixed_key = key.translate(self._OCR_CHAR_FIXES)
+        if digit_fixed_key != key:
+            direct_fixed = self._species_key_lookup.get(digit_fixed_key)
+            if direct_fixed:
+                return direct_fixed
+
         # Check OCR-specific species corrections before fuzzy matching
         corrected = self._OCR_SPECIES_CORRECTIONS.get(candidate.upper().strip())
         if corrected:
@@ -2589,10 +2598,11 @@ class OBSVideoEncounterReader:
 
         choices = list(self._species_key_lookup.keys())
 
-        # Try difflib first with n=3 and pick best
-        matches = difflib.get_close_matches(key, choices, n=3, cutoff=cutoff_value)
-        if matches:
-            return self._species_key_lookup.get(matches[0])
+        # Try difflib with n=3 and pick best; also try the digit-fixed key
+        for attempt_key in ([key] if digit_fixed_key == key else [key, digit_fixed_key]):
+            matches = difflib.get_close_matches(attempt_key, choices, n=3, cutoff=cutoff_value)
+            if matches:
+                return self._species_key_lookup.get(matches[0])
 
         # Fallback: try with a slightly relaxed cutoff for OCR-garbled text
         if cutoff_value > 0.55 and len(key) >= 4:
@@ -2605,12 +2615,6 @@ class OBSVideoEncounterReader:
             prefix_hits = [candidate_key for candidate_key in choices if candidate_key.startswith(prefix)]
             if len(prefix_hits) == 1:
                 return self._species_key_lookup.get(prefix_hits[0])
-
-        # Last resort: try substring matching for longer keys
-        if len(key) >= 5:
-            for choice in choices:
-                if len(choice) >= 5 and (key in choice or choice in key):
-                    return self._species_key_lookup.get(choice)
         return None
 
     def _parse_roi_spec_raw(self, raw: str, default_raw: str, width: int, height: int) -> Tuple[int, int, int, int]:
@@ -5787,7 +5791,7 @@ class OBSVideoEncounterReader:
 
         cutoff = 0.60 if relaxed else 0.74
 
-        level_match = re.search(r"\b([A-Z][A-Z0-9'\.-]{2,20})\s+L[VW]\.??\s*[0-9]{1,3}\b", normalized)
+        level_match = re.search(r"\b([A-Z][A-Z0-9'\.-]{2,20})\s+L[VW]\.?\s*[0-9]{1,3}\b", normalized)
         if level_match:
             candidate = str(level_match.group(1) or "").strip(" !?.:-")
             resolved = self._resolve_species(candidate, cutoff=cutoff)
