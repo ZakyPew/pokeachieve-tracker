@@ -24751,11 +24751,11 @@ Troubleshooting
             def test():
                 success, message = self.api.test_auth()
                 if success:
-                    self._set_api_status("Authenticated")
-                    self._log("API authentication successful", "success")
+                    self.root.after(0, lambda: self._set_api_status("Authenticated"))
+                    self._threadsafe_log("API authentication successful", "success")
                 else:
-                    self._set_api_status("Configured (auth failed)")
-                    self._log(f"API authentication failed: {message}", "error")
+                    self.root.after(0, lambda: self._set_api_status("Configured (auth failed)"))
+                    self._threadsafe_log(f"API authentication failed: {message}", "error")
             
             threading.Thread(target=test, daemon=True).start()
     
