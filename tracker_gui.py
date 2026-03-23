@@ -2055,8 +2055,45 @@ class OBSVideoEncounterReader:
                 min(0.99, self._cfg_float("video_ai_species_onnx_candidate_fallback_min_confidence", 0.26)),
             )
             candidate_fallback_min_margin = max(
-                0.0,
+                -0.5,
                 min(0.99, self._cfg_float("video_ai_species_onnx_candidate_fallback_min_margin", 0.05)),
+            )
+            candidate_small_pool_enabled = self._cfg_bool("video_ai_species_onnx_candidate_fallback_small_pool_enabled", True)
+            candidate_small_pool_max = max(
+                1,
+                min(32, self._cfg_int("video_ai_species_onnx_candidate_fallback_small_pool_max_candidates", 3)),
+            )
+            if bool(candidate_small_pool_enabled) and int(len(candidate_set)) > 0 and int(len(candidate_set)) <= int(candidate_small_pool_max):
+                candidate_fallback_min_conf = min(
+                    float(candidate_fallback_min_conf),
+                    max(
+                        0.05,
+                        min(0.99, self._cfg_float("video_ai_species_onnx_candidate_fallback_small_pool_min_confidence", 0.18)),
+                    ),
+                )
+                candidate_fallback_min_margin = min(
+                    float(candidate_fallback_min_margin),
+                    max(
+                        -0.5,
+                        min(0.99, self._cfg_float("video_ai_species_onnx_candidate_fallback_small_pool_min_margin", 0.0)),
+                    ),
+                )
+                self._sprite_last_match_debug["onnx_candidate_fallback_small_pool_relax"] = True
+                self._sprite_last_match_debug["onnx_candidate_fallback_small_pool_count"] = int(len(candidate_set))
+            candidate_small_pool_force_enabled = bool(
+                bool(candidate_small_pool_enabled)
+                and self._cfg_bool("video_ai_species_onnx_candidate_fallback_small_pool_force_enabled", True)
+                and int(len(candidate_set)) > 0
+                and int(len(candidate_set)) <= int(candidate_small_pool_max)
+            )
+            candidate_small_pool_force_min_conf = max(
+                0.05,
+                min(0.99, self._cfg_float("video_ai_species_onnx_candidate_fallback_small_pool_force_min_confidence", 0.10)),
+            )
+            candidate_small_pool_force_ok = bool(
+                bool(candidate_small_pool_force_enabled)
+                and int(best_candidate_species) > 0
+                and float(best_candidate_conf) >= float(candidate_small_pool_force_min_conf)
             )
             candidate_fallback_ok = bool(
                 int(best_candidate_species) > 0
@@ -2070,11 +2107,17 @@ class OBSVideoEncounterReader:
                 if bool(candidate_fallback_enabled) and bool(candidate_fallback_ok):
                     self._sprite_last_match_debug["onnx_candidate_fallback_used"] = True
                     return int(best_candidate_species), float(max(0.0, min(1.0, best_candidate_conf)))
+                if bool(candidate_small_pool_force_ok):
+                    self._sprite_last_match_debug["onnx_candidate_fallback_small_pool_forced"] = True
+                    return int(best_candidate_species), float(max(0.0, min(1.0, best_candidate_conf)))
                 self._sprite_last_match_debug["onnx_predicts_background"] = True
                 return 0, float(max(0.0, min(1.0, conf)))
             if candidate_set and int(mapped_species) not in candidate_set:
                 if bool(candidate_fallback_enabled) and bool(candidate_fallback_ok):
                     self._sprite_last_match_debug["onnx_candidate_fallback_used"] = True
+                    return int(best_candidate_species), float(max(0.0, min(1.0, best_candidate_conf)))
+                if bool(candidate_small_pool_force_ok):
+                    self._sprite_last_match_debug["onnx_candidate_fallback_small_pool_forced"] = True
                     return int(best_candidate_species), float(max(0.0, min(1.0, best_candidate_conf)))
                 self._sprite_last_match_debug["onnx_species_out_of_candidates"] = True
                 return 0, float(conf)
@@ -6281,6 +6324,19 @@ class OBSVideoEncounterReader:
         best_color_penalty = int(self._sprite_last_match_debug.get("best_color_penalty", 0) or 0)
         best_outline_penalty = int(self._sprite_last_match_debug.get("best_outline_penalty", 0) or 0)
         ref_conf_ok = bool(self._sprite_last_match_debug.get("confidence_ok", False))
+        small_pool_relax_enabled = self._cfg_bool("video_ai_species_onnx_candidate_fallback_small_pool_enabled", True)
+        small_pool_max_candidates = max(
+            1,
+            min(32, self._cfg_int("video_ai_species_onnx_candidate_fallback_small_pool_max_candidates", 3)),
+        )
+        small_pool_active = bool(
+            bool(small_pool_relax_enabled)
+            and int(len(candidate_ids)) > 0
+            and int(len(candidate_ids)) <= int(small_pool_max_candidates)
+        )
+        if bool(small_pool_active):
+            self._sprite_last_match_debug["onnx_small_pool_active"] = True
+            self._sprite_last_match_debug["onnx_small_pool_candidate_count"] = int(len(candidate_ids))
         if bool(onnx_enabled_engine):
             onnx_bg_veto_enabled = self._cfg_bool("video_ai_species_onnx_background_veto_enabled", True)
             if bool(onnx_bg_veto_enabled):
@@ -6306,6 +6362,9 @@ class OBSVideoEncounterReader:
                     and int(margin_value) >= int(onnx_bg_override_min_margin)
                     and int(sprite_score) >= int(onnx_bg_override_min_score)
                 )
+                if bool(small_pool_active) and bool(self._sprite_last_match_debug.get("onnx_candidate_fallback_ok", False)):
+                    strong_reference_override = True
+                    self._sprite_last_match_debug["onnx_background_veto_small_pool_override"] = True
                 self._sprite_last_match_debug["onnx_background_veto_confidence"] = float(onnx_background_conf)
                 self._sprite_last_match_debug["onnx_background_veto_override"] = bool(strong_reference_override)
                 if float(onnx_background_conf) >= float(onnx_bg_veto_min_conf) and (not bool(strong_reference_override)):
@@ -6337,6 +6396,9 @@ class OBSVideoEncounterReader:
             and int(margin_value) >= int(onnx_support_override_min_margin)
             and int(sprite_score) >= int(onnx_support_override_min_score)
         )
+        if bool(small_pool_active) and bool(self._sprite_last_match_debug.get("onnx_candidate_fallback_ok", False)):
+            onnx_support_override = True
+            self._sprite_last_match_debug["onnx_support_small_pool_override"] = True
 
         def _onnx_support_allows(resolved_sid: int) -> bool:
             if not bool(onnx_support_gate_enabled):
@@ -6362,6 +6424,24 @@ class OBSVideoEncounterReader:
                     2,
                     min(8, self._cfg_int("video_ai_species_onnx_only_required_hits", 2)),
                 )
+                small_candidate_relax_enabled = self._cfg_bool("video_ai_species_onnx_only_small_candidate_relax_enabled", True)
+                small_candidate_max = max(
+                    1,
+                    min(16, self._cfg_int("video_ai_species_onnx_only_small_candidate_max_candidates", 3)),
+                )
+                if bool(small_candidate_relax_enabled) and int(len(candidate_ids)) > 0 and int(len(candidate_ids)) <= int(small_candidate_max):
+                    small_candidate_min_conf = max(
+                        0.20,
+                        min(0.98, self._cfg_float("video_ai_species_onnx_only_small_candidate_min_confidence", 0.50)),
+                    )
+                    small_candidate_required_hits = max(
+                        1,
+                        min(8, self._cfg_int("video_ai_species_onnx_only_small_candidate_required_hits", 1)),
+                    )
+                    onnx_only_min_conf = min(float(onnx_only_min_conf), float(small_candidate_min_conf))
+                    onnx_only_required_hits = min(int(onnx_only_required_hits), int(small_candidate_required_hits))
+                    self._sprite_last_match_debug["onnx_only_small_candidate_relax"] = True
+                    self._sprite_last_match_debug["onnx_only_small_candidate_count"] = int(len(candidate_ids))
                 onnx_temporal_ok, onnx_hits, _onnx_required = self._ai_species_temporal_accept(
                     f"{str(scene_key)}:onnx_only",
                     int(onnx_species_id),
@@ -7256,7 +7336,7 @@ class OBSVideoEncounterReader:
             strict_sprite_roi_only = bool(self._cfg_bool("video_sprite_strict_roi_only", True) or bool(force_fixed_sprite_roi))
             if bool(onnx_only_mode):
                 force_fixed_sprite_roi = True
-                strict_sprite_roi_only = True
+                strict_sprite_roi_only = bool(self._cfg_bool("video_onnx_only_strict_roi_only", False))
             if bool(force_fixed_sprite_roi):
                 profile_name = _default_video_roi_profile_for_game(game_name)
                 preset_payload = VIDEO_ROI_PRESETS.get(profile_name) or VIDEO_ROI_PRESETS.get("Generic Battle") or {}
@@ -7671,6 +7751,9 @@ class OBSVideoEncounterReader:
             scene_state_ctx = self._scene_encounter_state.setdefault(str(scene_key), {})
             scene_state_ctx.setdefault("wild_text_missing_since", 0.0)
             scene_state_ctx.setdefault("wild_text_missing_count", 0)
+            transition_species_carry_enabled = self._cfg_bool("video_transition_species_carry_enabled", True)
+            transition_species_carry_ttl_sec = max(0.25, min(45.0, self._cfg_float("video_transition_species_carry_ttl_sec", 20.0)))
+            transition_species_carry_min_sprite_score = max(80, min(900, self._cfg_int("video_transition_species_carry_min_sprite_score", 260)))
             if sprite_mode:
                 battle_context_ok, battle_context_details = self._battle_context_present(
                     scene_image,
@@ -7678,6 +7761,19 @@ class OBSVideoEncounterReader:
                     scene_ocr_roi_raw,
                     scene_nameplate_roi_raw,
                 )
+                if (
+                    bool(transition_species_carry_enabled)
+                    and (not bool(battle_context_ok))
+                    and prefetched_species is not None
+                    and int(sprite_score) >= int(transition_species_carry_min_sprite_score)
+                ):
+                    scene_state_ctx["transition_species_carry"] = {
+                        "species": tuple(prefetched_species),
+                        "source": str(prefetched_species_source or ""),
+                        "debug": dict(prefetched_match_debug or {}),
+                        "saved_at": float(time.monotonic()),
+                        "sprite_score": int(sprite_score),
+                    }
                 hint_textbox_threshold = max(8, min(700, self._cfg_int("video_battle_hint_textbox_score_threshold", 42)))
                 hint_hud_threshold = max(8, min(700, self._cfg_int("video_battle_hint_hud_score_threshold", 52)))
                 battle_hint_ok = bool(
@@ -7942,6 +8038,35 @@ class OBSVideoEncounterReader:
                         continue
             elif sprite_mode and (not require_battle_context):
                 battle_context_ok = bool(battle_hint_ok)
+            if (
+                bool(transition_species_carry_enabled)
+                and sprite_mode
+                and bool(battle_context_ok)
+                and prefetched_species is None
+            ):
+                carry_raw = scene_state_ctx.get("transition_species_carry")
+                carry = dict(carry_raw or {}) if isinstance(carry_raw, dict) else {}
+                carry_saved_at = float(carry.get("saved_at", 0.0) or 0.0)
+                carry_age_ok = bool(carry_saved_at > 0.0 and (time.monotonic() - carry_saved_at) <= float(transition_species_carry_ttl_sec))
+                carry_species = carry.get("species")
+                carry_sid = int((carry_species[0] if isinstance(carry_species, (list, tuple)) and len(carry_species) >= 1 else 0) or 0)
+                if bool(carry_age_ok) and int(carry_sid) > 0:
+                    if isinstance(carry_species, tuple):
+                        prefetched_species = carry_species
+                    elif isinstance(carry_species, list):
+                        prefetched_species = tuple(carry_species)
+                    else:
+                        prefetched_species = None
+                    if prefetched_species is not None:
+                        prefetched_species_source = str(carry.get("source") or "transition_carry")
+                        carry_debug = carry.get("debug")
+                        if isinstance(carry_debug, dict) and carry_debug:
+                            prefetched_match_debug = dict(carry_debug)
+                        prefetched_match_debug["transition_species_carry_used"] = True
+                        prefetched_match_debug["transition_species_carry_age_sec"] = float(max(0.0, time.monotonic() - carry_saved_at))
+                        scene_state_ctx.pop("transition_species_carry", None)
+                elif bool(carry_raw):
+                    scene_state_ctx.pop("transition_species_carry", None)
             text = ""
             scene_species = prefetched_species
             scene_level = None
@@ -9648,6 +9773,27 @@ class OBSVideoEncounterReader:
             0.20,
             min(0.98, self._cfg_float("video_species_onnx_override_min_confidence", 0.62)),
         )
+        onnx_override_small_candidate_relax_enabled = self._cfg_bool("video_species_onnx_override_small_candidate_relax_enabled", True)
+        onnx_override_small_candidate_max = max(
+            1,
+            min(16, self._cfg_int("video_species_onnx_override_small_candidate_max_candidates", 3)),
+        )
+        onnx_override_small_candidate_min_conf = max(
+            0.20,
+            min(0.98, self._cfg_float("video_species_onnx_override_small_candidate_min_confidence", 0.50)),
+        )
+        onnx_override_small_candidate_min_score = max(
+            80,
+            min(900, self._cfg_int("video_species_onnx_override_small_candidate_min_sprite_score", 260)),
+        )
+        if (
+            bool(onnx_override_small_candidate_relax_enabled)
+            and bool(selected_battle_context)
+            and int(selected_sprite_candidate_count) > 0
+            and int(selected_sprite_candidate_count) <= int(onnx_override_small_candidate_max)
+            and int(selected_sprite_score) >= int(onnx_override_small_candidate_min_score)
+        ):
+            onnx_override_min_conf = min(float(onnx_override_min_conf), float(onnx_override_small_candidate_min_conf))
         onnx_only_mode = bool(self._cfg_bool("video_species_onnx_only_mode", False))
         source_for_override = str(selected_species_source or "").strip().lower()
         source_is_provisional = bool(
@@ -16074,7 +16220,7 @@ class PokeAchieveGUI:
             "tracker_build_marker",
             file=str(Path(__file__).resolve()),
             pid=int(os.getpid()),
-            version="encounter-fix-2026-03-22-9",
+            version="encounter-fix-2026-03-22-31",
         )
         
         # Components
@@ -16249,8 +16395,12 @@ class PokeAchieveGUI:
         self._guided_training_seen_keys: Set[str] = set()
         self._guided_training_seen_key_times: Dict[str, float] = {}
         self._guided_training_waiting_source_queued: Set[str] = set()
+        self._guided_training_waiting_source_counted: Set[str] = set()
         self._guided_training_source_last_encounter_token: Dict[str, int] = {}
         self._guided_training_source_absent_since: Dict[str, float] = {}
+        self._guided_training_waiting_source_last_prompt_at: Dict[str, float] = {}
+        self._guided_training_unresolved_source_streak: Dict[str, int] = {}
+        self._guided_training_unresolved_probe_last_at: Dict[str, float] = {}
         self._guided_training_pending_review_data: Optional[Dict[str, object]] = None
         self._guided_training_review_backlog: List[Dict[str, object]] = []
         self._guided_training_review_dialog: Optional[tk.Toplevel] = None
@@ -16360,16 +16510,50 @@ class PokeAchieveGUI:
             "video_ai_species_onnx_candidate_fallback_enabled": True,
             "video_ai_species_onnx_candidate_fallback_min_confidence": 0.26,
             "video_ai_species_onnx_candidate_fallback_min_margin": 0.05,
+            "video_ai_species_onnx_candidate_fallback_small_pool_enabled": True,
+            "video_ai_species_onnx_candidate_fallback_small_pool_max_candidates": 3,
+            "video_ai_species_onnx_candidate_fallback_small_pool_min_confidence": 0.18,
+            "video_ai_species_onnx_candidate_fallback_small_pool_min_margin": 0.0,
+            "video_ai_species_onnx_candidate_fallback_small_pool_force_enabled": True,
+            "video_ai_species_onnx_candidate_fallback_small_pool_force_min_confidence": 0.10,
             "video_ai_species_onnx_support_gate_enabled": True,
             "video_ai_species_onnx_support_min_confidence": 0.70,
             "video_species_onnx_override_enabled": True,
             "video_species_onnx_override_min_confidence": 0.62,
+            "video_species_onnx_override_small_candidate_relax_enabled": True,
+            "video_species_onnx_override_small_candidate_max_candidates": 3,
+            "video_species_onnx_override_small_candidate_min_confidence": 0.50,
+            "video_species_onnx_override_small_candidate_min_sprite_score": 260,
             "video_species_onnx_only_mode": True,
             "video_scene_species_lock_enabled": False,
             "video_ai_species_onnx_only_min_confidence": 0.72,
             "video_ai_species_onnx_only_required_hits": 2,
+            "video_ai_species_onnx_only_small_candidate_relax_enabled": True,
+            "video_ai_species_onnx_only_small_candidate_max_candidates": 3,
+            "video_ai_species_onnx_only_small_candidate_min_confidence": 0.50,
+            "video_ai_species_onnx_only_small_candidate_required_hits": 1,
             "video_onnx_only_force_preset_roi": True,
+            "video_onnx_only_strict_roi_only": False,
             "video_onnx_only_duplicate_suppressed_hold_sec": 0.35,
+            "video_guided_training_allow_live_recapture": True,
+            "video_guided_training_live_recapture_delay_ms": 180,
+            "video_guided_training_allow_tokenless_waiting_fallback": True,
+            "video_guided_training_waiting_source_cooldown_sec": 12.0,
+            "video_guided_training_resolved_after_waiting_suppress_sec": 20.0,
+            "video_guided_training_waiting_guess_min_confidence": 0.12,
+            "video_guided_training_waiting_guess_force_small_pool_enabled": True,
+            "video_guided_training_waiting_guess_force_small_pool_max_candidates": 4,
+            "video_guided_training_waiting_guess_force_small_pool_min_confidence": 0.003,
+            "video_guided_training_unresolved_popup_enabled": True,
+            "video_guided_training_unresolved_popup_min_sprite_score": 420,
+            "video_guided_training_unresolved_popup_min_textbox_score": 340,
+            "video_guided_training_unresolved_popup_min_hud_score": 300,
+            "video_guided_training_unresolved_popup_required_streak": 2,
+            "video_guided_training_unresolved_popup_latch_min_sprite_score": 470,
+            "video_guided_training_unresolved_popup_probe_min_score": 210,
+            "video_transition_species_carry_enabled": True,
+            "video_transition_species_carry_ttl_sec": 20.0,
+            "video_transition_species_carry_min_sprite_score": 260,
             "video_duplicate_suppressed_log_cooldown_sec": 90.0,
             "video_gen3_avatar_flags_unresolved_log_cooldown_sec": 60.0,
             "video_hunt_counter_target_only": True,
@@ -16436,6 +16620,45 @@ class PokeAchieveGUI:
                 min(8, int(self.config.get("video_ai_species_onnx_only_required_hits", 2) or 2)),
             )
         )
+        self.config["video_ai_species_onnx_only_small_candidate_relax_enabled"] = bool(
+            _coerce_bool(self.config.get("video_ai_species_onnx_only_small_candidate_relax_enabled", True), True)
+        )
+        self.config["video_ai_species_onnx_only_small_candidate_max_candidates"] = int(
+            max(
+                1,
+                min(16, int(self.config.get("video_ai_species_onnx_only_small_candidate_max_candidates", 3) or 3)),
+            )
+        )
+        self.config["video_ai_species_onnx_only_small_candidate_min_confidence"] = float(
+            max(
+                0.20,
+                min(0.98, float(self.config.get("video_ai_species_onnx_only_small_candidate_min_confidence", 0.50) or 0.50)),
+            )
+        )
+        self.config["video_ai_species_onnx_only_small_candidate_required_hits"] = int(
+            max(
+                1,
+                min(8, int(self.config.get("video_ai_species_onnx_only_small_candidate_required_hits", 1) or 1)),
+            )
+        )
+        self.config["video_onnx_only_strict_roi_only"] = bool(
+            _coerce_bool(self.config.get("video_onnx_only_strict_roi_only", False), False)
+        )
+        self.config["video_transition_species_carry_enabled"] = bool(
+            _coerce_bool(self.config.get("video_transition_species_carry_enabled", True), True)
+        )
+        self.config["video_transition_species_carry_ttl_sec"] = float(
+            max(
+                0.25,
+                min(45.0, float(self.config.get("video_transition_species_carry_ttl_sec", 20.0) or 20.0)),
+            )
+        )
+        self.config["video_transition_species_carry_min_sprite_score"] = int(
+            max(
+                80,
+                min(900, int(self.config.get("video_transition_species_carry_min_sprite_score", 260) or 260)),
+            )
+        )
         self.config["video_duplicate_suppressed_log_cooldown_sec"] = float(
             max(
                 15.0,
@@ -16461,6 +16684,141 @@ class PokeAchieveGUI:
             max(
                 0.20,
                 min(0.98, float(self.config.get("video_species_onnx_override_min_confidence", 0.62) or 0.62)),
+            )
+        )
+        self.config["video_ai_species_onnx_candidate_fallback_small_pool_enabled"] = bool(
+            _coerce_bool(self.config.get("video_ai_species_onnx_candidate_fallback_small_pool_enabled", True), True)
+        )
+        self.config["video_ai_species_onnx_candidate_fallback_small_pool_max_candidates"] = int(
+            max(
+                1,
+                min(32, int(self.config.get("video_ai_species_onnx_candidate_fallback_small_pool_max_candidates", 3) or 3)),
+            )
+        )
+        self.config["video_ai_species_onnx_candidate_fallback_small_pool_min_confidence"] = float(
+            max(
+                0.05,
+                min(0.99, float(self.config.get("video_ai_species_onnx_candidate_fallback_small_pool_min_confidence", 0.18) or 0.18)),
+            )
+        )
+        self.config["video_ai_species_onnx_candidate_fallback_small_pool_min_margin"] = float(
+            max(
+                -0.5,
+                min(0.99, float(self.config.get("video_ai_species_onnx_candidate_fallback_small_pool_min_margin", 0.0) or 0.0)),
+            )
+        )
+        self.config["video_ai_species_onnx_candidate_fallback_small_pool_force_enabled"] = bool(
+            _coerce_bool(self.config.get("video_ai_species_onnx_candidate_fallback_small_pool_force_enabled", True), True)
+        )
+        self.config["video_ai_species_onnx_candidate_fallback_small_pool_force_min_confidence"] = float(
+            max(
+                0.05,
+                min(0.99, float(self.config.get("video_ai_species_onnx_candidate_fallback_small_pool_force_min_confidence", 0.10) or 0.10)),
+            )
+        )
+        self.config["video_guided_training_allow_live_recapture"] = bool(
+            _coerce_bool(self.config.get("video_guided_training_allow_live_recapture", True), True)
+        )
+        self.config["video_guided_training_live_recapture_delay_ms"] = int(
+            max(
+                0,
+                min(1200, int(self.config.get("video_guided_training_live_recapture_delay_ms", 180) or 180)),
+            )
+        )
+        self.config["video_guided_training_allow_tokenless_waiting_fallback"] = bool(
+            _coerce_bool(self.config.get("video_guided_training_allow_tokenless_waiting_fallback", True), True)
+        )
+        self.config["video_guided_training_waiting_source_cooldown_sec"] = float(
+            max(
+                2.0,
+                min(90.0, float(self.config.get("video_guided_training_waiting_source_cooldown_sec", 12.0) or 12.0)),
+            )
+        )
+        self.config["video_guided_training_resolved_after_waiting_suppress_sec"] = float(
+            max(
+                2.0,
+                min(90.0, float(self.config.get("video_guided_training_resolved_after_waiting_suppress_sec", 20.0) or 20.0)),
+            )
+        )
+        self.config["video_guided_training_waiting_guess_min_confidence"] = float(
+            max(
+                0.05,
+                min(0.90, float(self.config.get("video_guided_training_waiting_guess_min_confidence", 0.12) or 0.12)),
+            )
+        )
+        self.config["video_guided_training_waiting_guess_force_small_pool_enabled"] = bool(
+            _coerce_bool(self.config.get("video_guided_training_waiting_guess_force_small_pool_enabled", True), True)
+        )
+        self.config["video_guided_training_waiting_guess_force_small_pool_max_candidates"] = int(
+            max(
+                2,
+                min(12, int(self.config.get("video_guided_training_waiting_guess_force_small_pool_max_candidates", 4) or 4)),
+            )
+        )
+        self.config["video_guided_training_waiting_guess_force_small_pool_min_confidence"] = float(
+            max(
+                0.0,
+                min(0.30, float(self.config.get("video_guided_training_waiting_guess_force_small_pool_min_confidence", 0.003) or 0.003)),
+            )
+        )
+        self.config["video_guided_training_unresolved_popup_enabled"] = bool(
+            _coerce_bool(self.config.get("video_guided_training_unresolved_popup_enabled", True), True)
+        )
+        self.config["video_guided_training_unresolved_popup_min_sprite_score"] = int(
+            max(
+                120,
+                min(900, int(self.config.get("video_guided_training_unresolved_popup_min_sprite_score", 420) or 420)),
+            )
+        )
+        self.config["video_guided_training_unresolved_popup_min_textbox_score"] = int(
+            max(
+                0,
+                min(1000, int(self.config.get("video_guided_training_unresolved_popup_min_textbox_score", 340) or 340)),
+            )
+        )
+        self.config["video_guided_training_unresolved_popup_min_hud_score"] = int(
+            max(
+                0,
+                min(1000, int(self.config.get("video_guided_training_unresolved_popup_min_hud_score", 300) or 300)),
+            )
+        )
+        self.config["video_guided_training_unresolved_popup_required_streak"] = int(
+            max(
+                1,
+                min(6, int(self.config.get("video_guided_training_unresolved_popup_required_streak", 2) or 2)),
+            )
+        )
+        self.config["video_guided_training_unresolved_popup_latch_min_sprite_score"] = int(
+            max(
+                200,
+                min(900, int(self.config.get("video_guided_training_unresolved_popup_latch_min_sprite_score", 470) or 470)),
+            )
+        )
+        self.config["video_guided_training_unresolved_popup_probe_min_score"] = float(
+            max(
+                8.0,
+                min(255.0, float(self.config.get("video_guided_training_unresolved_popup_probe_min_score", 210) or 210)),
+            )
+        )
+        self.config["video_species_onnx_override_small_candidate_relax_enabled"] = bool(
+            _coerce_bool(self.config.get("video_species_onnx_override_small_candidate_relax_enabled", True), True)
+        )
+        self.config["video_species_onnx_override_small_candidate_max_candidates"] = int(
+            max(
+                1,
+                min(16, int(self.config.get("video_species_onnx_override_small_candidate_max_candidates", 3) or 3)),
+            )
+        )
+        self.config["video_species_onnx_override_small_candidate_min_confidence"] = float(
+            max(
+                0.20,
+                min(0.98, float(self.config.get("video_species_onnx_override_small_candidate_min_confidence", 0.50) or 0.50)),
+            )
+        )
+        self.config["video_species_onnx_override_small_candidate_min_sprite_score"] = int(
+            max(
+                80,
+                min(900, int(self.config.get("video_species_onnx_override_small_candidate_min_sprite_score", 260) or 260)),
             )
         )
         # Stabilization migration: undo forced vit_only state from prior experiments.
@@ -17052,6 +17410,48 @@ class PokeAchieveGUI:
                     return True
             return True
 
+        allow_live_recap = bool(_coerce_bool(self.config.get("video_guided_training_allow_live_recapture", True), True))
+        recap_delay_ms = max(0, min(1200, int(self.config.get("video_guided_training_live_recapture_delay_ms", 180) or 180)))
+        source_name = str(encounter.get("source_name") or self.config.get("video_obs_source_name") or "").strip()
+
+        def _capture_live_crop() -> Optional[object]:
+            if (not bool(allow_live_recap)) or (not source_name):
+                return None
+            if int(recap_delay_ms) > 0:
+                try:
+                    time.sleep(float(recap_delay_ms) / 1000.0)
+                except Exception:
+                    pass
+            try:
+                payload = self.video_encounter_reader._capture_frame_payload(source_override=source_name)
+            except Exception:
+                payload = None
+            if not isinstance(payload, dict):
+                return None
+            image = payload.get("image")
+            if image is None:
+                return None
+            roi = encounter.get("sprite_roi")
+            if isinstance(roi, (list, tuple)) and len(roi) >= 4:
+                try:
+                    x1, y1, x2, y2 = [int(roi[i]) for i in range(4)]
+                    crop = image.crop((x1, y1, x2, y2))
+                except Exception:
+                    crop = None
+            else:
+                try:
+                    crop = self.video_encounter_reader._extract_sprite_crop(image)
+                except Exception:
+                    crop = None
+            if not _crop_has_signal(crop):
+                return None
+            return crop
+
+        # Prefer a short delayed recapture so review popups show the stable sprite frame.
+        live_crop = _capture_live_crop()
+        if live_crop is not None:
+            return live_crop
+
         payload_crop = encounter.get("_sprite_crop_obj")
         if payload_crop is not None:
             try:
@@ -17069,42 +17469,7 @@ class PokeAchieveGUI:
         if cached_crop is not None:
             if _crop_has_signal(cached_crop):
                 return cached_crop
-
-        allow_live_recap = bool(_coerce_bool(self.config.get("video_guided_training_allow_live_recapture", False), False))
-        if not bool(allow_live_recap):
-            return None
-
-        source_name = str(encounter.get("source_name") or self.config.get("video_obs_source_name") or "").strip()
-        if not source_name:
-            return None
-
-        try:
-            payload = self.video_encounter_reader._capture_frame_payload(source_override=source_name)
-        except Exception:
-            payload = None
-        if not isinstance(payload, dict):
-            return None
-
-        image = payload.get("image")
-        if image is None:
-            return None
-
-        roi = encounter.get("sprite_roi")
-        if isinstance(roi, (list, tuple)) and len(roi) >= 4:
-            try:
-                x1, y1, x2, y2 = [int(roi[i]) for i in range(4)]
-                crop = image.crop((x1, y1, x2, y2))
-            except Exception:
-                crop = None
-        else:
-            try:
-                crop = self.video_encounter_reader._extract_sprite_crop(image)
-            except Exception:
-                crop = None
-
-        if not _crop_has_signal(crop):
-            return None
-        return crop
+        return None
 
     def _save_guided_training_sample(self, game_name: str, species_id: int, sprite_crop, metadata: Dict[str, object]) -> Optional[Path]:
         if sprite_crop is None:
@@ -17288,14 +17653,31 @@ class PokeAchieveGUI:
         metadata["crop_policy"] = "fallback" if bool(fallback_crop) else "strict_roi"
         metadata["auto_train_eligible"] = (not bool(fallback_crop))
         source_name = self._guided_training_source_key(encounter)
+        if int(species_id) > 0:
+            try:
+                self._maybe_count_hunt_from_guided_training_review(int(species_id), payload, source_name)
+            except Exception as exc:
+                log_event(
+                    logging.WARNING,
+                    "guided_training_count_commit_error",
+                    game=game_name,
+                    mode=str(payload.get("mode") or ""),
+                    species_id=int(species_id),
+                    source_name=str(source_name or ""),
+                    error=str(exc),
+                )
         if source_name:
             # Keep source/token gating after a labeled review so the same live battle
             # cannot immediately re-queue another popup. If user marks the frame as
             # transition/background, release gating so a real sprite can be queued.
             if int(species_id) <= 0:
                 self._guided_training_waiting_source_queued.discard(source_name)
+                self._guided_training_waiting_source_counted.discard(source_name)
                 self._guided_training_source_last_encounter_token.pop(source_name, None)
                 self._guided_training_source_absent_since.pop(source_name, None)
+                self._guided_training_waiting_source_last_prompt_at.pop(source_name, None)
+                self._guided_training_unresolved_source_streak.pop(source_name, None)
+                self._guided_training_unresolved_probe_last_at.pop(source_name, None)
         saved_path = self._save_guided_training_sample(game_name, int(species_id), sprite_crop, metadata)
         import_image_path_raw = str(payload.get("import_image_path") or "").strip()
         import_image_path = Path(import_image_path_raw) if import_image_path_raw else None
@@ -17353,6 +17735,145 @@ class PokeAchieveGUI:
             self.root.after(0, self._maybe_open_next_guided_training_review_from_backlog)
         else:
             self._set_guided_training_status("Failed to save training sample.")
+
+    def _maybe_count_hunt_from_guided_training_review(
+        self,
+        species_id: int,
+        payload: Dict[str, object],
+        source_name: str,
+    ) -> bool:
+        try:
+            resolved_species_id = int(species_id)
+        except (TypeError, ValueError):
+            return False
+        if int(resolved_species_id) <= 0:
+            return False
+        if not bool(self._hunt_active):
+            return False
+
+        mode = str(payload.get("mode") or self.hunt_mode_var.get() or "").strip()
+        if mode not in {"Wild Encounter Hunt", "Fishing Encounter Hunt"}:
+            return False
+
+        game_name = str(payload.get("game_name") or self.hunt_game_var.get() or "").strip()
+        active_game = str(self.hunt_game_var.get() or "").strip()
+        if active_game and game_name and active_game != game_name:
+            return False
+
+        encounter = dict(payload.get("encounter") or {})
+        encounter_phase = str(encounter.get("encounter_phase") or "").strip().lower()
+        if encounter_phase != "waiting":
+            return False
+
+        encounter_source = str(encounter.get("source") or "").strip().lower()
+        if not encounter_source.startswith("obs_video"):
+            return False
+
+        source_key = str(source_name or self._guided_training_source_key(encounter) or "").strip()
+        if source_key and source_key in self._guided_training_waiting_source_counted:
+            log_event(
+                logging.INFO,
+                "hunt_encounter_guided_fallback_skipped",
+                game=game_name,
+                mode=mode,
+                route=self.hunt_route_var.get().strip(),
+                species_id=int(resolved_species_id),
+                source_name=str(source_key),
+                reason="source_already_counted",
+            )
+            return False
+
+        now_ts = time.monotonic()
+        signature = str(encounter.get("signature") or "").strip()
+        if not signature:
+            signature = f"guided:{game_name}:{source_key}:{int(resolved_species_id)}:{int(now_ts * 1000)}"
+        try:
+            encounter_token = int(encounter.get("encounter_token", 0) or 0)
+        except (TypeError, ValueError):
+            encounter_token = 0
+
+        self._auto_detect_and_apply_hunt_route(encounter, game_name, mode)
+        route_name = self.hunt_route_var.get().strip()
+        allowed_species = set(
+            self._get_hunt_species_ids_for_selection(
+                game_name,
+                mode=mode,
+                route_name=route_name,
+            )
+        )
+        if allowed_species and int(resolved_species_id) not in allowed_species:
+            log_event(
+                logging.INFO,
+                "hunt_encounter_guided_fallback_skipped",
+                game=game_name,
+                mode=mode,
+                route=route_name,
+                species_id=int(resolved_species_id),
+                source_name=str(source_key),
+                reason="route_filter",
+                allowed_count=int(len(allowed_species)),
+            )
+            return False
+
+        self._record_hunt_species_encounter(int(resolved_species_id))
+        species_counter = self._get_hunt_species_count(int(resolved_species_id))
+        self._set_hunt_counter(self._hunt_counter + 1)
+        self._hunt_last_counted_at = float(now_ts)
+        self._hunt_last_counted_species_id = int(resolved_species_id)
+        self._hunt_last_counted_signature = str(signature)
+        if int(encounter_token) > 0:
+            self._hunt_seen_encounter_tokens.add(int(encounter_token))
+            self._hunt_unknown_token_counts.discard(int(encounter_token))
+            self._hunt_species_resolved_tokens.add(int(encounter_token))
+        if source_key:
+            self._guided_training_waiting_source_counted.add(source_key)
+
+        require_overworld_reset_between_encounters = bool(
+            _coerce_bool(self.config.get("video_require_overworld_reset_between_encounters", True), True)
+        )
+        onnx_only_mode = bool(_coerce_bool(self.config.get("video_species_onnx_only_mode", False), False))
+        if bool(onnx_only_mode):
+            require_overworld_reset_between_encounters = False
+        if bool(require_overworld_reset_between_encounters):
+            self._hunt_battle_cycle_lock = True
+            self._hunt_battle_cycle_lock_signature = str(signature)
+            self._hunt_battle_cycle_lock_token = int(encounter_token) if int(encounter_token) > 0 else None
+            self._hunt_overworld_seen_since_count = False
+
+        target_id = int(self._get_hunt_target_pokemon_id() or 0)
+        target_match = int(target_id) <= 0 or int(resolved_species_id) == int(target_id)
+        species_name = self._get_pokemon_name(int(resolved_species_id))
+        counter_value = int(self._hunt_counter)
+        log_event(
+            logging.INFO,
+            "hunt_encounter_counted_guided_fallback",
+            game=game_name,
+            mode=mode,
+            route=route_name,
+            species_id=int(resolved_species_id),
+            species_name=str(species_name),
+            source_name=str(source_key),
+            source=str(encounter_source),
+            encounter_token=int(encounter_token) if int(encounter_token) > 0 else None,
+            signature=str(signature),
+            target_id=int(target_id),
+            target_match=bool(target_match),
+            counter=int(counter_value),
+            species_counter=int(species_counter),
+        )
+        encounter_label = "FISHING" if mode == "Fishing Encounter Hunt" else "WILD"
+        if bool(target_match):
+            self._log(
+                f"{encounter_label} TARGET ENCOUNTER #{counter_value}: {species_name} (#{int(resolved_species_id)}) [{game_name}] / Normal / Source: guided_review",
+                "hunt",
+            )
+        else:
+            target_name = self._get_pokemon_name(target_id) if target_id > 0 else "Any"
+            self._log(
+                f"{encounter_label} ENCOUNTER #{counter_value} (non-target): {species_name} (#{int(resolved_species_id)}) [{game_name}] / Normal / Species Count: {int(species_counter):,} / Target: {target_name} (#{target_id}) / Source: guided_review",
+                "hunt",
+            )
+        return True
 
     def _open_guided_training_pending_review(self):
         payload = self._guided_training_pending_review_data if isinstance(self._guided_training_pending_review_data, dict) else None
@@ -17608,6 +18129,9 @@ class PokeAchieveGUI:
                 self._guided_training_waiting_source_queued.discard(source_name)
                 self._guided_training_source_last_encounter_token.pop(source_name, None)
                 self._guided_training_source_absent_since.pop(source_name, None)
+                self._guided_training_waiting_source_last_prompt_at.pop(source_name, None)
+                self._guided_training_unresolved_source_streak.pop(source_name, None)
+                self._guided_training_unresolved_probe_last_at.pop(source_name, None)
             if isinstance(import_image_path, Path) and import_image_path.exists():
                 try:
                     skipped_dir = self._guided_training_import_skipped_dir(str(payload.get("game_name") or ""))
@@ -17784,6 +18308,39 @@ class PokeAchieveGUI:
             encounter_token = int(encounter.get("encounter_token", 0) or 0)
         except (TypeError, ValueError):
             encounter_token = 0
+        if encounter_phase == "species_resolved" and source_name:
+            try:
+                suppress_after_waiting_sec = float(
+                    self.config.get("video_guided_training_resolved_after_waiting_suppress_sec", 20.0) or 20.0
+                )
+            except (TypeError, ValueError):
+                suppress_after_waiting_sec = 20.0
+            suppress_after_waiting_sec = max(2.0, min(90.0, float(suppress_after_waiting_sec)))
+            last_waiting_prompt_at = float(self._guided_training_waiting_source_last_prompt_at.get(source_name, 0.0) or 0.0)
+            waiting_recent = bool(last_waiting_prompt_at > 0.0 and (float(now_seen) - float(last_waiting_prompt_at)) < float(suppress_after_waiting_sec))
+            if bool(waiting_recent):
+                log_event(
+                    logging.INFO,
+                    "guided_training_queue_skipped",
+                    reason="resolved_after_recent_waiting_review",
+                    game=game_name,
+                    mode=mode,
+                    source_name=str(source_name),
+                    suppress_sec=float(suppress_after_waiting_sec),
+                    since_waiting_sec=round(float(now_seen - last_waiting_prompt_at), 3),
+                    encounter_token=int(encounter_token),
+                    species_id=int(encounter.get("species_id", 0) or 0),
+                )
+                return
+        if encounter_phase == "waiting" and source_name:
+            try:
+                waiting_source_cooldown_sec = float(self.config.get("video_guided_training_waiting_source_cooldown_sec", 12.0) or 12.0)
+            except (TypeError, ValueError):
+                waiting_source_cooldown_sec = 12.0
+            waiting_source_cooldown_sec = max(2.0, min(90.0, float(waiting_source_cooldown_sec)))
+            last_waiting_prompt_at = float(self._guided_training_waiting_source_last_prompt_at.get(source_name, 0.0) or 0.0)
+            if (float(now_seen) - float(last_waiting_prompt_at)) < float(waiting_source_cooldown_sec):
+                return
         if source_name and source_name in self._guided_training_waiting_source_queued:
             last_token = int(self._guided_training_source_last_encounter_token.get(source_name, 0) or 0)
             same_token = bool(encounter_token > 0 and last_token > 0 and int(encounter_token) == int(last_token))
@@ -17792,6 +18349,7 @@ class PokeAchieveGUI:
             if same_token or (encounter_token <= 0 and last_token <= 0) or (encounter_token <= 0 and last_token > 0):
                 return
             self._guided_training_waiting_source_queued.discard(source_name)
+            self._guided_training_waiting_source_counted.discard(source_name)
 
         if encounter_key in self._guided_training_seen_keys and encounter_key_recent:
             return
@@ -17825,6 +18383,123 @@ class PokeAchieveGUI:
                 val = 0.0
             if val > guess_confidence:
                 guess_confidence = val
+        # Waiting fallback can carry no species ID; run a route-constrained ONNX guess
+        # directly on the captured crop so Tentacool/Wingull/Pelipper still prefill.
+        if int(guess_species_id) <= 0 and sprite_crop is not None and self.video_encounter_reader:
+            raw_candidate_ids = encounter.get("candidate_species_ids")
+            candidate_ids: List[int] = []
+            if isinstance(raw_candidate_ids, (list, tuple, set)):
+                for item in raw_candidate_ids:
+                    try:
+                        pid = int(item)
+                    except (TypeError, ValueError):
+                        continue
+                    if int(pid) > 0:
+                        candidate_ids.append(int(pid))
+            if not candidate_ids:
+                cfg_candidate_ids = self.config.get("video_candidate_species_ids", [])
+                if isinstance(cfg_candidate_ids, (list, tuple, set)):
+                    for item in cfg_candidate_ids:
+                        try:
+                            pid = int(item)
+                        except (TypeError, ValueError):
+                            continue
+                        if int(pid) > 0:
+                            candidate_ids.append(int(pid))
+            if not candidate_ids:
+                try:
+                    route_name = str(self.hunt_route_var.get() or "").strip()
+                except Exception:
+                    route_name = ""
+                route_species = self._get_hunt_species_ids_for_selection(
+                    game_name,
+                    mode=str(mode or "Wild Encounter Hunt"),
+                    route_name=route_name,
+                )
+                if isinstance(route_species, (list, tuple, set)):
+                    for item in route_species:
+                        try:
+                            pid = int(item)
+                        except (TypeError, ValueError):
+                            continue
+                        if int(pid) > 0:
+                            candidate_ids.append(int(pid))
+            try:
+                target_pid = int(self._get_hunt_target_pokemon_id() or 0)
+            except (TypeError, ValueError):
+                target_pid = 0
+            if int(target_pid) > 0:
+                candidate_ids.append(int(target_pid))
+            if candidate_ids:
+                deduped_waiting_candidates: List[int] = []
+                seen_waiting_candidates: Set[int] = set()
+                for pid in candidate_ids:
+                    if int(pid) <= 0 or int(pid) in seen_waiting_candidates:
+                        continue
+                    seen_waiting_candidates.add(int(pid))
+                    deduped_waiting_candidates.append(int(pid))
+                candidate_ids = deduped_waiting_candidates[:256]
+            if candidate_ids:
+                try:
+                    pred_sid, pred_conf = self.video_encounter_reader._predict_species_from_onnx(sprite_crop, candidate_ids)
+                except Exception:
+                    pred_sid, pred_conf = 0, 0.0
+                try:
+                    waiting_guess_min_conf = float(self.config.get("video_guided_training_waiting_guess_min_confidence", 0.12) or 0.12)
+                except (TypeError, ValueError):
+                    waiting_guess_min_conf = 0.12
+                waiting_guess_min_conf = max(0.05, min(0.90, float(waiting_guess_min_conf)))
+                force_small_pool_enabled = bool(
+                    _coerce_bool(self.config.get("video_guided_training_waiting_guess_force_small_pool_enabled", True), True)
+                )
+                force_small_pool_max_candidates = max(
+                    2,
+                    min(12, int(self.config.get("video_guided_training_waiting_guess_force_small_pool_max_candidates", 4) or 4)),
+                )
+                force_small_pool_min_conf = max(
+                    0.0,
+                    min(0.30, float(self.config.get("video_guided_training_waiting_guess_force_small_pool_min_confidence", 0.003) or 0.003)),
+                )
+                forced_small_pool_guess_used = False
+                if int(pred_sid) > 0 and float(pred_conf) >= float(waiting_guess_min_conf):
+                    guess_species_id = int(pred_sid)
+                    guess_confidence = float(max(float(guess_confidence), float(pred_conf)))
+                if encounter_phase == "waiting":
+                    try:
+                        guess_debug = dict(self.video_encounter_reader._sprite_last_match_debug or {})
+                    except Exception:
+                        guess_debug = {}
+                    if (
+                        int(guess_species_id) <= 0
+                        and bool(force_small_pool_enabled)
+                        and int(len(candidate_ids)) <= int(force_small_pool_max_candidates)
+                        and bool(guess_debug.get("onnx_species_out_of_candidates", False))
+                    ):
+                        best_sid = int(guess_debug.get("onnx_best_candidate_species_id", 0) or 0)
+                        best_conf = float(guess_debug.get("onnx_best_candidate_confidence", 0.0) or 0.0)
+                        if int(best_sid) > 0 and float(best_conf) >= float(force_small_pool_min_conf):
+                            guess_species_id = int(best_sid)
+                            guess_confidence = float(max(float(guess_confidence), float(best_conf)))
+                            forced_small_pool_guess_used = True
+                    log_event(
+                        logging.INFO,
+                        "guided_training_waiting_guess_probe",
+                        game=game_name,
+                        mode=mode,
+                        source_name=str(source_name or ""),
+                        candidate_count=int(len(candidate_ids)),
+                        pred_species_id=int(pred_sid),
+                        pred_confidence=float(pred_conf),
+                        accepted=bool(int(pred_sid) > 0 and float(pred_conf) >= float(waiting_guess_min_conf)),
+                        forced_small_pool_guess_used=bool(forced_small_pool_guess_used),
+                        min_confidence=float(waiting_guess_min_conf),
+                        force_small_pool_min_confidence=float(force_small_pool_min_conf),
+                        onnx_skip_reason=str(guess_debug.get("onnx_skip_reason") or ""),
+                        onnx_predicts_background=bool(guess_debug.get("onnx_predicts_background", False)),
+                        onnx_species_out_of_candidates=bool(guess_debug.get("onnx_species_out_of_candidates", False)),
+                        onnx_best_candidate_species_id=int(guess_debug.get("onnx_best_candidate_species_id", 0) or 0),
+                        onnx_best_candidate_confidence=float(guess_debug.get("onnx_best_candidate_confidence", 0.0) or 0.0),
+                    )
 
         self._guided_training_seen_keys.add(encounter_key)
         seen_times[encounter_key] = float(now_seen)
@@ -17842,9 +18517,13 @@ class PokeAchieveGUI:
             self._guided_training_waiting_source_queued.add(source_name)
             if int(encounter_token) > 0:
                 self._guided_training_source_last_encounter_token[source_name] = int(encounter_token)
+            if encounter_phase == "waiting":
+                self._guided_training_waiting_source_last_prompt_at[source_name] = float(now_seen)
             self._guided_training_source_absent_since.pop(source_name, None)
 
         if self._guided_training_review_pending and isinstance(self._guided_training_pending_review_data, dict):
+            if encounter_phase == "waiting":
+                return
             # Keep up to a small backlog so fast consecutive encounters are not lost.
             backlog = self._guided_training_review_backlog if isinstance(self._guided_training_review_backlog, list) else []
             self._guided_training_review_backlog = backlog
@@ -19658,6 +20337,7 @@ class PokeAchieveGUI:
             self._hunt_seen_encounter_tokens.clear()
             self._hunt_unknown_token_counts.clear()
             self._hunt_species_resolved_tokens.clear()
+            self._guided_training_waiting_source_counted.clear()
             self._hunt_last_counted_at = 0.0
             self._hunt_last_counted_species_id = 0
             self._hunt_last_counted_signature = None
@@ -19689,6 +20369,7 @@ class PokeAchieveGUI:
                 self._hunt_seen_encounter_tokens.clear()
                 self._hunt_unknown_token_counts.clear()
                 self._hunt_species_resolved_tokens.clear()
+                self._guided_training_waiting_source_counted.clear()
                 self._hunt_last_counted_at = 0.0
                 self._hunt_last_counted_species_id = 0
                 self._hunt_last_counted_signature = None
@@ -19780,6 +20461,7 @@ class PokeAchieveGUI:
             self._hunt_seen_encounter_tokens.clear()
             self._hunt_unknown_token_counts.clear()
             self._hunt_species_resolved_tokens.clear()
+            self._guided_training_waiting_source_counted.clear()
             self._hunt_last_counted_at = 0.0
             self._hunt_last_counted_species_id = 0
             self._hunt_last_counted_signature = None
@@ -20294,8 +20976,12 @@ class PokeAchieveGUI:
         self._guided_training_seen_keys.clear()
         self._guided_training_seen_key_times.clear()
         self._guided_training_waiting_source_queued.clear()
+        self._guided_training_waiting_source_counted.clear()
         self._guided_training_source_last_encounter_token.clear()
         self._guided_training_source_absent_since.clear()
+        self._guided_training_waiting_source_last_prompt_at.clear()
+        self._guided_training_unresolved_source_streak.clear()
+        self._guided_training_unresolved_probe_last_at.clear()
         self._hunt_last_waiting_state = bool(self.retroarch.is_waiting_for_launch())
         self._hunt_soft_reset_reset_pending = False
         self._hunt_recent_other_species.clear()
@@ -21612,8 +22298,12 @@ class PokeAchieveGUI:
                     self._guided_training_source_absent_since[source_name] = now
                 elif (now - absent_since) >= 1.5:
                     self._guided_training_waiting_source_queued.discard(source_name)
+                    self._guided_training_waiting_source_counted.discard(source_name)
                     self._guided_training_source_last_encounter_token.pop(source_name, None)
                     self._guided_training_source_absent_since.pop(source_name, None)
+                    self._guided_training_waiting_source_last_prompt_at.pop(source_name, None)
+                    self._guided_training_unresolved_source_streak.pop(source_name, None)
+                    self._guided_training_unresolved_probe_last_at.pop(source_name, None)
             else:
                 self._guided_training_source_absent_since.pop(source_name, None)
 
@@ -21650,6 +22340,7 @@ class PokeAchieveGUI:
                 sprite_confidence_ok = bool(meta.get("sprite_confidence_ok", False))
                 textbox_score = int(meta.get("textbox_score", 0) or 0)
                 hud_score = int(meta.get("hud_score", 0) or 0)
+                recent_battle_hint = bool(meta.get("recent_battle_hint", False))
                 unknown_start_code = str(meta.get("code") or "").strip().lower()
             except (TypeError, ValueError):
                 battle_context = False
@@ -21682,6 +22373,7 @@ class PokeAchieveGUI:
                 sprite_confidence_ok = False
                 textbox_score = 0
                 hud_score = 0
+                recent_battle_hint = False
                 unknown_start_code = ""
 
             min_onnx_conf = max(0.0, min(1.0, float(self.config.get("video_guided_training_min_onnx_conf", 0.01) or 0.01)))
@@ -21695,6 +22387,64 @@ class PokeAchieveGUI:
             )
             near_lock_popup_max_color_penalty = max(0, min(64, int(self.config.get("video_guided_training_near_lock_max_color_penalty", 24) or 24)))
             near_lock_popup_min_textbox_score = max(0, min(1000, int(self.config.get("video_guided_training_near_lock_min_textbox_score", 90) or 90)))
+            unresolved_popup_enabled = bool(_coerce_bool(self.config.get("video_guided_training_unresolved_popup_enabled", True), True))
+            unresolved_popup_min_sprite_score = max(
+                120,
+                min(900, int(self.config.get("video_guided_training_unresolved_popup_min_sprite_score", 420) or 420)),
+            )
+            unresolved_popup_min_textbox_score = max(
+                0,
+                min(1000, int(self.config.get("video_guided_training_unresolved_popup_min_textbox_score", 340) or 340)),
+            )
+            unresolved_popup_min_hud_score = max(
+                0,
+                min(1000, int(self.config.get("video_guided_training_unresolved_popup_min_hud_score", 300) or 300)),
+            )
+            unresolved_popup_required_streak = max(
+                1,
+                min(6, int(self.config.get("video_guided_training_unresolved_popup_required_streak", 2) or 2)),
+            )
+            unresolved_popup_latch_min_sprite_score = max(
+                200,
+                min(900, int(self.config.get("video_guided_training_unresolved_popup_latch_min_sprite_score", 470) or 470)),
+            )
+            unresolved_popup_probe_min_score = max(
+                8.0,
+                min(255.0, float(self.config.get("video_guided_training_unresolved_popup_probe_min_score", 210) or 210)),
+            )
+            unresolved_probe_signal = False
+            unresolved_probe_score = 0.0
+            unresolved_probe_cooldown_sec = 0.8
+            if (
+                source_name
+                and bool(battle_context)
+                and str(reason) == "sprite_species_not_resolved"
+                and int(meta_species_id) <= 0
+                and self.video_encounter_reader is not None
+            ):
+                last_probe_at = float(self._guided_training_unresolved_probe_last_at.get(source_name, 0.0) or 0.0)
+                if (now - last_probe_at) >= float(unresolved_probe_cooldown_sec):
+                    self._guided_training_unresolved_probe_last_at[source_name] = float(now)
+                    try:
+                        payload_probe = self.video_encounter_reader._capture_frame_payload(source_override=source_name)
+                    except Exception:
+                        payload_probe = None
+                    probe_crop = None
+                    if isinstance(payload_probe, dict):
+                        probe_image = payload_probe.get("image")
+                        if probe_image is not None:
+                            try:
+                                probe_crop = self.video_encounter_reader._extract_sprite_crop(probe_image)
+                            except Exception:
+                                probe_crop = None
+                    if probe_crop is not None and PIL_AVAILABLE:
+                        try:
+                            probe_gray = probe_crop.convert("L")
+                            lo, hi = probe_gray.getextrema()
+                            unresolved_probe_score = float(max(0, int(hi) - int(lo)))
+                            unresolved_probe_signal = bool(unresolved_probe_score >= 16.0)
+                        except Exception:
+                            unresolved_probe_signal = True
             ai_hits_ready = bool(int(sprite_ai_required_hits) > 0 and int(sprite_ai_hits) >= int(sprite_ai_required_hits) and int(sprite_match_distance) <= 60)
             disabled_start_ready = bool(unknown_start_code == "unknown_start_disabled" and int(sprite_match_distance) <= 56)
             low_confidence_token_ready = bool(int(encounter_token) > 0 and int(sprite_match_distance) <= 90)
@@ -21718,7 +22468,59 @@ class PokeAchieveGUI:
                 and int(sprite_best_adjusted_distance) <= int(near_lock_popup_max_adjusted_distance)
                 and int(sprite_color_penalty) <= int(near_lock_popup_max_color_penalty)
             )
-            allow_tokenless_waiting_fallback = bool(self.config.get("video_guided_training_allow_tokenless_waiting_fallback", False))
+            unresolved_sprite_evidence = bool(
+                bool(sprite_foreground_present)
+                or bool(sprite_confidence_ok)
+                or bool(sprite_posterior_ready)
+                or int(sprite_posterior_frames) >= 1
+                or int(sprite_ai_hits) >= 1
+                or int(sprite_best_species_id) > 0
+                or int(sprite_robust_best_species_id) > 0
+                or int(sprite_match_distance) <= int(max(near_lock_popup_max_distance, 220))
+                or int(sprite_best_adjusted_distance) <= int(max(near_lock_popup_max_adjusted_distance, 260))
+            )
+            unresolved_high_ui_signal = bool(
+                int(sprite_score) >= int(unresolved_popup_latch_min_sprite_score)
+                and int(textbox_score) >= int(unresolved_popup_min_textbox_score)
+                and int(hud_score) >= int(unresolved_popup_min_hud_score)
+            )
+            unresolved_streak = 0
+            if source_name:
+                prev_unresolved_streak = int(self._guided_training_unresolved_source_streak.get(source_name, 0) or 0)
+                if (
+                    str(reason) == "sprite_species_not_resolved"
+                    and bool(battle_context)
+                    and bool(unresolved_high_ui_signal)
+                ):
+                    unresolved_streak = int(prev_unresolved_streak) + 1
+                elif (not bool(battle_context)) or str(reason) in {"sprite_not_present", "battle_context_unconfirmed", "wild_text_not_found"}:
+                    unresolved_streak = 0
+                else:
+                    unresolved_streak = int(prev_unresolved_streak)
+                self._guided_training_unresolved_source_streak[source_name] = int(max(0, unresolved_streak))
+            unresolved_streak_ready = bool(int(unresolved_streak) >= int(unresolved_popup_required_streak))
+            unresolved_probe_ready = bool(
+                bool(unresolved_probe_signal)
+                and float(unresolved_probe_score) >= float(unresolved_popup_probe_min_score)
+                and bool(unresolved_streak_ready)
+            )
+            unresolved_popup_ready = bool(
+                bool(unresolved_popup_enabled)
+                and int(meta_species_id) <= 0
+                and int(sprite_score) >= int(unresolved_popup_min_sprite_score)
+                and (bool(unresolved_sprite_evidence) or bool(unresolved_probe_ready))
+                and bool(battle_context)
+                and (
+                    bool(recent_battle_hint)
+                    or (
+                        int(textbox_score) >= int(unresolved_popup_min_textbox_score)
+                        and int(hud_score) >= int(unresolved_popup_min_hud_score)
+                    )
+                )
+            )
+            allow_tokenless_waiting_fallback = bool(
+                _coerce_bool(self.config.get("video_guided_training_allow_tokenless_waiting_fallback", True), True)
+            )
             sprite_ready_signal = bool(
                 int(species_lock_count) >= 1
                 or int(sprite_best_species_id) > 0
@@ -21729,6 +22531,7 @@ class PokeAchieveGUI:
                 or disabled_start_ready
                 or low_confidence_ready
                 or near_lock_ready
+                or unresolved_popup_ready
                 or (bool(sprite_posterior_ready) and int(sprite_posterior_top_species_id) > 0)
             )
             waiting_fallback_reasons = {"unknown_sprite_pending_species_lock", "pending_confirmations", "ocr_empty", "sprite_species_not_resolved"}
@@ -21741,16 +22544,21 @@ class PokeAchieveGUI:
             tokenless_waiting_ready = bool(
                 bool(allow_tokenless_waiting_fallback)
                 and int(encounter_token) <= 0
-                and bool(battle_context)
+                and (
+                    bool(battle_context)
+                    or bool(unresolved_popup_ready)
+                )
                 and (
                     bool(near_lock_ready)
                     or bool(low_confidence_ready)
                     or bool(ai_hits_ready)
+                    or bool(unresolved_popup_ready)
                 )
             )
             waiting_queue_allowed = bool(
                 bool(duplicate_unresolved)
                 or int(encounter_token) > 0
+                or bool(unresolved_popup_ready)
                 or bool(tokenless_waiting_ready)
             )
             waiting_reason_ok = bool(reason in waiting_fallback_reasons or duplicate_unresolved)
@@ -21783,6 +22591,7 @@ class PokeAchieveGUI:
                     "onnx_confidence": float(onnx_confidence),
                     "sprite_best_species_id": int(sprite_best_species_id),
                     "sprite_robust_best_species_id": int(sprite_robust_best_species_id),
+                    "candidate_species_ids": list(deduped_candidates[:256]) if isinstance(deduped_candidates, list) else [],
                     "sprite_roi": list(meta.get("sprite_roi")[:4]) if isinstance(meta.get("sprite_roi"), (list, tuple)) else [],
                     "battle_context": bool(battle_context),
                 }
@@ -21826,6 +22635,9 @@ class PokeAchieveGUI:
                         hud_score=int(hud_score),
                         sprite_color_distance=float(sprite_color_distance),
                         sprite_foreground_present=bool(sprite_foreground_present),
+                        unresolved_probe_signal=bool(unresolved_probe_signal),
+                        unresolved_probe_score=float(unresolved_probe_score),
+                        unresolved_probe_ready=bool(unresolved_probe_ready),
                         sprite_foreground_area_ratio=float(sprite_foreground_area_ratio),
                         sprite_foreground_coverage_ratio=float(sprite_foreground_coverage_ratio),
                         sprite_segmentation_failed=bool(sprite_segmentation_failed),
@@ -21889,6 +22701,9 @@ class PokeAchieveGUI:
                         sprite_color_penalty=int(sprite_color_penalty),
                         sprite_color_distance=float(sprite_color_distance),
                         sprite_foreground_present=bool(sprite_foreground_present),
+                        unresolved_probe_signal=bool(unresolved_probe_signal),
+                        unresolved_probe_score=float(unresolved_probe_score),
+                        unresolved_probe_ready=bool(unresolved_probe_ready),
                         sprite_foreground_area_ratio=float(sprite_foreground_area_ratio),
                         sprite_foreground_coverage_ratio=float(sprite_foreground_coverage_ratio),
                         sprite_segmentation_failed=bool(sprite_segmentation_failed),
@@ -24244,6 +25059,7 @@ class PokeAchieveGUI:
                 self._hunt_seen_encounter_tokens.clear()
                 self._hunt_unknown_token_counts.clear()
                 self._hunt_species_resolved_tokens.clear()
+                self._guided_training_waiting_source_counted.clear()
                 self._hunt_last_counted_at = 0.0
                 self._hunt_last_counted_species_id = 0
                 self._hunt_last_counted_signature = None
