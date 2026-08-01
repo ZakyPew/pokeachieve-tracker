@@ -1,0 +1,16 @@
+{
+  "id": "pokeachieve_bridge",
+  "name": "PokeAchieve Tracker Bridge",
+  "version": "1.0.0",
+  "api": 2,
+  "entry": "main.lua",
+  "profile": "content",
+  "category": "TOOL",
+  "game_version": ">=0.0.0-0 <2.0.0",
+  "priority": 100,
+  "permissions": ["network"],
+  "dependencies": [],
+  "optional_dependencies": [],
+  "conflicts": [],
+  "description": "Serves live save state to the PokeAchieve tracker over RetroArch's UDP network-command protocol, synthesizing the vanilla Gen 1 WRAM layout."
+}
