@@ -1,0 +1,25 @@
+-- Sharing metadata (25-community-and-ecosystem.md 3.2).  Read by tooling
+-- and the manager detail pane; never by the loader's merge.
+return {
+  summary = "Feeds the PokeAchieve tracker live save state by emulating RetroArch's UDP network-command protocol.",
+  author = "PokeAchieve",
+  contact = "https://github.com/ZakyPew/pokeachieve-tracker",
+  tags = { "tool", "integration", "tracker" },
+  differences = {
+    changed = {},
+    added = {
+      "a UDP server on 127.0.0.1 (port 55355 by default, configurable in mod options)",
+      "answers GET_STATUS and READ_CORE_MEMORY with a synthesized vanilla Gen 1 WRAM window (pokedex flags, party, badges, Elite Four events)",
+      "exports buildImage / gameLabel for other mods and tests",
+    },
+    known = {
+      "the port must be free; if RetroArch runs at the same time, move one of them off 55355",
+      "mod-added species outside national dex 1-151 appear as empty party bytes to the tracker",
+    },
+  },
+  credits = {
+    { who = "pret/pokered", for_ = "the WRAM layout and internal species order the bridge synthesizes" },
+    { who = "libretro/RetroArch", for_ = "the network-command protocol the tracker speaks" },
+  },
+  compat = { engine = ">=1.0.0 <2.0.0", modApi = 2 },
+}

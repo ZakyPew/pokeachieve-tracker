@@ -99,6 +99,9 @@ python setup_directory_build.py build
 | Pokemon Emerald | ✅ Supported |
 | Pokemon FireRed | ✅ Supported |
 | Pokemon LeafGreen | ✅ Supported |
+| Pokemon Gen 1 Recomp | ✅ Supported via bridge mod |
+
+Playing the native [Gen 1 recomp](https://github.com/acastango/pokemon-gen1-recomp-project) instead of an emulator? See [RECOMP_INTEGRATION.md](RECOMP_INTEGRATION.md) — the `recomp_mod/pokeachieve_bridge` mod makes the recomp look like RetroArch to the tracker, so everything works without tracker changes.
 
 ## File Structure 📁
 
